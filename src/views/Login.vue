@@ -36,12 +36,15 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { auth, db } from '../utils/cloud'
 
 const router = useRouter()
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
+
+// 云函数 HTTP 地址
+const LOGIN_URL =
+  'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com/adminLogin'
 
 async function onLogin() {
   if (!username.value || !password.value) {
@@ -51,41 +54,40 @@ async function onLogin() {
 
   loading.value = true
   try {
-    // 1. 匿名登录（拿到访问数据库的身份）
-    try {
-      await auth.signInAnonymously()
-    } catch (e) {
-      // 已登录过会报错，可忽略
-      console.log('匿名登录：', e.message || e)
-    }
-
-    // 2. 查 admins 集合
-    const res = await db
-      .collection('admins')
-      .where({
+    const res = await fetch(LOGIN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
         username: username.value,
-        password: password.value,
-        status: 'active'
+        password: password.value
       })
-      .get()
+    })
 
-    console.log('查询结果：', res)
+    const data = await res.json()
+    console.log('登录返回：', data)
 
-    if (!res.data || res.data.length === 0) {
-      ElMessage.error('账号或密码错误')
+    // 有的网关会包一层 body
+    const result = data.body
+      ? typeof data.body === 'string'
+        ? JSON.parse(data.body)
+        : data.body
+      : data
+
+    if (!result.ok) {
+      ElMessage.error(result.msg || '账号或密码错误')
       return
     }
 
-    const admin = res.data[0]
-    localStorage.setItem('admin_token', admin._id)
-    localStorage.setItem('admin_name', admin.name || admin.username)
+    localStorage.setItem('admin_token', result.admin._id)
+    localStorage.setItem('admin_name', result.admin.name || result.admin.username)
 
     ElMessage.success('登录成功')
-    // 下一步再做首页，先跳到一个占位页
     router.push('/home')
   } catch (err) {
-    console.error('登录失败详情：', err)
-    ElMessage.error('登录失败：' + (err.message || err.errMsg || '请看控制台'))
+    console.error('登录失败：', err)
+    ElMessage.error('登录失败：' + (err.message || '网络错误'))
   } finally {
     loading.value = false
   }
