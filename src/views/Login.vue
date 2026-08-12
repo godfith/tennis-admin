@@ -43,8 +43,9 @@ const password = ref('')
 const loading = ref(false)
 
 // 云函数 HTTP 地址
-const LOGIN_URL =
-  'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com/adminLogin'
+const LOGIN_URL = import.meta.env.DEV
+  ? '/api/adminLogin'
+  : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com/adminLogin'
 
 async function onLogin() {
   if (!username.value || !password.value) {
@@ -84,7 +85,7 @@ async function onLogin() {
     localStorage.setItem('admin_name', result.admin.name || result.admin.username)
 
     ElMessage.success('登录成功')
-    router.push('/home')
+    router.push('/dashboard')
   } catch (err) {
     console.error('登录失败：', err)
     ElMessage.error('登录失败：' + (err.message || '网络错误'))

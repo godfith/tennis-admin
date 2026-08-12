@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   {
@@ -7,21 +7,56 @@ const routes = [
     component: () => import('../views/Login.vue')
   },
   {
-    path: '/home',
-    name: 'Home',
-    component: {
-      template: '<div style="padding:40px;font-size:20px">登录成功，后台首页（下一步再做）</div>'
-    }
-  },
-  {
     path: '/',
-    redirect: '/login'
+    component: () => import('../views/Layout.vue'),
+    redirect: '/dashboard',
+    children: [
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
+        component: () => import('../views/Dashboard.vue')
+      },
+      {
+        path: 'bookings',
+        name: 'Bookings',
+        component: () => import('../views/Bookings.vue')
+      },
+      {
+        path: 'courts',
+        name: 'Courts',
+        component: () => import('../views/Courts.vue')
+      },
+      {
+        path: 'coaches',
+        name: 'Coaches',
+        component: () => import('../views/Coaches.vue')
+      },
+      {
+        path: 'users',
+        name: 'Users',
+        component: () => import('../views/Users.vue')
+      }
+    ]
   }
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHashHistory(),
   routes
+})
+
+// 简单登录校验
+router.beforeEach((to, from, next) => {
+  if (to.path === '/login') {
+    next()
+    return
+  }
+  const token = localStorage.getItem('admin_token')
+  if (!token) {
+    next('/login')
+  } else {
+    next()
+  }
 })
 
 export default router
