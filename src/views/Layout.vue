@@ -51,7 +51,7 @@
                   v-for="v in venueList"
                   :key="v._id"
                   :command="v"
-                  :disabled="v._id === currentVenueId" >
+                  :disabled="(v.venueId || v._id) === currentVenueId" >
                   {{ v.name }}
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -126,9 +126,10 @@ async function loadVenues() {
 }
 
 function selectVenue(v) {
-  currentVenueId.value = v._id
+  const vid = v.venueId || v._id
+  currentVenueId.value = vid
   currentVenueName.value = v.name
-  localStorage.setItem('venue_id', v._id)
+  localStorage.setItem('venue_id', vid)
   localStorage.setItem('venue_name', v.name)
   ElMessage.success('已切换：' + v.name)
   window.dispatchEvent(new Event('venue-changed'))
