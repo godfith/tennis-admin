@@ -21,7 +21,12 @@ export default defineConfig({
         target: 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
-      }
+      },
+	  '/api/adminGetCourts': {
+	    target: 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com',
+	    changeOrigin: true,
+	    rewrite: (path) => path.replace(/^\/api/, '')
+	  }
     }
   }
 })
