@@ -39,7 +39,25 @@
     <el-container>
       <!-- 顶栏 -->
       <el-header class="header">
-        <div class="header-left">山羊Goat网球馆</div>
+        <div class="header-left">
+          <el-dropdown trigger="click" @command="onVenueCommand">
+            <span class="venue-switch">
+              {{ currentVenueName }}
+              <el-icon><ArrowDown /></el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="v in venueList"
+                  :key="v._id"
+                  :command="v"
+                  :disabled="v._id === currentVenueId" >
+                  {{ v.name }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
         <div class="header-right">
           <span class="admin-name">{{ adminName }}</span>
           <el-button type="danger" link @click="logout">退出</el-button>
@@ -55,20 +73,78 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, Calendar, Grid, User, UserFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import {
+  DataAnalysis,
+  Calendar,
+  Grid,
+  User,
+  UserFilled,
+  ArrowDown
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 const adminName = localStorage.getItem('admin_name') || '管理员'
 const activeMenu = computed(() => route.path)
 
+const venueList = ref([])
+const currentVenueId = ref(localStorage.getItem('venue_id') || '')
+const currentVenueName = ref(localStorage.getItem('venue_name') || '选择场馆')
+
+const base = import.meta.env.DEV
+  ? '/api'
+  : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
+
+async function loadVenues() {
+  try {
+    const res = await fetch(base + '/adminGetVenues', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    })
+    const data = await res.json()
+    const result = data.body
+      ? typeof data.body === 'string'
+        ? JSON.parse(data.body)
+        : data.body
+      : data
+    venueList.value = result.list || []
+
+    if (!currentVenueId.value && venueList.value.length) {
+      selectVenue(venueList.value[0])
+    } else if (currentVenueId.value) {
+      const found = venueList.value.find((v) => v._id === currentVenueId.value)
+      if (found) currentVenueName.value = found.name
+    }
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载场馆失败')
+  }
+}
+
+function selectVenue(v) {
+  currentVenueId.value = v._id
+  currentVenueName.value = v.name
+  localStorage.setItem('venue_id', v._id)
+  localStorage.setItem('venue_name', v.name)
+  ElMessage.success('已切换：' + v.name)
+  window.dispatchEvent(new Event('venue-changed'))
+}
+
+function onVenueCommand(v) {
+  selectVenue(v)
+}
+
 function logout() {
   localStorage.removeItem('admin_token')
   localStorage.removeItem('admin_name')
   router.push('/login')
 }
+
+onMounted(loadVenues)
 </script>
 
 <style scoped>
@@ -124,5 +200,14 @@ function logout() {
 }
 .el-menu {
   border-right: none;
+}
+.venue-switch {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a5c3a;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 </style>
