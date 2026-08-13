@@ -25,7 +25,6 @@
         <div class="cell head corner">时段</div>
         <div v-for="c in courts" :key="c._id" class="cell head">
           <div class="court-name">{{ c.name }}</div>
-          <div class="court-free">空闲 {{ freeCount(c.name) }} 段</div>
         </div>
 
         <template v-for="t in timeSlots" :key="t">
@@ -39,7 +38,11 @@
           >
             <template v-if="getBooking(c.name, t)">
               <div class="booked-user">
-                {{ getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约' }}
+                {{
+                  getBooking(c.name, t).userName ||
+                  getBooking(c.name, t).displayUser ||
+                  '已预约'
+                }}
               </div>
               <div class="booked-status">已预约</div>
             </template>
@@ -53,8 +56,8 @@
     </div>
 
     <!-- 代客订场 -->
-    <el-dialog v-model="bookVisible" title="代客订场" width="400px">
-      <el-form label-width="80px">
+    <el-dialog v-model="bookVisible" title="代客订场" width="440px" destroy-on-close>
+      <el-form label-width="88px">
         <el-form-item label="场馆">
           <el-input :model-value="venueName" disabled />
         </el-form-item>
@@ -67,11 +70,29 @@
         <el-form-item label="时段">
           <el-input v-model="bookForm.time" disabled />
         </el-form-item>
-        <el-form-item label="客户姓名" required>
-          <el-input v-model="bookForm.userName" placeholder="请输入姓名" />
+        <el-form-item label="客户" required>
+          <el-select
+            v-model="bookForm.memberKey"
+            filterable
+            remote
+            clearable
+            reserve-keyword
+            placeholder="输入姓名或手机号搜索会员"
+            :remote-method="searchMembers"
+            :loading="memberLoading"
+            style="width: 100%"
+            @change="onMemberChange"
+          >
+            <el-option
+              v-for="m in memberOptions"
+              :key="m._id"
+              :label="memberLabel(m)"
+              :value="m._id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="bookForm.remark" type="textarea" />
+          <el-input v-model="bookForm.remark" type="textarea" :rows="2" placeholder="选填" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -81,14 +102,17 @@
     </el-dialog>
 
     <!-- 已约详情 -->
-    <el-dialog v-model="detailVisible" title="预约详情" width="400px">
+    <el-dialog v-model="detailVisible" title="预约详情" width="420px">
       <el-descriptions v-if="current" :column="1" border>
         <el-descriptions-item label="订单号">{{ current.orderNo || '-' }}</el-descriptions-item>
         <el-descriptions-item label="场馆">{{ current.venueName || venueName }}</el-descriptions-item>
         <el-descriptions-item label="场地">{{ current.court }}</el-descriptions-item>
         <el-descriptions-item label="日期">{{ current.date }}</el-descriptions-item>
         <el-descriptions-item label="时段">{{ current.time }}</el-descriptions-item>
-        <el-descriptions-item label="客户">{{ current.userName || current.displayUser || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="客户">
+          {{ current.userName || current.displayUser || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="备注">{{ current.remark || '-' }}</el-descriptions-item>
         <el-descriptions-item label="状态">已预约</el-descriptions-item>
       </el-descriptions>
       <template #footer>
@@ -104,30 +128,48 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const timeSlots = [
-  '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
-  '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
-  '18:00-19:00', '19:00-20:00', '20:00-21:00'
+  '08:00-09:00',
+  '09:00-10:00',
+  '10:00-11:00',
+  '11:00-12:00',
+  '14:00-15:00',
+  '15:00-16:00',
+  '16:00-17:00',
+  '17:00-18:00',
+  '18:00-19:00',
+  '19:00-20:00',
+  '20:00-21:00'
 ]
 
 const loading = ref(false)
 const saving = ref(false)
+const memberLoading = ref(false)
 const courts = ref([])
 const bookings = ref([])
+const memberOptions = ref([])
 const currentDate = ref(formatDate(new Date()))
 const dateObj = ref(currentDate.value)
 const venueName = ref(localStorage.getItem('venue_name') || '')
 
 const bookVisible = ref(false)
 const detailVisible = ref(false)
-const bookForm = ref({ court: '', date: '', time: '', userName: '', remark: '' })
 const current = ref(null)
+const bookForm = ref({
+  court: '',
+  date: '',
+  time: '',
+  memberKey: '',
+  userName: '',
+  userOpenid: '',
+  remark: ''
+})
 
 const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d0jq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
 
 const gridCols = computed(
-  () => `88px repeat(${Math.max(courts.value.length, 1)}, minmax(110px, 1fr))`
+  () => `100px repeat(${Math.max(courts.value.length, 1)}, minmax(120px, 1fr))`
 )
 
 const weekLabel = computed(() => {
@@ -145,6 +187,12 @@ function formatDate(d) {
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+function memberLabel(m) {
+  if (m.phone) return `${m.name}（${m.phone}）`
+  if (m.userId) return `${m.name}（${m.userId}）`
+  return m.name
 }
 
 async function post(path, body = {}) {
@@ -167,10 +215,6 @@ function getBooking(courtName, time) {
   )
 }
 
-function freeCount(courtName) {
-  return timeSlots.filter((t) => !getBooking(courtName, t)).length
-}
-
 function onCellClick(courtName, time) {
   const b = getBooking(courtName, time)
   if (b) {
@@ -182,15 +226,46 @@ function onCellClick(courtName, time) {
     court: courtName,
     date: currentDate.value,
     time,
+    memberKey: '',
     userName: '',
+    userOpenid: '',
     remark: ''
   }
+  memberOptions.value = []
   bookVisible.value = true
+}
+
+async function searchMembers(query) {
+  const q = (query || '').trim()
+  if (!q) {
+    memberOptions.value = []
+    return
+  }
+  memberLoading.value = true
+  try {
+    const result = await post('/adminSearchUsers', { keyword: q })
+    memberOptions.value = result.list || []
+  } catch (e) {
+    memberOptions.value = []
+  } finally {
+    memberLoading.value = false
+  }
+}
+
+function onMemberChange(id) {
+  const m = memberOptions.value.find((x) => x._id === id)
+  if (m) {
+    bookForm.value.userName = m.name
+    bookForm.value.userOpenid = m._openid || ''
+  } else {
+    bookForm.value.userName = ''
+    bookForm.value.userOpenid = ''
+  }
 }
 
 async function submitBook() {
   if (!bookForm.value.userName) {
-    ElMessage.warning('请填写客户姓名')
+    ElMessage.warning('请选择会员')
     return
   }
   if (!venueId()) {
@@ -199,7 +274,6 @@ async function submitBook() {
   }
   saving.value = true
   try {
-    // 若还没有 adminSaveBooking，先用同一套接口；没有就提示
     const result = await post('/adminSaveBooking', {
       action: 'add',
       data: {
@@ -211,18 +285,20 @@ async function submitBook() {
         remark: bookForm.value.remark || '',
         status: 'booked',
         venueId: venueId(),
-        venueName: venueName.value
+        venueName: venueName.value,
+        memberId: bookForm.value.memberKey || '',
+        memberOpenid: bookForm.value.userOpenid || ''
       }
     })
     if (!result.ok) {
-      ElMessage.error(result.msg || '订场失败（请确认已部署 adminSaveBooking）')
+      ElMessage.error(result.msg || '订场失败')
       return
     }
     ElMessage.success('订场成功')
     bookVisible.value = false
     loadAll()
   } catch (e) {
-    ElMessage.error(e.message || '网络错误')
+    ElMessage.error(e.message || '网络错误，请检查 adminSaveBooking 代理与部署')
   } finally {
     saving.value = false
   }
@@ -283,12 +359,12 @@ async function loadAll() {
       post('/adminGetCourts', { venueId: venueId() }),
       post('/adminGetBookings', { venueId: venueId(), date: currentDate.value })
     ])
-    courts.value = (cRes.list || []).filter(
-      (c) => c.status === 'open' || c.status === '开门' || c.status === 1 || !c.status
+
+    let list = cRes.list || []
+    const openList = list.filter(
+      (c) => c.status === 'open' || c.status === '开门' || c.status === 1 || c.status === true
     )
-    if (!(cRes.list || []).length) courts.value = []
-    // 若过滤后为空，仍显示全部该馆场地
-    if (!courts.value.length && cRes.list) courts.value = cRes.list
+    courts.value = openList.length ? openList : list
 
     bookings.value = (bRes.list || []).filter((b) => b.status === 'booked')
   } catch (e) {
@@ -308,6 +384,9 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.schedule-page {
+  min-height: 100%;
+}
 .toolbar {
   display: flex;
   justify-content: space-between;
@@ -322,26 +401,39 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 10px;
 }
-h2 { margin: 0; font-size: 20px; }
-.date-label { color: #1a5c3a; font-weight: 600; }
-.venue-tip { color: #888; font-size: 13px; }
+h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.date-label {
+  color: #1a5c3a;
+  font-weight: 600;
+  font-size: 15px;
+}
+.venue-tip {
+  color: #888;
+  font-size: 14px;
+}
 .grid-wrap {
   overflow: auto;
   background: #fff;
   border-radius: 12px;
   border: 1px solid #e8e8e8;
 }
-.grid { display: grid; min-width: 640px; }
+.grid {
+  display: grid;
+  min-width: 640px;
+}
 .cell {
   border-right: 1px solid #f0f0f0;
   border-bottom: 1px solid #f0f0f0;
-  padding: 8px;
-  min-height: 52px;
+  padding: 10px 8px;
+  min-height: 68px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 15px;
 }
 .head {
   background: #f7faf8;
@@ -350,31 +442,62 @@ h2 { margin: 0; font-size: 20px; }
   top: 0;
   z-index: 2;
 }
-.corner { position: sticky; left: 0; z-index: 3; background: #f7faf8; }
+.corner {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: #f7faf8;
+}
 .time-col {
   position: sticky;
   left: 0;
   background: #fafafa;
   z-index: 1;
-  color: #666;
-  font-size: 12px;
+  color: #555;
+  font-size: 14px;
 }
-.court-name { color: #1a5c3a; }
-.court-free { font-size: 11px; color: #67c23a; font-weight: 400; margin-top: 2px; }
-.slot { cursor: pointer; transition: background 0.15s; }
-.slot.free { background: #f0f9f4; color: #67c23a; }
-.slot.free:hover { background: #d8f3e4; }
-.slot.booked { background: #fff3e0; color: #e6a23c; }
-.slot.booked:hover { background: #ffe0b2; }
+.court-name {
+  color: #1a5c3a;
+  font-size: 15px;
+  font-weight: 600;
+}
+.slot {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.slot.free {
+  background: #f0f9f4;
+  color: #67c23a;
+}
+.slot.free:hover {
+  background: #d8f3e4;
+}
+.slot.booked {
+  background: #fff3e0;
+  color: #e6a23c;
+}
+.slot.booked:hover {
+  background: #ffe0b2;
+}
 .booked-user {
   font-weight: 600;
-  font-size: 12px;
+  font-size: 14px;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.booked-status { font-size: 11px; margin-top: 2px; }
-.free-text { font-size: 12px; }
-.empty { text-align: center; color: #999; padding: 40px; }
+.booked-status {
+  font-size: 12px;
+  margin-top: 4px;
+}
+.free-text {
+  font-size: 15px;
+}
+.empty {
+  text-align: center;
+  color: #999;
+  padding: 40px;
+  font-size: 15px;
+}
 </style>
