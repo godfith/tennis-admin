@@ -1,7 +1,7 @@
 import cloudbase from '@cloudbase/js-sdk'
 
 // 和你小程序同一个环境 ID
-const ENV_ID = 'cloud1-d0gmliq45868f5766'
+const ENV_ID = 'cloud1-d0gmljq45868f5766'
 
 const app = cloudbase.init({
   env: ENV_ID

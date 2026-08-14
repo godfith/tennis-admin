@@ -164,9 +164,10 @@ const bookForm = ref({
   remark: ''
 })
 
+// 统一环境域名（与 vite 代理、其他页面保持一致）
 const base = import.meta.env.DEV
   ? '/api'
-  : 'https://cloud1-d0jq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
+  : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
 
 const gridCols = computed(
   () => `100px repeat(${Math.max(courts.value.length, 1)}, minmax(120px, 1fr))`
@@ -298,6 +299,7 @@ async function submitBook() {
     bookVisible.value = false
     loadAll()
   } catch (e) {
+    console.error('订场失败：', e)
     ElMessage.error(e.message || '网络错误，请检查 adminSaveBooking 代理与部署')
   } finally {
     saving.value = false
