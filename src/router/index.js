@@ -35,6 +35,11 @@ const routes = [
         path: 'users',
         name: 'Users',
         component: () => import('../views/Users.vue')
+      },
+      {
+        path: 'cards',
+        name: 'CardTemplates',
+        component: () => import('../views/CardTemplates.vue')
       }
     ]
   }
@@ -45,7 +50,6 @@ const router = createRouter({
   routes
 })
 
-// 简单登录校验
 router.beforeEach((to, from, next) => {
   if (to.path === '/login') {
     next()

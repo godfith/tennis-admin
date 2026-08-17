@@ -1,6 +1,5 @@
 <template>
   <el-container class="layout">
-    <!-- 侧栏 -->
     <el-aside width="220px" class="aside">
       <div class="logo">
         <span class="logo-text">山羊Goat</span>
@@ -33,11 +32,14 @@
           <el-icon><UserFilled /></el-icon>
           <span>用户管理</span>
         </el-menu-item>
+        <el-menu-item index="/cards">
+          <el-icon><Ticket /></el-icon>
+          <span>卡模板管理</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
     <el-container>
-      <!-- 顶栏 -->
       <el-header class="header">
         <div class="header-left">
           <el-dropdown trigger="click" @command="onVenueCommand">
@@ -51,7 +53,8 @@
                   v-for="v in venueList"
                   :key="v._id"
                   :command="v"
-                  :disabled="(v.venueId || v._id) === currentVenueId" >
+                  :disabled="(v.venueId || v._id) === currentVenueId"
+                >
                   {{ v.name }}
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -64,7 +67,6 @@
         </div>
       </el-header>
 
-      <!-- 内容 -->
       <el-main class="main">
         <router-view />
       </el-main>
@@ -82,7 +84,8 @@ import {
   Grid,
   User,
   UserFilled,
-  ArrowDown
+  ArrowDown,
+  Ticket
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
