@@ -44,7 +44,9 @@
                   '已预约'
                 }}
               </div>
-              <div class="booked-status">已预约</div>
+              <div class="booked-status">
+                {{ getBooking(c.name, t).cardName ? '卡:' + getBooking(c.name, t).cardName : '已预约' }}
+              </div>
             </template>
             <template v-else>
               <div class="free-text">可约</div>
@@ -56,7 +58,7 @@
     </div>
 
     <!-- 代客订场 -->
-    <el-dialog v-model="bookVisible" title="代客订场" width="440px" destroy-on-close>
+    <el-dialog v-model="bookVisible" title="代客订场" width="480px" destroy-on-close>
       <el-form label-width="88px">
         <el-form-item label="场馆">
           <el-input :model-value="venueName" disabled />
@@ -77,7 +79,7 @@
             remote
             clearable
             reserve-keyword
-            placeholder="输入姓名或手机号搜索会员"
+            placeholder="输入昵称/手机号/会员号搜索"
             :remote-method="searchMembers"
             :loading="memberLoading"
             style="width: 100%"
@@ -91,6 +93,29 @@
             />
           </el-select>
         </el-form-item>
+
+        <el-form-item label="使用会员卡">
+          <el-select
+            v-model="bookForm.cardId"
+            placeholder="不使用卡（现金/其他）"
+            clearable
+            style="width: 100%"
+            :loading="cardLoading"
+            :disabled="!bookForm.memberKey"
+          >
+            <el-option label="不使用卡" value="" />
+            <el-option
+              v-for="c in usableCards"
+              :key="c._id"
+              :label="cardOptionLabel(c)"
+              :value="c._id"
+            />
+          </el-select>
+          <div v-if="bookForm.memberKey && !cardLoading && usableCards.length === 0" class="card-tip">
+            该会员暂无可用卡
+          </div>
+        </el-form-item>
+
         <el-form-item label="备注">
           <el-input v-model="bookForm.remark" type="textarea" :rows="2" placeholder="选填" />
         </el-form-item>
@@ -111,6 +136,9 @@
         <el-descriptions-item label="时段">{{ current.time }}</el-descriptions-item>
         <el-descriptions-item label="客户">
           {{ current.userName || current.displayUser || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="使用卡">
+          {{ current.cardName || '未使用卡' }}
         </el-descriptions-item>
         <el-descriptions-item label="备注">{{ current.remark || '-' }}</el-descriptions-item>
         <el-descriptions-item label="状态">已预约</el-descriptions-item>
@@ -144,9 +172,11 @@ const timeSlots = [
 const loading = ref(false)
 const saving = ref(false)
 const memberLoading = ref(false)
+const cardLoading = ref(false)
 const courts = ref([])
 const bookings = ref([])
 const memberOptions = ref([])
+const memberCards = ref([])
 const currentDate = ref(formatDate(new Date()))
 const dateObj = ref(currentDate.value)
 const venueName = ref(localStorage.getItem('venue_name') || '')
@@ -161,10 +191,10 @@ const bookForm = ref({
   memberKey: '',
   userName: '',
   userOpenid: '',
+  cardId: '',
   remark: ''
 })
 
-// 统一环境域名（与 vite 代理、其他页面保持一致）
 const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
@@ -179,6 +209,11 @@ const weekLabel = computed(() => {
   return isNaN(d.getTime()) ? '' : `周${w[d.getDay()]}`
 })
 
+// 当前可选的卡（已过滤状态、有效期、时间规则）
+const usableCards = computed(() => {
+  return memberCards.value.filter((c) => isCardUsable(c, bookForm.value.date, bookForm.value.time))
+})
+
 function venueId() {
   return localStorage.getItem('venue_id') || ''
 }
@@ -191,9 +226,77 @@ function formatDate(d) {
 }
 
 function memberLabel(m) {
-  if (m.phone) return `${m.name}（${m.phone}）`
-  if (m.userId) return `${m.name}（${m.userId}）`
-  return m.name
+  const name = m.nickName || m.nickname || m.name || ''
+  if (m.phone) return `${name}（${m.phone}）`
+  if (m.userId) return `${name || m.userId}`
+  return name || m._id
+}
+
+function cardOptionLabel(c) {
+  const typeMap = { times: '次卡', coach: '教练卡', time: '时间卡' }
+  const type = typeMap[c.type] || c.type
+  if (c.type === 'times' || c.type === 'coach') {
+    return `${c.cardName}（${type} 剩${c.remainingTimes}次）`
+  }
+  return `${c.cardName}（${type}）`
+}
+
+function typeLabel(t) {
+  return { times: '次卡', coach: '教练卡', time: '时间卡' }[t] || t
+}
+
+/** 判断某张卡在指定日期+时段是否可用 */
+function isCardUsable(card, dateStr, timeStr) {
+  if (!card || card.status !== 'active') return false
+
+  // 有效期
+  if (card.validFrom && dateStr < card.validFrom) return false
+  if (card.validTo && dateStr > card.validTo) return false
+
+  // 次卡/教练卡：剩余次数
+  if (card.type === 'times' || card.type === 'coach') {
+    return (card.remainingTimes || 0) > 0
+  }
+
+  // 时间卡：检查规则
+  if (card.type === 'time') {
+    const rule = card.timeRule
+    if (!rule || rule.mode === 'unlimited' || rule.mode === 'all') return true
+
+    const d = new Date(dateStr.replace(/-/g, '/'))
+    // JS getDay: 0=周日, 1=周一... 我们存的是 1=周一 ... 7=周日
+    let weekday = d.getDay()
+    if (weekday === 0) weekday = 7
+
+    const slotStart = (timeStr || '').split('-')[0] // "16:00"
+
+    if (rule.mode === 'rules' && Array.isArray(rule.rules)) {
+      for (const r of rule.rules) {
+        if (!(r.weekdays || []).includes(weekday)) continue
+        if (r.unlimited) return true
+        // 检查时段是否落在某个 slot 内
+        for (const s of r.timeSlots || []) {
+          if (slotStart >= s.start && slotStart < s.end) return true
+        }
+      }
+      return false
+    }
+
+    // 兼容旧 weekly
+    if (rule.mode === 'weekly') {
+      if (rule.weekdays && rule.weekdays.length && !rule.weekdays.includes(weekday)) return false
+      const slots = rule.timeSlots || []
+      if (!slots.length && rule.startTime) {
+        return slotStart >= rule.startTime && slotStart < rule.endTime
+      }
+      for (const s of slots) {
+        if (slotStart >= s.start && slotStart < s.end) return true
+      }
+      return slots.length === 0
+    }
+  }
+
+  return true
 }
 
 async function post(path, body = {}) {
@@ -230,9 +333,11 @@ function onCellClick(courtName, time) {
     memberKey: '',
     userName: '',
     userOpenid: '',
+    cardId: '',
     remark: ''
   }
   memberOptions.value = []
+  memberCards.value = []
   bookVisible.value = true
 }
 
@@ -244,7 +349,13 @@ async function searchMembers(query) {
   }
   memberLoading.value = true
   try {
-    const result = await post('/adminSearchUsers', { keyword: q })
+    // 优先用 adminGetUsers（支持昵称），兼容旧 adminSearchUsers
+    let result
+    try {
+      result = await post('/adminGetUsers', { keyword: q })
+    } catch (e) {
+      result = await post('/adminSearchUsers', { keyword: q })
+    }
     memberOptions.value = result.list || []
   } catch (e) {
     memberOptions.value = []
@@ -253,11 +364,26 @@ async function searchMembers(query) {
   }
 }
 
-function onMemberChange(id) {
+async function onMemberChange(id) {
+  bookForm.value.cardId = ''
+  memberCards.value = []
   const m = memberOptions.value.find((x) => x._id === id)
   if (m) {
-    bookForm.value.userName = m.name
+    bookForm.value.userName = m.nickName || m.nickname || m.name || m.userId || ''
     bookForm.value.userOpenid = m._openid || ''
+    // 加载该会员的卡
+    cardLoading.value = true
+    try {
+      const result = await post('/adminGetMemberCards', {
+        userId: m._id,
+        openid: m._openid || ''
+      })
+      memberCards.value = (result.list || []).filter((c) => c.status === 'active')
+    } catch (e) {
+      memberCards.value = []
+    } finally {
+      cardLoading.value = false
+    }
   } else {
     bookForm.value.userName = ''
     bookForm.value.userOpenid = ''
@@ -265,7 +391,7 @@ function onMemberChange(id) {
 }
 
 async function submitBook() {
-  if (!bookForm.value.userName) {
+  if (!bookForm.value.memberKey || !bookForm.value.userName) {
     ElMessage.warning('请选择会员')
     return
   }
@@ -273,6 +399,21 @@ async function submitBook() {
     ElMessage.warning('请先选择场馆')
     return
   }
+
+  // 如果选了卡，再校验一次
+  let selectedCard = null
+  if (bookForm.value.cardId) {
+    selectedCard = memberCards.value.find((c) => c._id === bookForm.value.cardId)
+    if (!selectedCard) {
+      ElMessage.warning('所选会员卡无效')
+      return
+    }
+    if (!isCardUsable(selectedCard, bookForm.value.date, bookForm.value.time)) {
+      ElMessage.warning('该卡在当前日期/时段不可用')
+      return
+    }
+  }
+
   saving.value = true
   try {
     const result = await post('/adminSaveBooking', {
@@ -288,19 +429,23 @@ async function submitBook() {
         venueId: venueId(),
         venueName: venueName.value,
         memberId: bookForm.value.memberKey || '',
-        memberOpenid: bookForm.value.userOpenid || ''
+        memberOpenid: bookForm.value.userOpenid || '',
+        // 卡信息
+        cardId: selectedCard ? selectedCard._id : '',
+        cardName: selectedCard ? selectedCard.cardName : '',
+        cardType: selectedCard ? selectedCard.type : ''
       }
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '订场失败')
       return
     }
-    ElMessage.success('订场成功')
+    ElMessage.success(selectedCard ? '订场成功（已扣卡）' : '订场成功')
     bookVisible.value = false
     loadAll()
   } catch (e) {
     console.error('订场失败：', e)
-    ElMessage.error(e.message || '网络错误，请检查 adminSaveBooking 代理与部署')
+    ElMessage.error(e.message || '网络错误，请检查 adminSaveBooking')
   } finally {
     saving.value = false
   }
@@ -309,7 +454,9 @@ async function submitBook() {
 async function cancelBook() {
   if (!current.value?._id) return
   try {
-    await ElMessageBox.confirm('确定取消该预约？', '提示', { type: 'warning' })
+    await ElMessageBox.confirm('确定取消该预约？' + (current.value.cardId ? '（将尝试退还次数）' : ''), '提示', {
+      type: 'warning'
+    })
     const result = await post('/adminSaveBooking', {
       action: 'cancel',
       id: current.value._id
@@ -501,5 +648,10 @@ h2 {
   color: #999;
   padding: 40px;
   font-size: 15px;
+}
+.card-tip {
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
 }
 </style>
