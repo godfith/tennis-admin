@@ -58,8 +58,8 @@
     </div>
 
     <!-- 代客订场 -->
-    <el-dialog v-model="bookVisible" title="代客订场" width="480px" destroy-on-close>
-      <el-form label-width="88px">
+    <el-dialog v-model="bookVisible" title="代客订场" width="500px" destroy-on-close>
+      <el-form label-width="96px">
         <el-form-item label="场馆">
           <el-input :model-value="venueName" disabled />
         </el-form-item>
@@ -102,6 +102,7 @@
             style="width: 100%"
             :loading="cardLoading"
             :disabled="!bookForm.memberKey"
+            @change="onCardChange"
           >
             <el-option label="不使用卡" value="" />
             <el-option
@@ -114,6 +115,23 @@
           <div v-if="bookForm.memberKey && !cardLoading && usableCards.length === 0" class="card-tip">
             该会员暂无可用卡
           </div>
+        </el-form-item>
+
+        <!-- 教练卡必须选教练 -->
+        <el-form-item v-if="isCoachCard" label="选择教练" required>
+          <el-select
+            v-model="bookForm.coachId"
+            placeholder="请选择教练"
+            style="width: 100%"
+            :loading="coachLoading"
+          >
+            <el-option
+              v-for="c in coachList"
+              :key="c._id"
+              :label="c.name"
+              :value="c._id"
+            />
+          </el-select>
         </el-form-item>
 
         <el-form-item label="备注">
@@ -143,6 +161,9 @@
             <span v-if="current.cardRemaining != null">（剩余 {{ current.cardRemaining }} 次）</span>
           </template>
           <template v-else>未使用卡</template>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="current.coachName" label="教练">
+          {{ current.coachName }}
         </el-descriptions-item>
         <el-descriptions-item label="备注">{{ current.remark || '-' }}</el-descriptions-item>
         <el-descriptions-item label="状态">已预约</el-descriptions-item>
@@ -177,10 +198,12 @@ const loading = ref(false)
 const saving = ref(false)
 const memberLoading = ref(false)
 const cardLoading = ref(false)
+const coachLoading = ref(false)
 const courts = ref([])
 const bookings = ref([])
 const memberOptions = ref([])
 const memberCards = ref([])
+const coachList = ref([])
 const currentDate = ref(formatDate(new Date()))
 const dateObj = ref(currentDate.value)
 const venueName = ref(localStorage.getItem('venue_name') || '')
@@ -196,6 +219,7 @@ const bookForm = ref({
   userName: '',
   userOpenid: '',
   cardId: '',
+  coachId: '',
   remark: ''
 })
 
@@ -216,6 +240,12 @@ const weekLabel = computed(() => {
 const usableCards = computed(() => {
   return memberCards.value.filter((c) => isCardUsable(c, bookForm.value.date, bookForm.value.time))
 })
+
+const selectedCard = computed(() =>
+  memberCards.value.find((c) => c._id === bookForm.value.cardId)
+)
+
+const isCoachCard = computed(() => selectedCard.value?.type === 'coach')
 
 function venueId() {
   return localStorage.getItem('venue_id') || ''
@@ -246,10 +276,12 @@ function cardOptionLabel(c) {
 
 function formatCardStatus(b) {
   if (!b || !b.cardName) return '已预约'
+  let text = '卡:' + b.cardName
   if (b.cardRemaining != null && (b.cardType === 'times' || b.cardType === 'coach')) {
-    return `卡:${b.cardName} 剩${b.cardRemaining}次`
+    text += ` 剩${b.cardRemaining}次`
   }
-  return '卡:' + b.cardName
+  if (b.coachName) text += ` ·${b.coachName}`
+  return text
 }
 
 function isCardUsable(card, dateStr, timeStr) {
@@ -326,11 +358,29 @@ function onCellClick(courtName, time) {
     userName: '',
     userOpenid: '',
     cardId: '',
+    coachId: '',
     remark: ''
   }
   memberOptions.value = []
   memberCards.value = []
   bookVisible.value = true
+  loadCoaches()
+}
+
+async function loadCoaches() {
+  if (coachList.value.length) return
+  coachLoading.value = true
+  try {
+    const result = await post('/adminGetCoaches', { venueId: venueId() })
+    coachList.value = (result.list || []).filter(
+      (c) => c.status === 'active' || c.status === '在职' || !c.status
+    )
+  } catch (e) {
+    console.error(e)
+    coachList.value = []
+  } finally {
+    coachLoading.value = false
+  }
 }
 
 async function searchMembers(query) {
@@ -357,6 +407,7 @@ async function searchMembers(query) {
 
 async function onMemberChange(id) {
   bookForm.value.cardId = ''
+  bookForm.value.coachId = ''
   memberCards.value = []
   const m = memberOptions.value.find((x) => x._id === id)
   if (m) {
@@ -380,6 +431,13 @@ async function onMemberChange(id) {
   }
 }
 
+function onCardChange() {
+  bookForm.value.coachId = ''
+  if (isCoachCard.value) {
+    loadCoaches()
+  }
+}
+
 async function submitBook() {
   if (!bookForm.value.memberKey || !bookForm.value.userName) {
     ElMessage.warning('请选择会员')
@@ -390,17 +448,28 @@ async function submitBook() {
     return
   }
 
-  let selectedCard = null
+  let selCard = null
   if (bookForm.value.cardId) {
-    selectedCard = memberCards.value.find((c) => c._id === bookForm.value.cardId)
-    if (!selectedCard) {
+    selCard = memberCards.value.find((c) => c._id === bookForm.value.cardId)
+    if (!selCard) {
       ElMessage.warning('所选会员卡无效')
       return
     }
-    if (!isCardUsable(selectedCard, bookForm.value.date, bookForm.value.time)) {
+    if (!isCardUsable(selCard, bookForm.value.date, bookForm.value.time)) {
       ElMessage.warning('该卡在当前日期/时段不可用')
       return
     }
+  }
+
+  // 教练卡必须选教练
+  let coachName = ''
+  if (selCard && selCard.type === 'coach') {
+    if (!bookForm.value.coachId) {
+      ElMessage.warning('教练卡必须选择教练')
+      return
+    }
+    const coach = coachList.value.find((c) => c._id === bookForm.value.coachId)
+    coachName = coach ? coach.name : ''
   }
 
   saving.value = true
@@ -419,16 +488,18 @@ async function submitBook() {
         venueName: venueName.value,
         memberId: bookForm.value.memberKey || '',
         memberOpenid: bookForm.value.userOpenid || '',
-        cardId: selectedCard ? selectedCard._id : '',
-        cardName: selectedCard ? selectedCard.cardName : '',
-        cardType: selectedCard ? selectedCard.type : ''
+        cardId: selCard ? selCard._id : '',
+        cardName: selCard ? selCard.cardName : '',
+        cardType: selCard ? selCard.type : '',
+        coachId: bookForm.value.coachId || '',
+        coachName: coachName
       }
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '订场失败')
       return
     }
-    ElMessage.success(selectedCard ? '订场成功（已扣卡）' : '订场成功')
+    ElMessage.success(selCard ? '订场成功（已扣卡）' : '订场成功')
     bookVisible.value = false
     loadAll()
   } catch (e) {

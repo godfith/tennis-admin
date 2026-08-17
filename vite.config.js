@@ -15,7 +15,8 @@ const proxyPaths = [
   'adminGetCardTemplates',
   'adminSaveCardTemplate',
   'adminGetMemberCards',
-  'adminIssueCard'
+  'adminIssueCard',
+  'adminGetCoaches'
 ]
 
 const proxy = {}
