@@ -45,7 +45,7 @@
                 }}
               </div>
               <div class="booked-status">
-                {{ getBooking(c.name, t).cardName ? '卡:' + getBooking(c.name, t).cardName : '已预约' }}
+                {{ formatCardStatus(getBooking(c.name, t)) }}
               </div>
             </template>
             <template v-else>
@@ -138,7 +138,11 @@
           {{ current.userName || current.displayUser || '-' }}
         </el-descriptions-item>
         <el-descriptions-item label="使用卡">
-          {{ current.cardName || '未使用卡' }}
+          <template v-if="current.cardName">
+            {{ current.cardName }}
+            <span v-if="current.cardRemaining != null">（剩余 {{ current.cardRemaining }} 次）</span>
+          </template>
+          <template v-else>未使用卡</template>
         </el-descriptions-item>
         <el-descriptions-item label="备注">{{ current.remark || '-' }}</el-descriptions-item>
         <el-descriptions-item label="状态">已预约</el-descriptions-item>
@@ -209,7 +213,6 @@ const weekLabel = computed(() => {
   return isNaN(d.getTime()) ? '' : `周${w[d.getDay()]}`
 })
 
-// 当前可选的卡（已过滤状态、有效期、时间规则）
 const usableCards = computed(() => {
   return memberCards.value.filter((c) => isCardUsable(c, bookForm.value.date, bookForm.value.time))
 })
@@ -241,48 +244,38 @@ function cardOptionLabel(c) {
   return `${c.cardName}（${type}）`
 }
 
-function typeLabel(t) {
-  return { times: '次卡', coach: '教练卡', time: '时间卡' }[t] || t
+function formatCardStatus(b) {
+  if (!b || !b.cardName) return '已预约'
+  if (b.cardRemaining != null && (b.cardType === 'times' || b.cardType === 'coach')) {
+    return `卡:${b.cardName} 剩${b.cardRemaining}次`
+  }
+  return '卡:' + b.cardName
 }
 
-/** 判断某张卡在指定日期+时段是否可用 */
 function isCardUsable(card, dateStr, timeStr) {
   if (!card || card.status !== 'active') return false
-
-  // 有效期
   if (card.validFrom && dateStr < card.validFrom) return false
   if (card.validTo && dateStr > card.validTo) return false
-
-  // 次卡/教练卡：剩余次数
   if (card.type === 'times' || card.type === 'coach') {
     return (card.remainingTimes || 0) > 0
   }
-
-  // 时间卡：检查规则
   if (card.type === 'time') {
     const rule = card.timeRule
     if (!rule || rule.mode === 'unlimited' || rule.mode === 'all') return true
-
     const d = new Date(dateStr.replace(/-/g, '/'))
-    // JS getDay: 0=周日, 1=周一... 我们存的是 1=周一 ... 7=周日
     let weekday = d.getDay()
     if (weekday === 0) weekday = 7
-
-    const slotStart = (timeStr || '').split('-')[0] // "16:00"
-
+    const slotStart = (timeStr || '').split('-')[0]
     if (rule.mode === 'rules' && Array.isArray(rule.rules)) {
       for (const r of rule.rules) {
         if (!(r.weekdays || []).includes(weekday)) continue
         if (r.unlimited) return true
-        // 检查时段是否落在某个 slot 内
         for (const s of r.timeSlots || []) {
           if (slotStart >= s.start && slotStart < s.end) return true
         }
       }
       return false
     }
-
-    // 兼容旧 weekly
     if (rule.mode === 'weekly') {
       if (rule.weekdays && rule.weekdays.length && !rule.weekdays.includes(weekday)) return false
       const slots = rule.timeSlots || []
@@ -295,7 +288,6 @@ function isCardUsable(card, dateStr, timeStr) {
       return slots.length === 0
     }
   }
-
   return true
 }
 
@@ -349,7 +341,6 @@ async function searchMembers(query) {
   }
   memberLoading.value = true
   try {
-    // 优先用 adminGetUsers（支持昵称），兼容旧 adminSearchUsers
     let result
     try {
       result = await post('/adminGetUsers', { keyword: q })
@@ -371,7 +362,6 @@ async function onMemberChange(id) {
   if (m) {
     bookForm.value.userName = m.nickName || m.nickname || m.name || m.userId || ''
     bookForm.value.userOpenid = m._openid || ''
-    // 加载该会员的卡
     cardLoading.value = true
     try {
       const result = await post('/adminGetMemberCards', {
@@ -400,7 +390,6 @@ async function submitBook() {
     return
   }
 
-  // 如果选了卡，再校验一次
   let selectedCard = null
   if (bookForm.value.cardId) {
     selectedCard = memberCards.value.find((c) => c._id === bookForm.value.cardId)
@@ -430,7 +419,6 @@ async function submitBook() {
         venueName: venueName.value,
         memberId: bookForm.value.memberKey || '',
         memberOpenid: bookForm.value.userOpenid || '',
-        // 卡信息
         cardId: selectedCard ? selectedCard._id : '',
         cardName: selectedCard ? selectedCard.cardName : '',
         cardType: selectedCard ? selectedCard.type : ''
@@ -454,9 +442,11 @@ async function submitBook() {
 async function cancelBook() {
   if (!current.value?._id) return
   try {
-    await ElMessageBox.confirm('确定取消该预约？' + (current.value.cardId ? '（将尝试退还次数）' : ''), '提示', {
-      type: 'warning'
-    })
+    await ElMessageBox.confirm(
+      '确定取消该预约？' + (current.value.cardId ? '（将尝试退还次数）' : ''),
+      '提示',
+      { type: 'warning' }
+    )
     const result = await post('/adminSaveBooking', {
       action: 'cancel',
       id: current.value._id
