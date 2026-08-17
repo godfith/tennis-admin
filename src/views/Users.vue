@@ -5,7 +5,7 @@
       <div class="toolbar">
         <el-input
           v-model="keyword"
-          placeholder="姓名 / 手机号 / 会员号"
+          placeholder="昵称 / 手机号 / 会员号"
           clearable
           style="width: 240px"
           @keyup.enter="loadData"
@@ -16,7 +16,7 @@
     </div>
 
     <el-table :data="list" stripe border v-loading="loading">
-      <el-table-column label="姓名" min-width="120">
+      <el-table-column label="昵称" min-width="120">
         <template #default="{ row }">
           {{ displayName(row) }}
         </template>
@@ -164,7 +164,7 @@ const selectedTemplate = computed(() =>
 
 function displayName(u) {
   if (!u) return '-'
-  return u.name || u.nickName || u.nickname || u.userId || u._id || '-'
+  return u.nickName || u.nickname || u.name || u.userId || u._id || '-'
 }
 
 function typeLabel(t) {
