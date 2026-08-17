@@ -16,13 +16,13 @@
         </template>
       </el-table-column>
       <el-table-column prop="price" label="价格(元)" width="100" />
-      <el-table-column label="次数/天数" width="120">
+      <el-table-column label="次数/天数" width="110">
         <template #default="{ row }">
           <span v-if="row.type === 'times' || row.type === 'coach'">{{ row.totalTimes }} 次</span>
           <span v-else>{{ row.durationDays || '-' }} 天</span>
         </template>
       </el-table-column>
-      <el-table-column label="时间规则" min-width="200">
+      <el-table-column label="时间规则" min-width="240">
         <template #default="{ row }">
           <span v-if="row.type === 'time'">{{ timeRuleText(row.timeRule) }}</span>
           <span v-else>-</span>
@@ -49,8 +49,9 @@
     <el-dialog
       v-model="visible"
       :title="form._id ? '编辑卡模板' : '新增卡模板'"
-      width="580px"
+      width="640px"
       destroy-on-close
+      top="5vh"
     >
       <el-form label-width="100px">
         <el-form-item label="卡名称" required>
@@ -88,28 +89,49 @@
           <el-form-item label="可用规则">
             <el-radio-group v-model="form.timeRule.mode">
               <el-radio value="unlimited">有效期内任意时间</el-radio>
-              <el-radio value="weekly">指定星期 + 时段</el-radio>
+              <el-radio value="rules">自定义多组规则</el-radio>
             </el-radio-group>
           </el-form-item>
 
-          <template v-if="form.timeRule.mode === 'weekly'">
-            <el-form-item label="可用星期">
-              <el-checkbox-group v-model="form.timeRule.weekdays">
-                <el-checkbox :value="1">周一</el-checkbox>
-                <el-checkbox :value="2">周二</el-checkbox>
-                <el-checkbox :value="3">周三</el-checkbox>
-                <el-checkbox :value="4">周四</el-checkbox>
-                <el-checkbox :value="5">周五</el-checkbox>
-                <el-checkbox :value="6">周六</el-checkbox>
-                <el-checkbox :value="7">周日</el-checkbox>
-              </el-checkbox-group>
-            </el-form-item>
+          <div v-if="form.timeRule.mode === 'rules'" class="rules-box">
+            <div
+              v-for="(rule, rIdx) in form.timeRule.rules"
+              :key="rIdx"
+              class="rule-card"
+            >
+              <div class="rule-header">
+                <span>规则 {{ rIdx + 1 }}</span>
+                <el-button
+                  link
+                  type="danger"
+                  :disabled="form.timeRule.rules.length <= 1"
+                  @click="removeRule(rIdx)"
+                >删除规则</el-button>
+              </div>
 
-            <el-form-item label="可用时段">
-              <div class="slots-box">
+              <el-form-item label="适用星期" label-width="80px">
+                <el-checkbox-group v-model="rule.weekdays">
+                  <el-checkbox :value="1">一</el-checkbox>
+                  <el-checkbox :value="2">二</el-checkbox>
+                  <el-checkbox :value="3">三</el-checkbox>
+                  <el-checkbox :value="4">四</el-checkbox>
+                  <el-checkbox :value="5">五</el-checkbox>
+                  <el-checkbox :value="6">六</el-checkbox>
+                  <el-checkbox :value="7">日</el-checkbox>
+                </el-checkbox-group>
+              </el-form-item>
+
+              <el-form-item label="时段限制" label-width="80px">
+                <el-radio-group v-model="rule.unlimited" @change="(v) => onUnlimitedChange(rule, v)">
+                  <el-radio :value="true">不限时</el-radio>
+                  <el-radio :value="false">限制时段</el-radio>
+                </el-radio-group>
+              </el-form-item>
+
+              <div v-if="!rule.unlimited" class="slots-box">
                 <div
-                  v-for="(slot, idx) in form.timeRule.timeSlots"
-                  :key="idx"
+                  v-for="(slot, sIdx) in rule.timeSlots"
+                  :key="sIdx"
                   class="slot-row"
                 >
                   <el-time-select
@@ -132,16 +154,19 @@
                   <el-button
                     link
                     type="danger"
-                    :disabled="form.timeRule.timeSlots.length <= 1"
-                    @click="removeSlot(idx)"
-                  >
-                    删除
-                  </el-button>
+                    :disabled="rule.timeSlots.length <= 1"
+                    @click="removeSlot(rule, sIdx)"
+                  >删除</el-button>
                 </div>
-                <el-button type="primary" link @click="addSlot">+ 添加时段</el-button>
+                <el-button type="primary" link @click="addSlot(rule)">+ 添加时段</el-button>
               </div>
-            </el-form-item>
-          </template>
+            </div>
+
+            <el-button type="primary" plain @click="addRule" style="width: 100%; margin-top: 8px">
+              + 添加一组规则
+            </el-button>
+            <p class="rule-tip">提示：未覆盖到的星期默认不可预约。不同规则的星期不要重叠。</p>
+          </div>
         </template>
 
         <el-form-item label="状态">
@@ -170,6 +195,14 @@ const visible = ref(false)
 
 const weekName = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
+function emptyRule() {
+  return {
+    weekdays: [1, 2, 3, 4, 5],
+    unlimited: false,
+    timeSlots: [{ start: '09:00', end: '18:00' }]
+  }
+}
+
 const emptyForm = () => ({
   _id: '',
   name: '',
@@ -179,8 +212,7 @@ const emptyForm = () => ({
   durationDays: 30,
   timeRule: {
     mode: 'unlimited',
-    weekdays: [1, 2, 3, 4, 5],
-    timeSlots: [{ start: '09:00', end: '18:00' }]
+    rules: [emptyRule()]
   },
   active: true,
   description: ''
@@ -202,20 +234,42 @@ function typeTag(t) {
 function timeRuleText(rule) {
   if (!rule) return '-'
   if (rule.mode === 'unlimited' || rule.mode === 'all') return '有效期内任意时间'
-  const days = (rule.weekdays || [])
-    .map((d) => weekName[d] || d)
-    .join('、') || '每天'
-  const slots = (rule.timeSlots || [])
-    .map((s) => `${s.start}-${s.end}`)
-    .join(' / ') || (rule.startTime ? `${rule.startTime}-${rule.endTime}` : '')
-  return `${days} ${slots}`
+
+  // 新多组规则
+  if (rule.mode === 'rules' && rule.rules && rule.rules.length) {
+    return rule.rules.map((r) => {
+      const days = (r.weekdays || []).map((d) => weekName[d] || d).join('') || '?'
+      if (r.unlimited) return `${days}不限时`
+      const slots = (r.timeSlots || []).map((s) => `${s.start}-${s.end}`).join('/')
+      return `${days}${slots}`
+    }).join('；')
+  }
+
+  // 兼容旧数据
+  if (rule.mode === 'weekly') {
+    const days = (rule.weekdays || []).map((d) => weekName[d] || d).join('、') || '每天'
+    const slots = (rule.timeSlots || []).map((s) => `${s.start}-${s.end}`).join(' / ')
+    return `${days} ${slots}`
+  }
+  return rule.startTime ? `${rule.startTime}-${rule.endTime}` : '-'
 }
 
-function addSlot() {
-  form.value.timeRule.timeSlots.push({ start: '09:00', end: '12:00' })
+function addRule() {
+  form.value.timeRule.rules.push(emptyRule())
 }
-function removeSlot(idx) {
-  form.value.timeRule.timeSlots.splice(idx, 1)
+function removeRule(idx) {
+  form.value.timeRule.rules.splice(idx, 1)
+}
+function addSlot(rule) {
+  rule.timeSlots.push({ start: '09:00', end: '12:00' })
+}
+function removeSlot(rule, idx) {
+  rule.timeSlots.splice(idx, 1)
+}
+function onUnlimitedChange(rule, val) {
+  if (!val && (!rule.timeSlots || !rule.timeSlots.length)) {
+    rule.timeSlots = [{ start: '09:00', end: '18:00' }]
+  }
 }
 
 async function post(path, body = {}) {
@@ -255,19 +309,24 @@ function openAdd() {
 
 function openEdit(row) {
   const rule = row.timeRule || {}
-  // 兼容旧数据
-  let timeSlots = rule.timeSlots
-  if (!timeSlots || !timeSlots.length) {
-    if (rule.startTime && rule.endTime) {
-      timeSlots = [{ start: rule.startTime, end: rule.endTime }]
+  let mode = rule.mode || 'unlimited'
+  let rules = rule.rules
+
+  // 兼容旧数据结构
+  if (!rules || !rules.length) {
+    if (mode === 'weekly' || mode === 'custom' || mode === 'weekday') {
+      mode = 'rules'
+      rules = [{
+        weekdays: rule.weekdays && rule.weekdays.length ? rule.weekdays : [1, 2, 3, 4, 5],
+        unlimited: false,
+        timeSlots: rule.timeSlots && rule.timeSlots.length
+          ? rule.timeSlots
+          : (rule.startTime ? [{ start: rule.startTime, end: rule.endTime }] : [{ start: '09:00', end: '18:00' }])
+      }]
     } else {
-      timeSlots = [{ start: '09:00', end: '18:00' }]
+      mode = 'unlimited'
+      rules = [emptyRule()]
     }
-  }
-  let weekdays = rule.weekdays
-  if (!weekdays || !weekdays.length) {
-    if (rule.mode === 'weekday') weekdays = [1, 2, 3, 4, 5]
-    else weekdays = [1, 2, 3, 4, 5, 6, 7]
   }
 
   form.value = {
@@ -277,11 +336,7 @@ function openEdit(row) {
     price: row.price || 0,
     totalTimes: row.totalTimes || 10,
     durationDays: row.durationDays || 30,
-    timeRule: {
-      mode: rule.mode === 'all' ? 'unlimited' : (rule.mode || 'unlimited'),
-      weekdays,
-      timeSlots
-    },
+    timeRule: { mode, rules },
     active: row.status === 'active',
     description: row.description || ''
   }
@@ -301,14 +356,17 @@ async function save() {
     ElMessage.warning('请填写有效天数')
     return
   }
-  if (form.value.type === 'time' && form.value.timeRule.mode === 'weekly') {
-    if (!form.value.timeRule.weekdays.length) {
-      ElMessage.warning('请至少选择一个可用星期')
-      return
-    }
-    if (!form.value.timeRule.timeSlots.length) {
-      ElMessage.warning('请至少添加一个可用时段')
-      return
+  if (form.value.type === 'time' && form.value.timeRule.mode === 'rules') {
+    for (let i = 0; i < form.value.timeRule.rules.length; i++) {
+      const r = form.value.timeRule.rules[i]
+      if (!r.weekdays || !r.weekdays.length) {
+        ElMessage.warning(`规则${i + 1}：请至少选择一个星期`)
+        return
+      }
+      if (!r.unlimited && (!r.timeSlots || !r.timeSlots.length)) {
+        ElMessage.warning(`规则${i + 1}：请至少添加一个时段`)
+        return
+      }
     }
   }
 
@@ -395,8 +453,28 @@ h2 {
   color: #999;
   font-size: 12px;
 }
-.slots-box {
+.rules-box {
   width: 100%;
+  margin-bottom: 12px;
+}
+.rule-card {
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  background: #fafafa;
+}
+.rule-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #1a5c3a;
+}
+.slots-box {
+  margin-left: 80px;
+  margin-bottom: 8px;
 }
 .slot-row {
   display: flex;
@@ -406,5 +484,10 @@ h2 {
 }
 .sep {
   color: #666;
+}
+.rule-tip {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #999;
 }
 </style>
