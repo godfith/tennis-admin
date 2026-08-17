@@ -16,12 +16,20 @@
     </div>
 
     <el-table :data="list" stripe border v-loading="loading">
-      <el-table-column prop="name" label="姓名" min-width="100" />
-      <el-table-column prop="phone" label="手机号" width="130" />
-      <el-table-column prop="userId" label="会员号" width="140" />
+      <el-table-column label="姓名" min-width="120">
+        <template #default="{ row }">
+          {{ displayName(row) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="手机号" width="130">
+        <template #default="{ row }">
+          {{ row.phone || row.mobile || '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="userId" label="会员号" width="150" />
       <el-table-column label="持卡数" width="90">
         <template #default="{ row }">
-          {{ row.cardCount ?? '-' }}
+          {{ row.cardCount ?? 0 }}
         </template>
       </el-table-column>
       <el-table-column label="注册时间" width="170">
@@ -38,7 +46,7 @@
     </el-table>
 
     <!-- 查看持卡 -->
-    <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${currentUser?.name || ''}`" width="720px">
+    <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${displayName(currentUser)}`" width="720px">
       <el-table :data="memberCards" border v-loading="cardsLoading" size="small">
         <el-table-column prop="cardName" label="卡名称" min-width="120" />
         <el-table-column label="类型" width="90">
@@ -72,10 +80,15 @@
     <el-dialog v-model="issueVisible" title="给会员发卡" width="480px" destroy-on-close>
       <el-form label-width="100px">
         <el-form-item label="会员">
-          <el-input :model-value="currentUser?.name" disabled />
+          <el-input :model-value="displayName(currentUser)" disabled />
         </el-form-item>
         <el-form-item label="选择卡模板" required>
-          <el-select v-model="issueForm.templateId" placeholder="请选择" style="width: 100%" @change="onTemplateChange">
+          <el-select
+            v-model="issueForm.templateId"
+            placeholder="请选择"
+            style="width: 100%"
+            @change="onTemplateChange"
+          >
             <el-option
               v-for="t in activeTemplates"
               :key="t._id"
@@ -87,14 +100,22 @@
         <el-form-item v-if="selectedTemplate" label="卡类型">
           <el-tag>{{ typeLabel(selectedTemplate.type) }}</el-tag>
         </el-form-item>
-        <el-form-item v-if="selectedTemplate && (selectedTemplate.type === 'times' || selectedTemplate.type === 'coach')" label="次数">
+        <el-form-item
+          v-if="selectedTemplate && (selectedTemplate.type === 'times' || selectedTemplate.type === 'coach')"
+          label="次数"
+        >
           <el-input-number v-model="issueForm.totalTimes" :min="1" />
         </el-form-item>
         <el-form-item label="生效日期">
           <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" />
         </el-form-item>
         <el-form-item label="到期日期">
-          <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="可留空" />
+          <el-date-picker
+            v-model="issueForm.validTo"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="可留空"
+          />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="issueForm.remark" type="textarea" :rows="2" />
@@ -137,7 +158,14 @@ const base = import.meta.env.DEV
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
 
 const activeTemplates = computed(() => templates.value.filter((t) => t.status === 'active'))
-const selectedTemplate = computed(() => templates.value.find((t) => t._id === issueForm.value.templateId))
+const selectedTemplate = computed(() =>
+  templates.value.find((t) => t._id === issueForm.value.templateId)
+)
+
+function displayName(u) {
+  if (!u) return '-'
+  return u.name || u.nickName || u.nickname || u.userId || u._id || '-'
+}
 
 function typeLabel(t) {
   return { times: '次卡', coach: '教练卡', time: '时间卡' }[t] || t
@@ -247,12 +275,16 @@ async function submitIssue() {
     ElMessage.warning('请选择卡模板')
     return
   }
+  if (!currentUser.value?._id) {
+    ElMessage.warning('用户信息异常')
+    return
+  }
   issuing.value = true
   try {
     const result = await post('/adminIssueCard', {
       userId: currentUser.value._id,
       openid: currentUser.value._openid || '',
-      userName: currentUser.value.name || '',
+      userName: displayName(currentUser.value),
       templateId: issueForm.value.templateId,
       totalTimes: issueForm.value.totalTimes,
       validFrom: issueForm.value.validFrom,
@@ -267,7 +299,8 @@ async function submitIssue() {
     issueVisible.value = false
     loadData()
   } catch (e) {
-    ElMessage.error(e.message || '网络错误')
+    console.error(e)
+    ElMessage.error(e.message || '网络错误，请检查 adminIssueCard 云函数')
   } finally {
     issuing.value = false
   }
