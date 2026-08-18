@@ -18,13 +18,14 @@
       <el-table-column prop="price" label="价格(元)" width="100" />
       <el-table-column label="次数/天数" width="110">
         <template #default="{ row }">
-          <span v-if="row.type === 'times' || row.type === 'coach'">{{ row.totalTimes }} 次</span>
+          <span v-if="isTimesLike(row.type)">{{ row.totalTimes }} 次</span>
           <span v-else>{{ row.durationDays || '-' }} 天</span>
         </template>
       </el-table-column>
       <el-table-column label="时间规则" min-width="240">
         <template #default="{ row }">
           <span v-if="row.type === 'time'">{{ timeRuleText(row.timeRule) }}</span>
+          <span v-else-if="row.type === 'group'">多人同教练</span>
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -55,21 +56,25 @@
     >
       <el-form label-width="100px">
         <el-form-item label="卡名称" required>
-          <el-input v-model="form.name" placeholder="如：10次次卡 / 月卡" />
+          <el-input v-model="form.name" placeholder="如：10次次卡 / 团课10次" />
         </el-form-item>
         <el-form-item label="类型" required>
           <el-radio-group v-model="form.type" :disabled="!!form._id">
             <el-radio value="times">次卡</el-radio>
             <el-radio value="coach">教练卡</el-radio>
+            <el-radio value="group">团课</el-radio>
             <el-radio value="time">时间卡</el-radio>
           </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="form.type === 'group'" label="说明">
+          <span class="hint" style="margin-left:0">团课：时间由场馆安排，同一教练同一时段可带多名学员（与一对一教练卡不同）</span>
         </el-form-item>
         <el-form-item label="售价(元)">
           <el-input-number v-model="form.price" :min="0" :precision="0" />
         </el-form-item>
 
-        <!-- 次卡 / 教练卡 -->
-        <template v-if="form.type === 'times' || form.type === 'coach'">
+        <!-- 次卡 / 教练卡 / 团课 -->
+        <template v-if="isTimesLike(form.type)">
           <el-form-item label="总次数" required>
             <el-input-number v-model="form.totalTimes" :min="1" />
           </el-form-item>
@@ -224,18 +229,19 @@ const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
 
+function isTimesLike(t) {
+  return t === 'times' || t === 'coach' || t === 'group'
+}
 function typeLabel(t) {
-  return { times: '次卡', coach: '教练卡', time: '时间卡' }[t] || t
+  return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }[t] || t
 }
 function typeTag(t) {
-  return { times: 'success', coach: 'warning', time: 'primary' }[t] || 'info'
+  return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[t] || 'info'
 }
 
 function timeRuleText(rule) {
   if (!rule) return '-'
   if (rule.mode === 'unlimited' || rule.mode === 'all') return '有效期内任意时间'
-
-  // 新多组规则
   if (rule.mode === 'rules' && rule.rules && rule.rules.length) {
     return rule.rules.map((r) => {
       const days = (r.weekdays || []).map((d) => weekName[d] || d).join('') || '?'
@@ -244,8 +250,6 @@ function timeRuleText(rule) {
       return `${days}${slots}`
     }).join('；')
   }
-
-  // 兼容旧数据
   if (rule.mode === 'weekly') {
     const days = (rule.weekdays || []).map((d) => weekName[d] || d).join('、') || '每天'
     const slots = (rule.timeSlots || []).map((s) => `${s.start}-${s.end}`).join(' / ')
@@ -312,7 +316,6 @@ function openEdit(row) {
   let mode = rule.mode || 'unlimited'
   let rules = rule.rules
 
-  // 兼容旧数据结构
   if (!rules || !rules.length) {
     if (mode === 'weekly' || mode === 'custom' || mode === 'weekday') {
       mode = 'rules'
@@ -348,7 +351,7 @@ async function save() {
     ElMessage.warning('请填写卡名称')
     return
   }
-  if ((form.value.type === 'times' || form.value.type === 'coach') && !form.value.totalTimes) {
+  if (isTimesLike(form.value.type) && !form.value.totalTimes) {
     ElMessage.warning('请填写总次数')
     return
   }
