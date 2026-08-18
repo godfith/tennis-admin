@@ -51,12 +51,12 @@
         <el-table-column prop="cardName" label="卡名称" min-width="120" />
         <el-table-column label="类型" width="90">
           <template #default="{ row }">
-            <el-tag size="small">{{ typeLabel(row.type) }}</el-tag>
+            <el-tag size="small" :type="typeTag(row.type)">{{ typeLabel(row.type) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="剩余/总次" width="100">
           <template #default="{ row }">
-            <span v-if="row.type === 'times' || row.type === 'coach'">
+            <span v-if="isTimesLike(row.type)">
               {{ row.remainingTimes }} / {{ row.totalTimes }}
             </span>
             <span v-else>-</span>
@@ -98,10 +98,10 @@
           </el-select>
         </el-form-item>
         <el-form-item v-if="selectedTemplate" label="卡类型">
-          <el-tag>{{ typeLabel(selectedTemplate.type) }}</el-tag>
+          <el-tag :type="typeTag(selectedTemplate.type)">{{ typeLabel(selectedTemplate.type) }}</el-tag>
         </el-form-item>
         <el-form-item
-          v-if="selectedTemplate && (selectedTemplate.type === 'times' || selectedTemplate.type === 'coach')"
+          v-if="selectedTemplate && isTimesLike(selectedTemplate.type)"
           label="次数"
         >
           <el-input-number v-model="issueForm.totalTimes" :min="1" />
@@ -167,8 +167,14 @@ function displayName(u) {
   return u.nickName || u.nickname || u.name || u.userId || u._id || '-'
 }
 
+function isTimesLike(t) {
+  return t === 'times' || t === 'coach' || t === 'group'
+}
 function typeLabel(t) {
-  return { times: '次卡', coach: '教练卡', time: '时间卡' }[t] || t
+  return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }[t] || t
+}
+function typeTag(t) {
+  return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[t] || 'info'
 }
 function statusLabel(s) {
   return { active: '有效', expired: '已过期', used_up: '已用完' }[s] || s
@@ -277,6 +283,11 @@ async function submitIssue() {
   }
   if (!currentUser.value?._id) {
     ElMessage.warning('用户信息异常')
+    return
+  }
+  const tpl = selectedTemplate.value
+  if (tpl && isTimesLike(tpl.type) && !issueForm.value.totalTimes) {
+    ElMessage.warning('请填写次数')
     return
   }
   issuing.value = true
