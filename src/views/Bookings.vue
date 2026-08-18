@@ -117,7 +117,7 @@
           </div>
         </el-form-item>
 
-        <!-- 教练卡必须选教练 -->
+        <!-- 教练卡必须选教练：已在该时段被约的教练置灰 -->
         <el-form-item v-if="isCoachCard" label="选择教练" required>
           <el-select
             v-model="bookForm.coachId"
@@ -126,12 +126,16 @@
             :loading="coachLoading"
           >
             <el-option
-              v-for="c in coachList"
+              v-for="c in availableCoaches"
               :key="c._id"
-              :label="c.name"
+              :label="c.busy ? `${c.name}（该时段已约）` : c.name"
               :value="c._id"
+              :disabled="c.busy"
             />
           </el-select>
+          <div v-if="availableCoaches.length && availableCoaches.every((c) => c.busy)" class="card-tip">
+            该时段所有教练都已有预约
+          </div>
         </el-form-item>
 
         <el-form-item label="备注">
@@ -247,6 +251,27 @@ const selectedCard = computed(() =>
 
 const isCoachCard = computed(() => selectedCard.value?.type === 'coach')
 
+/** 当前时段已占用的教练ID集合 */
+const busyCoachIds = computed(() => {
+  const set = new Set()
+  const date = bookForm.value.date
+  const time = bookForm.value.time
+  for (const b of bookings.value) {
+    if (b.status === 'booked' && b.date === date && b.time === time && b.coachId) {
+      set.add(b.coachId)
+    }
+  }
+  return set
+})
+
+/** 教练列表，标注是否忙碌 */
+const availableCoaches = computed(() => {
+  return coachList.value.map((c) => ({
+    ...c,
+    busy: busyCoachIds.value.has(c._id)
+  }))
+})
+
 function venueId() {
   return localStorage.getItem('venue_id') || ''
 }
@@ -323,6 +348,18 @@ function isCardUsable(card, dateStr, timeStr) {
   return true
 }
 
+/** 前端校验：教练在该日期时段是否已有预约 */
+function isCoachBusy(coachId, date, time) {
+  if (!coachId) return false
+  return bookings.value.some(
+    (b) =>
+      b.status === 'booked' &&
+      b.coachId === coachId &&
+      b.date === date &&
+      b.time === time
+  )
+}
+
 async function post(path, body = {}) {
   const res = await fetch(base + path, {
     method: 'POST',
@@ -368,7 +405,6 @@ function onCellClick(courtName, time) {
 }
 
 async function loadCoaches() {
-  if (coachList.value.length) return
   coachLoading.value = true
   try {
     const result = await post('/adminGetCoaches', { venueId: venueId() })
@@ -461,11 +497,15 @@ async function submitBook() {
     }
   }
 
-  // 教练卡必须选教练
   let coachName = ''
   if (selCard && selCard.type === 'coach') {
     if (!bookForm.value.coachId) {
       ElMessage.warning('教练卡必须选择教练')
+      return
+    }
+    // 前端拦截：同一时段同一教练不可重复约
+    if (isCoachBusy(bookForm.value.coachId, bookForm.value.date, bookForm.value.time)) {
+      ElMessage.error('该教练在此时段已有预约，不能分身')
       return
     }
     const coach = coachList.value.find((c) => c._id === bookForm.value.coachId)
