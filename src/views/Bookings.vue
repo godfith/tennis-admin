@@ -20,6 +20,12 @@
       <el-button :loading="loading" @click="loadAll">刷新</el-button>
     </div>
 
+    <div class="legend">
+      <span class="lg free">可约</span>
+      <span class="lg booked">已预约</span>
+      <span class="lg group">团课（仅团课卡）</span>
+    </div>
+
     <div class="grid-wrap" v-loading="loading">
       <div class="grid" :style="{ gridTemplateColumns: gridCols }">
         <div class="cell head corner">时段</div>
@@ -33,20 +39,21 @@
             v-for="c in courts"
             :key="c._id + t"
             class="cell slot"
-            :class="getBooking(c.name, t) ? 'booked' : 'free'"
+            :class="cellClass(c.name, t)"
             @click="onCellClick(c.name, t)"
           >
-            <template v-if="getBooking(c.name, t)">
-              <div class="booked-user">
-                {{
-                  getBooking(c.name, t).userName ||
-                  getBooking(c.name, t).displayUser ||
-                  '已预约'
-                }}
-              </div>
+            <template v-if="getGroupClass(c.name, t)">
+              <div class="booked-user">{{ getGroupClass(c.name, t).name || '团课' }}</div>
               <div class="booked-status">
-                {{ formatCardStatus(getBooking(c.name, t)) }}
+                团课 {{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }}
+                · {{ getGroupClass(c.name, t).coachName || '' }}
               </div>
+            </template>
+            <template v-else-if="getBooking(c.name, t)">
+              <div class="booked-user">
+                {{ getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约' }}
+              </div>
+              <div class="booked-status">{{ formatCardStatus(getBooking(c.name, t)) }}</div>
             </template>
             <template v-else>
               <div class="free-text">可约</div>
@@ -57,73 +64,47 @@
       <div v-if="!loading && courts.length === 0" class="empty">当前场馆暂无场地</div>
     </div>
 
+    <!-- 普通代客订场 -->
     <el-dialog v-model="bookVisible" title="代客订场" width="500px" destroy-on-close>
       <el-form label-width="96px">
-        <el-form-item label="场馆">
-          <el-input :model-value="venueName" disabled />
-        </el-form-item>
-        <el-form-item label="场地">
-          <el-input v-model="bookForm.court" disabled />
-        </el-form-item>
-        <el-form-item label="日期">
-          <el-input v-model="bookForm.date" disabled />
-        </el-form-item>
-        <el-form-item label="时段">
-          <el-input v-model="bookForm.time" disabled />
-        </el-form-item>
+        <el-form-item label="场馆"><el-input :model-value="venueName" disabled /></el-form-item>
+        <el-form-item label="场地"><el-input v-model="bookForm.court" disabled /></el-form-item>
+        <el-form-item label="日期"><el-input v-model="bookForm.date" disabled /></el-form-item>
+        <el-form-item label="时段"><el-input v-model="bookForm.time" disabled /></el-form-item>
         <el-form-item label="客户" required>
           <el-select
             v-model="bookForm.memberKey"
-            filterable
-            remote
-            clearable
-            reserve-keyword
+            filterable remote clearable reserve-keyword
             placeholder="输入昵称/手机号/会员号搜索"
             :remote-method="searchMembers"
             :loading="memberLoading"
             style="width: 100%"
             @change="onMemberChange"
           >
-            <el-option
-              v-for="m in memberOptions"
-              :key="m._id"
-              :label="memberLabel(m)"
-              :value="m._id"
-            />
+            <el-option v-for="m in memberOptions" :key="m._id" :label="memberLabel(m)" :value="m._id" />
           </el-select>
         </el-form-item>
-
         <el-form-item label="使用会员卡">
           <el-select
             v-model="bookForm.cardId"
             placeholder="不使用卡（现金/其他）"
-            clearable
-            style="width: 100%"
+            clearable style="width: 100%"
             :loading="cardLoading"
             :disabled="!bookForm.memberKey"
             @change="onCardChange"
           >
             <el-option label="不使用卡" value="" />
             <el-option
-              v-for="c in usableCards"
+              v-for="c in usableCardsNormal"
               :key="c._id"
               :label="cardOptionLabel(c)"
               :value="c._id"
             />
           </el-select>
-          <div v-if="bookForm.memberKey && !cardLoading && usableCards.length === 0" class="card-tip">
-            该会员暂无可用卡
-          </div>
+          <div class="card-tip">团课请点日程上的「团课」格子报名</div>
         </el-form-item>
-
-        <!-- 教练卡(1对1) 或 团课：都要选教练 -->
-        <el-form-item v-if="needsCoach" :label="isGroupCard ? '团课教练' : '选择教练'" required>
-          <el-select
-            v-model="bookForm.coachId"
-            placeholder="请选择教练"
-            style="width: 100%"
-            :loading="coachLoading"
-          >
+        <el-form-item v-if="isCoachCard" label="选择教练" required>
+          <el-select v-model="bookForm.coachId" placeholder="请选择教练" style="width: 100%" :loading="coachLoading">
             <el-option
               v-for="c in availableCoaches"
               :key="c._id"
@@ -132,12 +113,9 @@
               :disabled="c.busy"
             />
           </el-select>
-          <div v-if="isGroupCard" class="card-tip">团课：同一教练同一时段可多人上课</div>
-          <div v-else-if="isCoachCard" class="card-tip">一对一：该时段教练不可再约其他课</div>
         </el-form-item>
-
         <el-form-item label="备注">
-          <el-input v-model="bookForm.remark" type="textarea" :rows="2" placeholder="选填" />
+          <el-input v-model="bookForm.remark" type="textarea" :rows="2" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -146,31 +124,80 @@
       </template>
     </el-dialog>
 
+    <!-- 团课报名 -->
+    <el-dialog v-model="groupVisible" title="团课报名" width="500px" destroy-on-close>
+      <el-form label-width="96px" v-if="currentGroup">
+        <el-form-item label="团课">
+          <el-input :model-value="currentGroup.name" disabled />
+        </el-form-item>
+        <el-form-item label="场地/时段">
+          <el-input :model-value="`${currentGroup.court} · ${currentGroup.time}`" disabled />
+        </el-form-item>
+        <el-form-item label="教练">
+          <el-input :model-value="currentGroup.coachName" disabled />
+        </el-form-item>
+        <el-form-item label="名额">
+          <el-input :model-value="`${currentGroup.enrolled || 0} / ${currentGroup.capacity}`" disabled />
+        </el-form-item>
+        <el-form-item label="客户" required>
+          <el-select
+            v-model="groupForm.memberKey"
+            filterable remote clearable reserve-keyword
+            placeholder="搜索会员"
+            :remote-method="searchMembers"
+            :loading="memberLoading"
+            style="width: 100%"
+            @change="onGroupMemberChange"
+          >
+            <el-option v-for="m in memberOptions" :key="m._id" :label="memberLabel(m)" :value="m._id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="团课卡" required>
+          <el-select
+            v-model="groupForm.cardId"
+            placeholder="请选择团课卡"
+            style="width: 100%"
+            :loading="cardLoading"
+            :disabled="!groupForm.memberKey"
+          >
+            <el-option
+              v-for="c in groupCards"
+              :key="c._id"
+              :label="cardOptionLabel(c)"
+              :value="c._id"
+            />
+          </el-select>
+          <div v-if="groupForm.memberKey && !cardLoading && groupCards.length === 0" class="card-tip error">
+            该会员没有可用团课卡，无法报名
+          </div>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="groupForm.remark" type="textarea" :rows="2" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="groupVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitGroupEnroll">确认报名</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 普通预约详情 -->
     <el-dialog v-model="detailVisible" title="预约详情" width="420px">
       <el-descriptions v-if="current" :column="1" border>
         <el-descriptions-item label="订单号">{{ current.orderNo || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="场馆">{{ current.venueName || venueName }}</el-descriptions-item>
         <el-descriptions-item label="场地">{{ current.court }}</el-descriptions-item>
         <el-descriptions-item label="日期">{{ current.date }}</el-descriptions-item>
         <el-descriptions-item label="时段">{{ current.time }}</el-descriptions-item>
-        <el-descriptions-item label="客户">
-          {{ current.userName || current.displayUser || '-' }}
-        </el-descriptions-item>
+        <el-descriptions-item label="客户">{{ current.userName || '-' }}</el-descriptions-item>
         <el-descriptions-item label="使用卡">
           <template v-if="current.cardName">
             {{ current.cardName }}
-            <span v-if="current.cardType === 'group'">（团课）</span>
-            <span v-if="current.cardRemaining != null">（剩余 {{ current.cardRemaining }} 次）</span>
+            <span v-if="current.cardRemaining != null">（剩{{ current.cardRemaining }}）</span>
           </template>
           <template v-else>未使用卡</template>
         </el-descriptions-item>
-        <el-descriptions-item v-if="current.coachName" label="教练">
-          {{ current.coachName }}
-          <span v-if="current.cardType === 'group'"> ·团课</span>
-          <span v-else-if="current.cardType === 'coach'"> ·一对一</span>
-        </el-descriptions-item>
+        <el-descriptions-item v-if="current.coachName" label="教练">{{ current.coachName }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ current.remark || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="状态">已预约</el-descriptions-item>
       </el-descriptions>
       <template #footer>
         <el-button type="warning" @click="cancelBook">取消预约</el-button>
@@ -185,17 +212,9 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const timeSlots = [
-  '08:00-09:00',
-  '09:00-10:00',
-  '10:00-11:00',
-  '11:00-12:00',
-  '14:00-15:00',
-  '15:00-16:00',
-  '16:00-17:00',
-  '17:00-18:00',
-  '18:00-19:00',
-  '19:00-20:00',
-  '20:00-21:00'
+  '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
+  '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
+  '18:00-19:00', '19:00-20:00', '20:00-21:00'
 ]
 
 const loading = ref(false)
@@ -205,6 +224,7 @@ const cardLoading = ref(false)
 const coachLoading = ref(false)
 const courts = ref([])
 const bookings = ref([])
+const groupClasses = ref([])
 const memberOptions = ref([])
 const memberCards = ref([])
 const coachList = ref([])
@@ -213,18 +233,16 @@ const dateObj = ref(currentDate.value)
 const venueName = ref(localStorage.getItem('venue_name') || '')
 
 const bookVisible = ref(false)
+const groupVisible = ref(false)
 const detailVisible = ref(false)
 const current = ref(null)
+const currentGroup = ref(null)
+
 const bookForm = ref({
-  court: '',
-  date: '',
-  time: '',
-  memberKey: '',
-  userName: '',
-  userOpenid: '',
-  cardId: '',
-  coachId: '',
-  remark: ''
+  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: ''
+})
+const groupForm = ref({
+  memberKey: '', userName: '', userOpenid: '', cardId: '', remark: ''
 })
 
 const base = import.meta.env.DEV
@@ -234,78 +252,58 @@ const base = import.meta.env.DEV
 const gridCols = computed(
   () => `100px repeat(${Math.max(courts.value.length, 1)}, minmax(120px, 1fr))`
 )
-
 const weekLabel = computed(() => {
   const w = ['日', '一', '二', '三', '四', '五', '六']
   const d = new Date(currentDate.value.replace(/-/g, '/'))
   return isNaN(d.getTime()) ? '' : `周${w[d.getDay()]}`
 })
 
-const usableCards = computed(() => {
-  return memberCards.value.filter((c) => isCardUsable(c, bookForm.value.date, bookForm.value.time))
-})
+const selectedCard = computed(() => memberCards.value.find((c) => c._id === bookForm.value.cardId))
+const isCoachCard = computed(() => selectedCard.value?.type === 'coach')
 
-const selectedCard = computed(() =>
-  memberCards.value.find((c) => c._id === bookForm.value.cardId)
+// 普通订场不用团课卡
+const usableCardsNormal = computed(() =>
+  memberCards.value.filter(
+    (c) => c.type !== 'group' && isCardUsable(c, bookForm.value.date, bookForm.value.time)
+  )
+)
+// 团课报名只用团课卡
+const groupCards = computed(() =>
+  memberCards.value.filter((c) => c.type === 'group' && c.status === 'active' && (c.remainingTimes || 0) > 0)
 )
 
-const isCoachCard = computed(() => selectedCard.value?.type === 'coach')
-const isGroupCard = computed(() => selectedCard.value?.type === 'group')
-const needsCoach = computed(() => isCoachCard.value || isGroupCard.value)
-
-/**
- * 教练冲突规则：
- * - 一对一教练卡：该时段只要有任何该教练的预约（一对一或团课）就不可用
- * - 团课：该时段只有「一对一教练卡」会占用，其他团课不冲突
- */
 const availableCoaches = computed(() => {
   const date = bookForm.value.date
   const time = bookForm.value.time
-  const forGroup = isGroupCard.value
-
   return coachList.value.map((c) => {
     const related = bookings.value.filter(
-      (b) =>
-        b.status === 'booked' &&
-        b.coachId === c._id &&
-        b.date === date &&
-        b.time === time
+      (b) => b.status === 'booked' && b.coachId === c._id && b.date === date && b.time === time
     )
-    if (!related.length) {
-      return { ...c, busy: false, busyReason: '' }
+    const hasGroup = groupClasses.value.some(
+      (g) => g.coachId === c._id && g.date === date && g.time === time && g.status === 'open'
+    )
+    if (related.length || hasGroup) {
+      return { ...c, busy: true, busyReason: '该时段已占用' }
     }
-    if (forGroup) {
-      // 团课：仅被一对一占用时不可用
-      const hasOneOnOne = related.some((b) => b.cardType === 'coach')
-      return {
-        ...c,
-        busy: hasOneOnOne,
-        busyReason: hasOneOnOne ? '该时段有一对一课' : ''
-      }
-    }
-    // 一对一：任何预约都占用
-    return { ...c, busy: true, busyReason: '该时段已约' }
+    return { ...c, busy: false, busyReason: '' }
   })
 })
 
 function venueId() {
   return localStorage.getItem('venue_id') || ''
 }
-
 function formatDate(d) {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
 }
-
 function memberLabel(m) {
   const name = m.nickName || m.nickname || m.name || ''
   if (m.phone) return `${name}（${m.phone}）`
   if (m.userId) return `${name || m.userId}`
   return name || m._id
 }
-
 function cardOptionLabel(c) {
   const typeMap = { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }
   const type = typeMap[c.type] || c.type
@@ -314,18 +312,13 @@ function cardOptionLabel(c) {
   }
   return `${c.cardName}（${type}）`
 }
-
 function formatCardStatus(b) {
   if (!b || !b.cardName) return '已预约'
   let text = '卡:' + b.cardName
-  if (b.cardType === 'group') text = '团课:' + b.cardName
-  if (b.cardRemaining != null && (b.cardType === 'times' || b.cardType === 'coach' || b.cardType === 'group')) {
-    text += ` 剩${b.cardRemaining}次`
-  }
+  if (b.cardRemaining != null) text += ` 剩${b.cardRemaining}次`
   if (b.coachName) text += ` ·${b.coachName}`
   return text
 }
-
 function isCardUsable(card, dateStr, timeStr) {
   if (!card || card.status !== 'active') return false
   if (card.validFrom && dateStr < card.validFrom) return false
@@ -350,35 +343,7 @@ function isCardUsable(card, dateStr, timeStr) {
       }
       return false
     }
-    if (rule.mode === 'weekly') {
-      if (rule.weekdays && rule.weekdays.length && !rule.weekdays.includes(weekday)) return false
-      const slots = rule.timeSlots || []
-      if (!slots.length && rule.startTime) {
-        return slotStart >= rule.startTime && slotStart < rule.endTime
-      }
-      for (const s of slots) {
-        if (slotStart >= s.start && slotStart < s.end) return true
-      }
-      return slots.length === 0
-    }
   }
-  return true
-}
-
-function isCoachConflict(coachId, date, time, cardType) {
-  if (!coachId) return false
-  const related = bookings.value.filter(
-    (b) =>
-      b.status === 'booked' &&
-      b.coachId === coachId &&
-      b.date === date &&
-      b.time === time
-  )
-  if (!related.length) return false
-  if (cardType === 'group') {
-    return related.some((b) => b.cardType === 'coach')
-  }
-  // 一对一：任何都冲突
   return true
 }
 
@@ -398,11 +363,30 @@ async function post(path, body = {}) {
 
 function getBooking(courtName, time) {
   return bookings.value.find(
-    (b) => b.court === courtName && b.time === time && b.status === 'booked'
+    (b) => b.court === courtName && b.time === time && b.status === 'booked' && !b.groupClassId
   )
+}
+function getGroupClass(courtName, time) {
+  return groupClasses.value.find(
+    (g) => g.court === courtName && g.time === time && g.status === 'open'
+  )
+}
+function cellClass(courtName, time) {
+  if (getGroupClass(courtName, time)) return 'group'
+  if (getBooking(courtName, time)) return 'booked'
+  return 'free'
 }
 
 function onCellClick(courtName, time) {
+  const gc = getGroupClass(courtName, time)
+  if (gc) {
+    currentGroup.value = gc
+    groupForm.value = { memberKey: '', userName: '', userOpenid: '', cardId: '', remark: '' }
+    memberOptions.value = []
+    memberCards.value = []
+    groupVisible.value = true
+    return
+  }
   const b = getBooking(courtName, time)
   if (b) {
     current.value = b
@@ -434,7 +418,6 @@ async function loadCoaches() {
       (c) => c.status === 'active' || c.status === '在职' || !c.status
     )
   } catch (e) {
-    console.error(e)
     coachList.value = []
   } finally {
     coachLoading.value = false
@@ -473,10 +456,7 @@ async function onMemberChange(id) {
     bookForm.value.userOpenid = m._openid || ''
     cardLoading.value = true
     try {
-      const result = await post('/adminGetMemberCards', {
-        userId: m._id,
-        openid: m._openid || ''
-      })
+      const result = await post('/adminGetMemberCards', { userId: m._id, openid: m._openid || '' })
       memberCards.value = (result.list || []).filter((c) => c.status === 'active')
     } catch (e) {
       memberCards.value = []
@@ -489,11 +469,31 @@ async function onMemberChange(id) {
   }
 }
 
+async function onGroupMemberChange(id) {
+  groupForm.value.cardId = ''
+  memberCards.value = []
+  const m = memberOptions.value.find((x) => x._id === id)
+  if (m) {
+    groupForm.value.userName = m.nickName || m.nickname || m.name || m.userId || ''
+    groupForm.value.userOpenid = m._openid || ''
+    cardLoading.value = true
+    try {
+      const result = await post('/adminGetMemberCards', { userId: m._id, openid: m._openid || '' })
+      memberCards.value = (result.list || []).filter((c) => c.status === 'active')
+    } catch (e) {
+      memberCards.value = []
+    } finally {
+      cardLoading.value = false
+    }
+  } else {
+    groupForm.value.userName = ''
+    groupForm.value.userOpenid = ''
+  }
+}
+
 function onCardChange() {
   bookForm.value.coachId = ''
-  if (needsCoach.value) {
-    loadCoaches()
-  }
+  if (isCoachCard.value) loadCoaches()
 }
 
 async function submitBook() {
@@ -505,32 +505,25 @@ async function submitBook() {
     ElMessage.warning('请先选择场馆')
     return
   }
+  // 团课格子不可普通约
+  if (getGroupClass(bookForm.value.court, bookForm.value.time)) {
+    ElMessage.warning('该时段为团课，请从团课格子报名')
+    return
+  }
 
   let selCard = null
   if (bookForm.value.cardId) {
     selCard = memberCards.value.find((c) => c._id === bookForm.value.cardId)
-    if (!selCard) {
-      ElMessage.warning('所选会员卡无效')
-      return
-    }
-    if (!isCardUsable(selCard, bookForm.value.date, bookForm.value.time)) {
-      ElMessage.warning('该卡在当前日期/时段不可用')
+    if (!selCard || selCard.type === 'group') {
+      ElMessage.warning('普通订场请勿使用团课卡')
       return
     }
   }
 
   let coachName = ''
-  if (selCard && (selCard.type === 'coach' || selCard.type === 'group')) {
+  if (selCard && selCard.type === 'coach') {
     if (!bookForm.value.coachId) {
-      ElMessage.warning(selCard.type === 'group' ? '团课必须选择教练' : '教练卡必须选择教练')
-      return
-    }
-    if (isCoachConflict(bookForm.value.coachId, bookForm.value.date, bookForm.value.time, selCard.type)) {
-      ElMessage.error(
-        selCard.type === 'group'
-          ? '该教练此时段有一对一课程，无法排团课'
-          : '该教练在此时段已有预约，不能分身'
-      )
+      ElMessage.warning('教练卡必须选择教练')
       return
     }
     const coach = coachList.value.find((c) => c._id === bookForm.value.coachId)
@@ -557,19 +550,62 @@ async function submitBook() {
         cardName: selCard ? selCard.cardName : '',
         cardType: selCard ? selCard.type : '',
         coachId: bookForm.value.coachId || '',
-        coachName: coachName
+        coachName
       }
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '订场失败')
       return
     }
-    ElMessage.success(selCard ? '订场成功（已扣卡）' : '订场成功')
+    ElMessage.success('订场成功')
     bookVisible.value = false
     loadAll()
   } catch (e) {
-    console.error('订场失败：', e)
-    ElMessage.error(e.message || '网络错误，请检查 adminSaveBooking')
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function submitGroupEnroll() {
+  if (!currentGroup.value) return
+  if (!groupForm.value.memberKey || !groupForm.value.userName) {
+    ElMessage.warning('请选择会员')
+    return
+  }
+  if (!groupForm.value.cardId) {
+    ElMessage.warning('请选择团课卡')
+    return
+  }
+  const card = memberCards.value.find((c) => c._id === groupForm.value.cardId)
+  if (!card || card.type !== 'group') {
+    ElMessage.warning('必须使用团课卡报名')
+    return
+  }
+  if ((currentGroup.value.enrolled || 0) >= (currentGroup.value.capacity || 0)) {
+    ElMessage.warning('团课名额已满')
+    return
+  }
+
+  saving.value = true
+  try {
+    const result = await post('/adminEnrollGroupClass', {
+      groupClassId: currentGroup.value._id,
+      userId: groupForm.value.memberKey,
+      userName: groupForm.value.userName,
+      userOpenid: groupForm.value.userOpenid || '',
+      cardId: card._id,
+      remark: groupForm.value.remark || ''
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '报名失败')
+      return
+    }
+    ElMessage.success('报名成功（已扣团课卡）')
+    groupVisible.value = false
+    loadAll()
+  } catch (e) {
+    ElMessage.error(e.message || '网络错误')
   } finally {
     saving.value = false
   }
@@ -578,15 +614,10 @@ async function submitBook() {
 async function cancelBook() {
   if (!current.value?._id) return
   try {
-    await ElMessageBox.confirm(
-      '确定取消该预约？' + (current.value.cardId ? '（将尝试退还次数）' : ''),
-      '提示',
-      { type: 'warning' }
-    )
-    const result = await post('/adminSaveBooking', {
-      action: 'cancel',
-      id: current.value._id
+    await ElMessageBox.confirm('确定取消该预约？' + (current.value.cardId ? '（将退还次数）' : ''), '提示', {
+      type: 'warning'
     })
+    const result = await post('/adminSaveBooking', { action: 'cancel', id: current.value._id })
     if (!result.ok) {
       ElMessage.error(result.msg || '取消失败')
       return
@@ -606,13 +637,11 @@ function shiftDate(delta) {
   dateObj.value = currentDate.value
   loadAll()
 }
-
 function goToday() {
   currentDate.value = formatDate(new Date())
   dateObj.value = currentDate.value
   loadAll()
 }
-
 function onDatePick(val) {
   if (val) {
     currentDate.value = val
@@ -625,23 +654,24 @@ async function loadAll() {
   if (!venueId()) {
     courts.value = []
     bookings.value = []
+    groupClasses.value = []
     ElMessage.warning('请先在顶部选择场馆')
     return
   }
   loading.value = true
   try {
-    const [cRes, bRes] = await Promise.all([
+    const [cRes, bRes, gRes] = await Promise.all([
       post('/adminGetCourts', { venueId: venueId() }),
-      post('/adminGetBookings', { venueId: venueId(), date: currentDate.value })
+      post('/adminGetBookings', { venueId: venueId(), date: currentDate.value }),
+      post('/adminGetGroupClasses', { venueId: venueId(), date: currentDate.value })
     ])
-
     let list = cRes.list || []
     const openList = list.filter(
       (c) => c.status === 'open' || c.status === '开门' || c.status === 1 || c.status === true
     )
     courts.value = openList.length ? openList : list
-
     bookings.value = (bRes.list || []).filter((b) => b.status === 'booked')
+    groupClasses.value = (gRes.list || []).filter((g) => g.status === 'open')
   } catch (e) {
     ElMessage.error(e.message || '加载失败')
   } finally {
@@ -659,125 +689,51 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.schedule-page {
-  min-height: 100%;
-}
+.schedule-page { min-height: 100%; }
 .toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 16px;
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 12px; margin-bottom: 8px;
 }
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
+.toolbar-left { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+h2 { margin: 0; font-size: 20px; }
+.date-label { color: #1a5c3a; font-weight: 600; font-size: 15px; }
+.venue-tip { color: #888; font-size: 14px; }
+.legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; }
+.lg { display: inline-flex; align-items: center; gap: 6px; }
+.lg::before {
+  content: ''; width: 12px; height: 12px; border-radius: 3px;
 }
-h2 {
-  margin: 0;
-  font-size: 20px;
-}
-.date-label {
-  color: #1a5c3a;
-  font-weight: 600;
-  font-size: 15px;
-}
-.venue-tip {
-  color: #888;
-  font-size: 14px;
-}
+.lg.free::before { background: #f0f9f4; border: 1px solid #67c23a; }
+.lg.booked::before { background: #fff3e0; border: 1px solid #e6a23c; }
+.lg.group::before { background: #fce4ec; border: 1px solid #ec407a; }
 .grid-wrap {
-  overflow: auto;
-  background: #fff;
-  border-radius: 12px;
-  border: 1px solid #e8e8e8;
+  overflow: auto; background: #fff; border-radius: 12px; border: 1px solid #e8e8e8;
 }
-.grid {
-  display: grid;
-  min-width: 640px;
-}
+.grid { display: grid; min-width: 640px; }
 .cell {
-  border-right: 1px solid #f0f0f0;
-  border-bottom: 1px solid #f0f0f0;
-  padding: 10px 8px;
-  min-height: 68px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  border-right: 1px solid #f0f0f0; border-bottom: 1px solid #f0f0f0;
+  padding: 10px 8px; min-height: 68px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-size: 15px;
 }
-.head {
-  background: #f7faf8;
-  font-weight: 600;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-}
-.corner {
-  position: sticky;
-  left: 0;
-  z-index: 3;
-  background: #f7faf8;
-}
-.time-col {
-  position: sticky;
-  left: 0;
-  background: #fafafa;
-  z-index: 1;
-  color: #555;
-  font-size: 14px;
-}
-.court-name {
-  color: #1a5c3a;
-  font-size: 15px;
-  font-weight: 600;
-}
-.slot {
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.slot.free {
-  background: #f0f9f4;
-  color: #67c23a;
-}
-.slot.free:hover {
-  background: #d8f3e4;
-}
-.slot.booked {
-  background: #fff3e0;
-  color: #e6a23c;
-}
-.slot.booked:hover {
-  background: #ffe0b2;
-}
+.head { background: #f7faf8; font-weight: 600; position: sticky; top: 0; z-index: 2; }
+.corner { position: sticky; left: 0; z-index: 3; background: #f7faf8; }
+.time-col { position: sticky; left: 0; background: #fafafa; z-index: 1; color: #555; font-size: 14px; }
+.court-name { color: #1a5c3a; font-size: 15px; font-weight: 600; }
+.slot { cursor: pointer; transition: background 0.15s; }
+.slot.free { background: #f0f9f4; color: #67c23a; }
+.slot.free:hover { background: #d8f3e4; }
+.slot.booked { background: #fff3e0; color: #e6a23c; }
+.slot.booked:hover { background: #ffe0b2; }
+.slot.group { background: #fce4ec; color: #c2185b; }
+.slot.group:hover { background: #f8bbd0; }
 .booked-user {
-  font-weight: 600;
-  font-size: 14px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600; font-size: 14px; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.booked-status {
-  font-size: 12px;
-  margin-top: 4px;
-}
-.free-text {
-  font-size: 15px;
-}
-.empty {
-  text-align: center;
-  color: #999;
-  padding: 40px;
-  font-size: 15px;
-}
-.card-tip {
-  font-size: 12px;
-  color: #999;
-  margin-top: 4px;
-}
+.booked-status { font-size: 12px; margin-top: 4px; }
+.free-text { font-size: 15px; }
+.empty { text-align: center; color: #999; padding: 40px; font-size: 15px; }
+.card-tip { font-size: 12px; color: #999; margin-top: 4px; }
+.card-tip.error { color: #f56c6c; }
 </style>
