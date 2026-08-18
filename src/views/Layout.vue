@@ -20,6 +20,10 @@
           <el-icon><Calendar /></el-icon>
           <span>预约管理</span>
         </el-menu-item>
+        <el-menu-item index="/group-classes">
+          <el-icon><Tickets /></el-icon>
+          <span>团课排期</span>
+        </el-menu-item>
         <el-menu-item index="/courts">
           <el-icon><Grid /></el-icon>
           <span>场地管理</span>
@@ -85,7 +89,8 @@ import {
   User,
   UserFilled,
   ArrowDown,
-  Ticket
+  Ticket,
+  Tickets
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

@@ -22,6 +22,11 @@ const routes = [
         component: () => import('../views/Bookings.vue')
       },
       {
+        path: 'group-classes',
+        name: 'GroupClasses',
+        component: () => import('../views/GroupClasses.vue')
+      },
+      {
         path: 'courts',
         name: 'Courts',
         component: () => import('../views/Courts.vue')
