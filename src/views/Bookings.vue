@@ -57,7 +57,6 @@
       <div v-if="!loading && courts.length === 0" class="empty">当前场馆暂无场地</div>
     </div>
 
-    <!-- 代客订场 -->
     <el-dialog v-model="bookVisible" title="代客订场" width="500px" destroy-on-close>
       <el-form label-width="96px">
         <el-form-item label="场馆">
@@ -117,8 +116,8 @@
           </div>
         </el-form-item>
 
-        <!-- 教练卡必须选教练：已在该时段被约的教练置灰 -->
-        <el-form-item v-if="isCoachCard" label="选择教练" required>
+        <!-- 教练卡(1对1) 或 团课：都要选教练 -->
+        <el-form-item v-if="needsCoach" :label="isGroupCard ? '团课教练' : '选择教练'" required>
           <el-select
             v-model="bookForm.coachId"
             placeholder="请选择教练"
@@ -128,14 +127,13 @@
             <el-option
               v-for="c in availableCoaches"
               :key="c._id"
-              :label="c.busy ? `${c.name}（该时段已约）` : c.name"
+              :label="c.busy ? `${c.name}（${c.busyReason}）` : c.name"
               :value="c._id"
               :disabled="c.busy"
             />
           </el-select>
-          <div v-if="availableCoaches.length && availableCoaches.every((c) => c.busy)" class="card-tip">
-            该时段所有教练都已有预约
-          </div>
+          <div v-if="isGroupCard" class="card-tip">团课：同一教练同一时段可多人上课</div>
+          <div v-else-if="isCoachCard" class="card-tip">一对一：该时段教练不可再约其他课</div>
         </el-form-item>
 
         <el-form-item label="备注">
@@ -148,7 +146,6 @@
       </template>
     </el-dialog>
 
-    <!-- 已约详情 -->
     <el-dialog v-model="detailVisible" title="预约详情" width="420px">
       <el-descriptions v-if="current" :column="1" border>
         <el-descriptions-item label="订单号">{{ current.orderNo || '-' }}</el-descriptions-item>
@@ -162,12 +159,15 @@
         <el-descriptions-item label="使用卡">
           <template v-if="current.cardName">
             {{ current.cardName }}
+            <span v-if="current.cardType === 'group'">（团课）</span>
             <span v-if="current.cardRemaining != null">（剩余 {{ current.cardRemaining }} 次）</span>
           </template>
           <template v-else>未使用卡</template>
         </el-descriptions-item>
         <el-descriptions-item v-if="current.coachName" label="教练">
           {{ current.coachName }}
+          <span v-if="current.cardType === 'group'"> ·团课</span>
+          <span v-else-if="current.cardType === 'coach'"> ·一对一</span>
         </el-descriptions-item>
         <el-descriptions-item label="备注">{{ current.remark || '-' }}</el-descriptions-item>
         <el-descriptions-item label="状态">已预约</el-descriptions-item>
@@ -250,26 +250,42 @@ const selectedCard = computed(() =>
 )
 
 const isCoachCard = computed(() => selectedCard.value?.type === 'coach')
+const isGroupCard = computed(() => selectedCard.value?.type === 'group')
+const needsCoach = computed(() => isCoachCard.value || isGroupCard.value)
 
-/** 当前时段已占用的教练ID集合 */
-const busyCoachIds = computed(() => {
-  const set = new Set()
+/**
+ * 教练冲突规则：
+ * - 一对一教练卡：该时段只要有任何该教练的预约（一对一或团课）就不可用
+ * - 团课：该时段只有「一对一教练卡」会占用，其他团课不冲突
+ */
+const availableCoaches = computed(() => {
   const date = bookForm.value.date
   const time = bookForm.value.time
-  for (const b of bookings.value) {
-    if (b.status === 'booked' && b.date === date && b.time === time && b.coachId) {
-      set.add(b.coachId)
-    }
-  }
-  return set
-})
+  const forGroup = isGroupCard.value
 
-/** 教练列表，标注是否忙碌 */
-const availableCoaches = computed(() => {
-  return coachList.value.map((c) => ({
-    ...c,
-    busy: busyCoachIds.value.has(c._id)
-  }))
+  return coachList.value.map((c) => {
+    const related = bookings.value.filter(
+      (b) =>
+        b.status === 'booked' &&
+        b.coachId === c._id &&
+        b.date === date &&
+        b.time === time
+    )
+    if (!related.length) {
+      return { ...c, busy: false, busyReason: '' }
+    }
+    if (forGroup) {
+      // 团课：仅被一对一占用时不可用
+      const hasOneOnOne = related.some((b) => b.cardType === 'coach')
+      return {
+        ...c,
+        busy: hasOneOnOne,
+        busyReason: hasOneOnOne ? '该时段有一对一课' : ''
+      }
+    }
+    // 一对一：任何预约都占用
+    return { ...c, busy: true, busyReason: '该时段已约' }
+  })
 })
 
 function venueId() {
@@ -291,9 +307,9 @@ function memberLabel(m) {
 }
 
 function cardOptionLabel(c) {
-  const typeMap = { times: '次卡', coach: '教练卡', time: '时间卡' }
+  const typeMap = { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }
   const type = typeMap[c.type] || c.type
-  if (c.type === 'times' || c.type === 'coach') {
+  if (c.type === 'times' || c.type === 'coach' || c.type === 'group') {
     return `${c.cardName}（${type} 剩${c.remainingTimes}次）`
   }
   return `${c.cardName}（${type}）`
@@ -302,7 +318,8 @@ function cardOptionLabel(c) {
 function formatCardStatus(b) {
   if (!b || !b.cardName) return '已预约'
   let text = '卡:' + b.cardName
-  if (b.cardRemaining != null && (b.cardType === 'times' || b.cardType === 'coach')) {
+  if (b.cardType === 'group') text = '团课:' + b.cardName
+  if (b.cardRemaining != null && (b.cardType === 'times' || b.cardType === 'coach' || b.cardType === 'group')) {
     text += ` 剩${b.cardRemaining}次`
   }
   if (b.coachName) text += ` ·${b.coachName}`
@@ -313,7 +330,7 @@ function isCardUsable(card, dateStr, timeStr) {
   if (!card || card.status !== 'active') return false
   if (card.validFrom && dateStr < card.validFrom) return false
   if (card.validTo && dateStr > card.validTo) return false
-  if (card.type === 'times' || card.type === 'coach') {
+  if (card.type === 'times' || card.type === 'coach' || card.type === 'group') {
     return (card.remainingTimes || 0) > 0
   }
   if (card.type === 'time') {
@@ -348,16 +365,21 @@ function isCardUsable(card, dateStr, timeStr) {
   return true
 }
 
-/** 前端校验：教练在该日期时段是否已有预约 */
-function isCoachBusy(coachId, date, time) {
+function isCoachConflict(coachId, date, time, cardType) {
   if (!coachId) return false
-  return bookings.value.some(
+  const related = bookings.value.filter(
     (b) =>
       b.status === 'booked' &&
       b.coachId === coachId &&
       b.date === date &&
       b.time === time
   )
+  if (!related.length) return false
+  if (cardType === 'group') {
+    return related.some((b) => b.cardType === 'coach')
+  }
+  // 一对一：任何都冲突
+  return true
 }
 
 async function post(path, body = {}) {
@@ -469,7 +491,7 @@ async function onMemberChange(id) {
 
 function onCardChange() {
   bookForm.value.coachId = ''
-  if (isCoachCard.value) {
+  if (needsCoach.value) {
     loadCoaches()
   }
 }
@@ -498,14 +520,17 @@ async function submitBook() {
   }
 
   let coachName = ''
-  if (selCard && selCard.type === 'coach') {
+  if (selCard && (selCard.type === 'coach' || selCard.type === 'group')) {
     if (!bookForm.value.coachId) {
-      ElMessage.warning('教练卡必须选择教练')
+      ElMessage.warning(selCard.type === 'group' ? '团课必须选择教练' : '教练卡必须选择教练')
       return
     }
-    // 前端拦截：同一时段同一教练不可重复约
-    if (isCoachBusy(bookForm.value.coachId, bookForm.value.date, bookForm.value.time)) {
-      ElMessage.error('该教练在此时段已有预约，不能分身')
+    if (isCoachConflict(bookForm.value.coachId, bookForm.value.date, bookForm.value.time, selCard.type)) {
+      ElMessage.error(
+        selCard.type === 'group'
+          ? '该教练此时段有一对一课程，无法排团课'
+          : '该教练在此时段已有预约，不能分身'
+      )
       return
     }
     const coach = coachList.value.find((c) => c._id === bookForm.value.coachId)
