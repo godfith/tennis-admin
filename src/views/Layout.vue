@@ -16,6 +16,10 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>数据看板</span>
         </el-menu-item>
+        <el-menu-item index="/activity">
+          <el-icon><Bell /></el-icon>
+          <span>业务动态</span>
+        </el-menu-item>
         <el-menu-item index="/bookings">
           <el-icon><Calendar /></el-icon>
           <span>预约管理</span>
@@ -90,7 +94,8 @@ import {
   UserFilled,
   ArrowDown,
   Ticket,
-  Tickets
+  Tickets,
+  Bell
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
