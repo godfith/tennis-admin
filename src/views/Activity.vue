@@ -3,7 +3,9 @@
     <div class="page-header">
       <div>
         <h2>业务动态</h2>
-        <p class="tip">按用户名搜索 · 类型可选 · 共 {{ rawList.length }} 条，当前显示 {{ filteredList.length }} 条</p>
+        <p class="tip">
+          按用户名搜索 · 类型可选 · 共 {{ rawList.length }} 条，当前显示 {{ filteredList.length }} 条
+        </p>
       </div>
       <el-button :loading="loading" type="primary" plain @click="fetchAll">刷新</el-button>
     </div>
@@ -39,11 +41,20 @@
           <el-tag :type="typeTag(row.type)" size="small">{{ typeLabel(row.type) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="userName" label="用户" min-width="120" />
-      <el-table-column label="手机号" width="130">
+      <el-table-column label="用户/预约人" min-width="110">
+        <template #default="{ row }">
+          {{ row.userName || '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column label="操作人" width="110">
+        <template #default="{ row }">
+          {{ row.operatorName || '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column label="手机号" width="120">
         <template #default="{ row }">{{ row.phone || '-' }}</template>
       </el-table-column>
-      <el-table-column prop="detail" label="详情" min-width="260" />
+      <el-table-column prop="detail" label="详情" min-width="280" />
       <el-table-column label="场馆" width="140">
         <template #default="{ row }">{{ row.venueName || '-' }}</template>
       </el-table-column>
@@ -75,16 +86,13 @@ const filteredList = computed(() => {
 
   return source.filter((item) => {
     if (!item) return false
-
-    // 类型可选
     if (type && String(item.type || '') !== type) return false
-
-    // 只按用户名模糊匹配
+    // 用户名：预约人 或 操作人
     if (k) {
       const name = String(item.userName || '')
-      if (!name.includes(k)) return false
+      const op = String(item.operatorName || '')
+      if (!name.includes(k) && !op.includes(k)) return false
     }
-
     return true
   })
 })
