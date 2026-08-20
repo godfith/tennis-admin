@@ -4,7 +4,10 @@
       <div>
         <h2>业务动态</h2>
         <p class="tip">
-          按用户名搜索 · 类型可选 · 共 {{ rawList.length }} 条，当前显示 {{ filteredList.length }} 条
+          只按「用户/预约人」搜索
+          · 共 {{ rawList.length }} 条
+          · 当前显示 {{ filteredList.length }} 条
+          · 关键词：{{ keyword ? `「${keyword}」` : '无' }}
         </p>
       </div>
       <el-button :loading="loading" type="primary" plain @click="fetchAll">刷新</el-button>
@@ -26,13 +29,13 @@
       <el-input
         v-model="keyword"
         clearable
-        placeholder="输入用户名搜索"
+        placeholder="输入预约人用户名"
         style="width: 240px"
       />
       <el-button @click="clearFilters">重置</el-button>
     </div>
 
-    <el-table :data="filteredList" stripe border v-loading="loading">
+    <el-table :data="filteredList" stripe border v-loading="loading" row-key="_key">
       <el-table-column label="时间" width="170">
         <template #default="{ row }">{{ formatTime(row.time) }}</template>
       </el-table-column>
@@ -42,14 +45,10 @@
         </template>
       </el-table-column>
       <el-table-column label="用户/预约人" min-width="110">
-        <template #default="{ row }">
-          {{ row.userName || '-' }}
-        </template>
+        <template #default="{ row }">{{ row.userName || '-' }}</template>
       </el-table-column>
       <el-table-column label="操作人" width="110">
-        <template #default="{ row }">
-          {{ row.operatorName || '-' }}
-        </template>
+        <template #default="{ row }">{{ row.operatorName || '-' }}</template>
       </el-table-column>
       <el-table-column label="手机号" width="120">
         <template #default="{ row }">{{ row.phone || '-' }}</template>
@@ -80,21 +79,28 @@ const base = import.meta.env.DEV
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
 
 const filteredList = computed(() => {
-  const type = (filterType.value || '').trim()
-  const k = (keyword.value || '').trim()
-  const source = rawList.value || []
+  const type = String(filterType.value || '').trim()
+  // 只取纯文本关键词
+  const k = String(keyword.value || '').trim()
+  const list = rawList.value || []
 
-  return source.filter((item) => {
-    if (!item) return false
-    if (type && String(item.type || '') !== type) return false
-    // 用户名：预约人 或 操作人
+  const out = []
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (!item) continue
+
+    // 类型过滤（可选）
+    if (type && String(item.type) !== type) continue
+
+    // 只匹配预约人 userName，不匹配操作人、不匹配详情
     if (k) {
-      const name = String(item.userName || '')
-      const op = String(item.operatorName || '')
-      if (!name.includes(k) && !op.includes(k)) return false
+      const userName = String(item.userName || '')
+      if (userName.indexOf(k) === -1) continue
     }
-    return true
-  })
+
+    out.push(item)
+  }
+  return out
 })
 
 function typeLabel(t) {
@@ -155,7 +161,12 @@ async function fetchAll() {
       rawList.value = []
       return
     }
-    rawList.value = Array.isArray(result.list) ? result.list : []
+    // 给每条加稳定 key，避免表格错乱
+    const list = Array.isArray(result.list) ? result.list : []
+    rawList.value = list.map((item, idx) => ({
+      ...item,
+      _key: `${item.type || ''}_${item.userName || ''}_${item.time || ''}_${idx}`
+    }))
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
     rawList.value = []
