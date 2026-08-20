@@ -9,7 +9,7 @@
     </div>
 
     <div class="filters">
-      <el-select v-model="filterType" clearable placeholder="全部类型" style="width: 160px" @change="loadData">
+      <el-select v-model="filterType" clearable placeholder="全部类型" style="width: 160px" @change="onFilter">
         <el-option label="用户注册" value="register" />
         <el-option label="订场" value="booking_add" />
         <el-option label="取消预约" value="booking_cancel" />
@@ -21,12 +21,13 @@
         clearable
         placeholder="搜索昵称/手机/会员号"
         style="width: 220px"
-        @keyup.enter="loadData"
+        @keyup.enter="onFilter"
+        @clear="onFilter"
       />
-      <el-button @click="loadData">查询</el-button>
+      <el-button type="primary" @click="onFilter">查询</el-button>
     </div>
 
-    <el-table :data="list" stripe border v-loading="loading" size="default">
+    <el-table :data="displayList" stripe border v-loading="loading" size="default">
       <el-table-column label="时间" width="170">
         <template #default="{ row }">
           {{ formatTime(row.time) }}
@@ -51,15 +52,15 @@
       </el-table-column>
     </el-table>
 
-    <div v-if="!loading && list.length === 0" class="empty">暂无动态</div>
+    <div v-if="!loading && displayList.length === 0" class="empty">暂无动态</div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
-const list = ref([])
+const rawList = ref([])
 const loading = ref(false)
 const filterType = ref('')
 const keyword = ref('')
@@ -67,6 +68,24 @@ const keyword = ref('')
 const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
+
+/** 前端再过滤一层，避免云函数漏滤 */
+const displayList = computed(() => {
+  let arr = rawList.value || []
+  if (filterType.value) {
+    arr = arr.filter((x) => x.type === filterType.value)
+  }
+  const k = (keyword.value || '').trim().toLowerCase()
+  if (k) {
+    arr = arr.filter((x) => {
+      const name = String(x.userName || '').toLowerCase()
+      const phone = String(x.phone || '')
+      const detail = String(x.detail || '').toLowerCase()
+      return name.includes(k) || phone.includes(k) || detail.includes(k)
+    })
+  }
+  return arr
+})
 
 function typeLabel(t) {
   return {
@@ -111,21 +130,27 @@ async function loadData() {
   loading.value = true
   try {
     const result = await post('/adminGetActivityLogs', {
-      type: filterType.value || '',
-      keyword: keyword.value.trim(),
+      type: '',
+      keyword: '',
       venueId: localStorage.getItem('venue_id') || '',
-      limit: 100
+      limit: 200
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '加载失败')
       return
     }
-    list.value = result.list || []
+    rawList.value = result.list || []
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
   } finally {
     loading.value = false
   }
+}
+
+function onFilter() {
+  // displayList 是 computed，自动响应 filterType / keyword
+  // 若还没加载过数据则拉一次
+  if (!rawList.value.length) loadData()
 }
 
 onMounted(loadData)
