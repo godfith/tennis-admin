@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>业务动态</h2>
-        <p class="tip">汇总注册、订场、取消、团课报名、发卡等操作</p>
+        <p class="tip">可只搜关键词，类型为可选项 · 共 {{ rawList.length }} 条，当前显示 {{ filteredList.length }} 条</p>
       </div>
       <el-button :loading="loading" type="primary" plain @click="fetchAll">刷新</el-button>
     </div>
@@ -12,8 +12,8 @@
       <el-select
         v-model="filterType"
         clearable
-        placeholder="全部类型"
-        style="width: 160px"
+        placeholder="全部类型（可选）"
+        style="width: 180px"
       >
         <el-option label="用户注册" value="register" />
         <el-option label="订场" value="booking_add" />
@@ -24,15 +24,13 @@
       <el-input
         v-model="keyword"
         clearable
-        placeholder="搜索昵称/手机/详情"
-        style="width: 220px"
-        @keyup.enter="applyFilter"
+        placeholder="搜索昵称 / 手机 / 详情（可不选类型）"
+        style="width: 280px"
       />
-      <el-button type="primary" @click="applyFilter">查询</el-button>
-      <el-button @click="resetFilter">重置</el-button>
+      <el-button @click="clearFilters">重置</el-button>
     </div>
 
-    <el-table :data="displayList" stripe border v-loading="loading">
+    <el-table :data="filteredList" stripe border v-loading="loading" :key="tableKey">
       <el-table-column label="时间" width="170">
         <template #default="{ row }">{{ formatTime(row.time) }}</template>
       </el-table-column>
@@ -51,25 +49,52 @@
       </el-table-column>
     </el-table>
 
-    <div v-if="!loading && displayList.length === 0" class="empty">
+    <div v-if="!loading && filteredList.length === 0" class="empty">
       暂无符合条件的数据
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const loading = ref(false)
 const rawList = ref([])
-const displayList = ref([])
 const filterType = ref('')
 const keyword = ref('')
+const tableKey = ref(0)
 
 const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
+
+const filteredList = computed(() => {
+  const type = (filterType.value || '').trim()
+  const k = (keyword.value || '').trim().toLowerCase()
+  const source = rawList.value || []
+
+  return source.filter((item) => {
+    if (!item) return false
+
+    // 类型：有选才过滤
+    if (type) {
+      if (String(item.type || '') !== type) return false
+    }
+
+    // 关键词：有填才过滤（可不选类型）
+    if (k) {
+      const name = String(item.userName || '').toLowerCase()
+      const phone = String(item.phone || '').toLowerCase()
+      const detail = String(item.detail || '').toLowerCase()
+      if (!name.includes(k) && !phone.includes(k) && !detail.includes(k)) {
+        return false
+      }
+    }
+
+    return true
+  })
+})
 
 function typeLabel(t) {
   return {
@@ -98,6 +123,11 @@ function formatTime(t) {
   return String(t).slice(0, 19).replace('T', ' ')
 }
 
+function clearFilters() {
+  filterType.value = ''
+  keyword.value = ''
+}
+
 async function post(path, body = {}) {
   const res = await fetch(base + path, {
     method: 'POST',
@@ -112,36 +142,6 @@ async function post(path, body = {}) {
     : data
 }
 
-/** 纯前端过滤，不依赖云函数参数 */
-function applyFilter() {
-  const type = filterType.value || ''
-  const k = (keyword.value || '').trim().toLowerCase()
-
-  let arr = Array.isArray(rawList.value) ? [...rawList.value] : []
-
-  if (type) {
-    arr = arr.filter((item) => item && item.type === type)
-  }
-
-  if (k) {
-    arr = arr.filter((item) => {
-      if (!item) return false
-      const name = String(item.userName || '').toLowerCase()
-      const phone = String(item.phone || '').toLowerCase()
-      const detail = String(item.detail || '').toLowerCase()
-      return name.includes(k) || phone.includes(k) || detail.includes(k)
-    })
-  }
-
-  displayList.value = arr
-}
-
-function resetFilter() {
-  filterType.value = ''
-  keyword.value = ''
-  displayList.value = [...rawList.value]
-}
-
 async function fetchAll() {
   loading.value = true
   try {
@@ -152,15 +152,13 @@ async function fetchAll() {
     if (!result.ok) {
       ElMessage.error(result.msg || '加载失败')
       rawList.value = []
-      displayList.value = []
       return
     }
-    rawList.value = result.list || []
-    applyFilter()
+    rawList.value = Array.isArray(result.list) ? result.list : []
+    tableKey.value += 1
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
     rawList.value = []
-    displayList.value = []
   } finally {
     loading.value = false
   }
