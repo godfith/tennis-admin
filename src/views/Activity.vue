@@ -3,13 +3,18 @@
     <div class="page-header">
       <div>
         <h2>业务动态</h2>
-        <p class="tip">汇总注册、订场、取消、团课报名、发卡等操作（手机端/电脑端通用）</p>
+        <p class="tip">汇总注册、订场、取消、团课报名、发卡等操作</p>
       </div>
-      <el-button :loading="loading" type="primary" plain @click="loadData">刷新</el-button>
+      <el-button :loading="loading" type="primary" plain @click="fetchAll">刷新</el-button>
     </div>
 
     <div class="filters">
-      <el-select v-model="filterType" clearable placeholder="全部类型" style="width: 160px" @change="onFilter">
+      <el-select
+        v-model="filterType"
+        clearable
+        placeholder="全部类型"
+        style="width: 160px"
+      >
         <el-option label="用户注册" value="register" />
         <el-option label="订场" value="booking_add" />
         <el-option label="取消预约" value="booking_cancel" />
@@ -19,19 +24,17 @@
       <el-input
         v-model="keyword"
         clearable
-        placeholder="搜索昵称/手机/会员号"
+        placeholder="搜索昵称/手机/详情"
         style="width: 220px"
-        @keyup.enter="onFilter"
-        @clear="onFilter"
+        @keyup.enter="applyFilter"
       />
-      <el-button type="primary" @click="onFilter">查询</el-button>
+      <el-button type="primary" @click="applyFilter">查询</el-button>
+      <el-button @click="resetFilter">重置</el-button>
     </div>
 
-    <el-table :data="displayList" stripe border v-loading="loading" size="default">
+    <el-table :data="displayList" stripe border v-loading="loading">
       <el-table-column label="时间" width="170">
-        <template #default="{ row }">
-          {{ formatTime(row.time) }}
-        </template>
+        <template #default="{ row }">{{ formatTime(row.time) }}</template>
       </el-table-column>
       <el-table-column label="类型" width="110">
         <template #default="{ row }">
@@ -39,53 +42,34 @@
         </template>
       </el-table-column>
       <el-table-column prop="userName" label="用户" min-width="120" />
-      <el-table-column prop="phone" label="手机号" width="130">
-        <template #default="{ row }">
-          {{ row.phone || '-' }}
-        </template>
+      <el-table-column label="手机号" width="130">
+        <template #default="{ row }">{{ row.phone || '-' }}</template>
       </el-table-column>
       <el-table-column prop="detail" label="详情" min-width="260" />
-      <el-table-column prop="venueName" label="场馆" width="140">
-        <template #default="{ row }">
-          {{ row.venueName || '-' }}
-        </template>
+      <el-table-column label="场馆" width="140">
+        <template #default="{ row }">{{ row.venueName || '-' }}</template>
       </el-table-column>
     </el-table>
 
-    <div v-if="!loading && displayList.length === 0" class="empty">暂无动态</div>
+    <div v-if="!loading && displayList.length === 0" class="empty">
+      暂无符合条件的数据
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
-const rawList = ref([])
 const loading = ref(false)
+const rawList = ref([])
+const displayList = ref([])
 const filterType = ref('')
 const keyword = ref('')
 
 const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
-
-/** 前端再过滤一层，避免云函数漏滤 */
-const displayList = computed(() => {
-  let arr = rawList.value || []
-  if (filterType.value) {
-    arr = arr.filter((x) => x.type === filterType.value)
-  }
-  const k = (keyword.value || '').trim().toLowerCase()
-  if (k) {
-    arr = arr.filter((x) => {
-      const name = String(x.userName || '').toLowerCase()
-      const phone = String(x.phone || '')
-      const detail = String(x.detail || '').toLowerCase()
-      return name.includes(k) || phone.includes(k) || detail.includes(k)
-    })
-  }
-  return arr
-})
 
 function typeLabel(t) {
   return {
@@ -94,8 +78,9 @@ function typeLabel(t) {
     booking_cancel: '取消预约',
     group_enroll: '团课报名',
     issue_card: '发卡'
-  }[t] || t
+  }[t] || t || '-'
 }
+
 function typeTag(t) {
   return {
     register: 'success',
@@ -103,8 +88,9 @@ function typeTag(t) {
     booking_cancel: 'info',
     group_enroll: 'danger',
     issue_card: 'warning'
-  }[t] || ''
+  }[t] || 'info'
 }
+
 function formatTime(t) {
   if (!t) return '-'
   if (typeof t === 'number') return new Date(t).toLocaleString()
@@ -126,34 +112,61 @@ async function post(path, body = {}) {
     : data
 }
 
-async function loadData() {
+/** 纯前端过滤，不依赖云函数参数 */
+function applyFilter() {
+  const type = filterType.value || ''
+  const k = (keyword.value || '').trim().toLowerCase()
+
+  let arr = Array.isArray(rawList.value) ? [...rawList.value] : []
+
+  if (type) {
+    arr = arr.filter((item) => item && item.type === type)
+  }
+
+  if (k) {
+    arr = arr.filter((item) => {
+      if (!item) return false
+      const name = String(item.userName || '').toLowerCase()
+      const phone = String(item.phone || '').toLowerCase()
+      const detail = String(item.detail || '').toLowerCase()
+      return name.includes(k) || phone.includes(k) || detail.includes(k)
+    })
+  }
+
+  displayList.value = arr
+}
+
+function resetFilter() {
+  filterType.value = ''
+  keyword.value = ''
+  displayList.value = [...rawList.value]
+}
+
+async function fetchAll() {
   loading.value = true
   try {
     const result = await post('/adminGetActivityLogs', {
-      type: '',
-      keyword: '',
       venueId: localStorage.getItem('venue_id') || '',
       limit: 200
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '加载失败')
+      rawList.value = []
+      displayList.value = []
       return
     }
     rawList.value = result.list || []
+    applyFilter()
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
+    rawList.value = []
+    displayList.value = []
   } finally {
     loading.value = false
   }
 }
 
-function onFilter() {
-  // displayList 是 computed，自动响应 filterType / keyword
-  // 若还没加载过数据则拉一次
-  if (!rawList.value.length) loadData()
-}
-
-onMounted(loadData)
+onMounted(fetchAll)
 </script>
 
 <style scoped>
@@ -177,6 +190,7 @@ h2 {
   gap: 10px;
   margin-bottom: 14px;
   flex-wrap: wrap;
+  align-items: center;
 }
 .empty {
   text-align: center;
