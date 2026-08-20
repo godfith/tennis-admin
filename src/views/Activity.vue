@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>业务动态</h2>
-        <p class="tip">可只搜关键词，类型为可选项 · 共 {{ rawList.length }} 条，当前显示 {{ filteredList.length }} 条</p>
+        <p class="tip">按用户名搜索 · 类型可选 · 共 {{ rawList.length }} 条，当前显示 {{ filteredList.length }} 条</p>
       </div>
       <el-button :loading="loading" type="primary" plain @click="fetchAll">刷新</el-button>
     </div>
@@ -24,13 +24,13 @@
       <el-input
         v-model="keyword"
         clearable
-        placeholder="搜索昵称 / 手机 / 详情（可不选类型）"
-        style="width: 280px"
+        placeholder="输入用户名搜索"
+        style="width: 240px"
       />
       <el-button @click="clearFilters">重置</el-button>
     </div>
 
-    <el-table :data="filteredList" stripe border v-loading="loading" :key="tableKey">
+    <el-table :data="filteredList" stripe border v-loading="loading">
       <el-table-column label="时间" width="170">
         <template #default="{ row }">{{ formatTime(row.time) }}</template>
       </el-table-column>
@@ -63,7 +63,6 @@ const loading = ref(false)
 const rawList = ref([])
 const filterType = ref('')
 const keyword = ref('')
-const tableKey = ref(0)
 
 const base = import.meta.env.DEV
   ? '/api'
@@ -71,25 +70,19 @@ const base = import.meta.env.DEV
 
 const filteredList = computed(() => {
   const type = (filterType.value || '').trim()
-  const k = (keyword.value || '').trim().toLowerCase()
+  const k = (keyword.value || '').trim()
   const source = rawList.value || []
 
   return source.filter((item) => {
     if (!item) return false
 
-    // 类型：有选才过滤
-    if (type) {
-      if (String(item.type || '') !== type) return false
-    }
+    // 类型可选
+    if (type && String(item.type || '') !== type) return false
 
-    // 关键词：有填才过滤（可不选类型）
+    // 只按用户名模糊匹配
     if (k) {
-      const name = String(item.userName || '').toLowerCase()
-      const phone = String(item.phone || '').toLowerCase()
-      const detail = String(item.detail || '').toLowerCase()
-      if (!name.includes(k) && !phone.includes(k) && !detail.includes(k)) {
-        return false
-      }
+      const name = String(item.userName || '')
+      if (!name.includes(k)) return false
     }
 
     return true
@@ -155,7 +148,6 @@ async function fetchAll() {
       return
     }
     rawList.value = Array.isArray(result.list) ? result.list : []
-    tableKey.value += 1
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
     rawList.value = []
