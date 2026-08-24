@@ -36,6 +36,10 @@
           <el-icon><User /></el-icon>
           <span>教练管理</span>
         </el-menu-item>
+        <el-menu-item index="/staff">
+          <el-icon><Avatar /></el-icon>
+          <span>员工管理</span>
+        </el-menu-item>
         <el-menu-item index="/users">
           <el-icon><UserFilled /></el-icon>
           <span>用户管理</span>
@@ -95,7 +99,8 @@ import {
   ArrowDown,
   Ticket,
   Tickets,
-  Bell
+  Bell,
+  Avatar
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

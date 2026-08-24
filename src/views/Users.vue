@@ -46,7 +46,7 @@
     </el-table>
 
     <!-- 查看持卡 -->
-    <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${displayName(currentUser)}`" width="720px">
+    <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${displayName(currentUser)}`" width="800px">
       <el-table :data="memberCards" border v-loading="cardsLoading" size="small">
         <el-table-column prop="cardName" label="卡名称" min-width="120" />
         <el-table-column label="类型" width="90">
@@ -62,7 +62,7 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="有效期" min-width="180">
+        <el-table-column label="有效期" min-width="160">
           <template #default="{ row }">
             {{ row.validFrom || '-' }} ~ {{ row.validTo || '不限' }}
           </template>
@@ -70,6 +70,19 @@
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="statusTag(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="100" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              v-if="row.status === 'active'"
+              link
+              type="danger"
+              @click="onRefund(row)"
+            >
+              退卡
+            </el-button>
+            <span v-else class="muted">-</span>
           </template>
         </el-table-column>
       </el-table>
@@ -131,7 +144,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const list = ref([])
 const loading = ref(false)
@@ -177,10 +190,20 @@ function typeTag(t) {
   return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[t] || 'info'
 }
 function statusLabel(s) {
-  return { active: '有效', expired: '已过期', used_up: '已用完' }[s] || s
+  return {
+    active: '有效',
+    expired: '已过期',
+    used_up: '已用完',
+    refunded: '已退卡'
+  }[s] || s
 }
 function statusTag(s) {
-  return { active: 'success', expired: 'info', used_up: 'warning' }[s] || 'info'
+  return {
+    active: 'success',
+    expired: 'info',
+    used_up: 'warning',
+    refunded: 'danger'
+  }[s] || 'info'
 }
 function formatTime(t) {
   if (!t) return '-'
@@ -247,6 +270,30 @@ async function openCards(row) {
     ElMessage.error(e.message || '加载持卡失败')
   } finally {
     cardsLoading.value = false
+  }
+}
+
+async function onRefund(card) {
+  try {
+    await ElMessageBox.confirm(
+      `确定退卡「${card.cardName}」？退卡后不可再用于预约。`,
+      '退卡确认',
+      { type: 'warning', confirmButtonText: '确认退卡' }
+    )
+    const result = await post('/adminRefundCard', {
+      cardId: card._id,
+      operatorName: localStorage.getItem('admin_name') || '管理员'
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '退卡失败')
+      return
+    }
+    ElMessage.success('已退卡')
+    // 刷新持卡列表
+    if (currentUser.value) openCards(currentUser.value)
+    loadData()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message || '退卡失败')
   }
 }
 
@@ -345,5 +392,8 @@ h2 {
   text-align: center;
   color: #999;
   padding: 24px;
+}
+.muted {
+  color: #ccc;
 }
 </style>

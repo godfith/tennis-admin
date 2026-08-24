@@ -16,13 +16,16 @@ const proxyPaths = [
   'adminSaveCardTemplate',
   'adminGetMemberCards',
   'adminIssueCard',
+  'adminRefundCard',
   'adminGetCoaches',
   'adminSaveCoach',
   'adminGetDashboard',
   'adminGetGroupClasses',
   'adminSaveGroupClass',
   'adminEnrollGroupClass',
-  'adminGetActivityLogs'
+  'adminGetActivityLogs',
+  'adminGetStaff',
+  'adminSaveStaff'
 ]
 
 const proxy = {}
