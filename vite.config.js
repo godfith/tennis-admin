@@ -23,6 +23,7 @@ const proxyPaths = [
   'adminGetGroupClasses',
   'adminSaveGroupClass',
   'adminEnrollGroupClass',
+  'adminGetGroupEnrollments',
   'adminGetActivityLogs',
   'adminGetStaff',
   'adminSaveStaff'
