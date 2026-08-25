@@ -13,11 +13,11 @@
       :closable="false"
       show-icon
       style="margin-bottom: 16px"
-      title="勾选要应用到的星期，在格子里改价后点保存。可先填一格再点「应用到所选星期」。"
+      title="表头「整列」：先在该列输入框填价再点整列；左侧「整行」：先在该行输入框填价再点整行。勾选星期后点保存才会写入数据库。"
     />
 
     <div class="filters">
-      <span class="label">应用到星期：</span>
+      <span class="label">保存到星期：</span>
       <el-checkbox-group v-model="applyWeekdays">
         <el-checkbox :value="1">一</el-checkbox>
         <el-checkbox :value="2">二</el-checkbox>
@@ -44,7 +44,7 @@
         <el-radio-button :value="7">日</el-radio-button>
       </el-radio-group>
       <el-input-number
-        v-model="batchPrice"
+        v-model="globalPrice"
         :min="0"
         :precision="0"
         size="small"
@@ -58,13 +58,32 @@
         <thead>
           <tr>
             <th class="court-col">场地</th>
-            <th v-for="t in timeSlots" :key="t">{{ t.split('-')[0] }}</th>
+            <th v-for="t in timeSlots" :key="'h-' + t">
+              <div class="col-head">{{ t.split('-')[0] }}</div>
+              <el-input-number
+                v-model="colPrice[t]"
+                :min="0"
+                :precision="0"
+                size="small"
+                controls-position="right"
+                class="col-input"
+              />
+              <el-button link type="primary" size="small" @click="fillCol(t)">整列</el-button>
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="c in courts" :key="c.name">
             <td class="court-col">
-              <div>{{ c.name }}</div>
+              <div class="court-name">{{ c.name }}</div>
+              <el-input-number
+                v-model="rowPrice[c.name]"
+                :min="0"
+                :precision="0"
+                size="small"
+                controls-position="right"
+                class="row-input"
+              />
               <el-button link type="primary" size="small" @click="fillRow(c.name)">整行</el-button>
             </td>
             <td v-for="t in timeSlots" :key="c.name + t">
@@ -74,7 +93,7 @@
                 :precision="0"
                 size="small"
                 controls-position="right"
-                style="width: 100px"
+                class="cell-input"
               />
             </td>
           </tr>
@@ -105,11 +124,17 @@ const timeSlots = [
 
 const courts = ref([])
 const matrix = reactive({})
+const colPrice = reactive({})
+const rowPrice = reactive({})
 const loading = ref(false)
 const saving = ref(false)
 const previewWeekday = ref(1)
 const applyWeekdays = ref([1, 2, 3, 4, 5])
-const batchPrice = ref(0)
+const globalPrice = ref(0)
+
+timeSlots.forEach((t) => {
+  colPrice[t] = 0
+})
 
 const base = import.meta.env.DEV
   ? '/api'
@@ -136,6 +161,7 @@ async function post(path, body = {}) {
 function ensureMatrix(courtNames) {
   courtNames.forEach((name) => {
     if (!matrix[name]) matrix[name] = {}
+    if (rowPrice[name] == null) rowPrice[name] = 0
     timeSlots.forEach((t) => {
       if (matrix[name][t] == null) matrix[name][t] = 0
     })
@@ -174,7 +200,6 @@ async function loadPrices() {
       return
     }
     ensureMatrix(courts.value.map((c) => c.name))
-    // 先清零再填
     courts.value.forEach((c) => {
       timeSlots.forEach((t) => {
         matrix[c.name][t] = 0
@@ -202,16 +227,25 @@ async function loadAll() {
   }
 }
 
+function fillCol(timeSlot) {
+  const p = Number(colPrice[timeSlot]) || 0
+  courts.value.forEach((c) => {
+    matrix[c.name][timeSlot] = p
+  })
+}
+
 function fillRow(courtName) {
+  const p = Number(rowPrice[courtName]) || 0
   timeSlots.forEach((t) => {
-    matrix[courtName][t] = batchPrice.value
+    matrix[courtName][t] = p
   })
 }
 
 function fillAll() {
+  const p = Number(globalPrice.value) || 0
   courts.value.forEach((c) => {
     timeSlots.forEach((t) => {
-      matrix[c.name][t] = batchPrice.value
+      matrix[c.name][t] = p
     })
   })
 }
@@ -223,7 +257,7 @@ async function save() {
     return
   }
   if (!applyWeekdays.value.length) {
-    ElMessage.warning('请勾选要应用到的星期')
+    ElMessage.warning('请勾选要保存到的星期')
     return
   }
   const items = []
@@ -318,6 +352,7 @@ h2 {
   padding: 6px 4px;
   text-align: center;
   font-size: 12px;
+  vertical-align: middle;
 }
 .price-table th {
   background: #f5f7fa;
@@ -325,11 +360,23 @@ h2 {
   white-space: nowrap;
 }
 .court-col {
-  min-width: 90px;
+  min-width: 110px;
   text-align: left !important;
   padding-left: 10px !important;
-  font-weight: 600;
   color: #1a5c3a;
+}
+.court-name {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.col-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.col-input,
+.row-input,
+.cell-input {
+  width: 96px;
 }
 .empty {
   text-align: center;
