@@ -32,6 +32,10 @@
           <el-icon><Grid /></el-icon>
           <span>场地管理</span>
         </el-menu-item>
+        <el-menu-item index="/prices">
+          <el-icon><Money /></el-icon>
+          <span>场地价格</span>
+        </el-menu-item>
         <el-menu-item index="/coaches">
           <el-icon><User /></el-icon>
           <span>教练管理</span>
@@ -100,7 +104,8 @@ import {
   Ticket,
   Tickets,
   Bell,
-  Avatar
+  Avatar,
+  Money
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
