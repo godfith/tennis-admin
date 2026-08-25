@@ -7,55 +7,58 @@
       </div>
       <el-menu
         :default-active="activeMenu"
+        :default-openeds="defaultOpeneds"
         background-color="#1a5c3a"
         text-color="#c8e6d0"
         active-text-color="#ffffff"
         router
+        class="side-menu"
       >
-        <el-menu-item index="/dashboard">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>数据看板</span>
-        </el-menu-item>
-        <el-menu-item index="/activity">
-          <el-icon><Bell /></el-icon>
-          <span>业务动态</span>
-        </el-menu-item>
-        <el-menu-item index="/bookings">
-          <el-icon><Calendar /></el-icon>
-          <span>预约管理</span>
-        </el-menu-item>
-        <el-menu-item index="/group-classes">
-          <el-icon><Tickets /></el-icon>
-          <span>团课排期</span>
-        </el-menu-item>
-        <el-menu-item index="/courts">
-          <el-icon><Grid /></el-icon>
-          <span>场地管理</span>
-        </el-menu-item>
-        <el-menu-item index="/prices">
-          <el-icon><Money /></el-icon>
-          <span>场地价格</span>
-        </el-menu-item>
-        <el-menu-item index="/coaches">
-          <el-icon><User /></el-icon>
-          <span>教练管理</span>
-        </el-menu-item>
-        <el-menu-item index="/coach-attendance">
-          <el-icon><Notebook /></el-icon>
-          <span>教练出勤</span>
-        </el-menu-item>
-        <el-menu-item index="/staff">
-          <el-icon><Avatar /></el-icon>
-          <span>员工管理</span>
-        </el-menu-item>
-        <el-menu-item index="/users">
-          <el-icon><UserFilled /></el-icon>
-          <span>用户管理</span>
-        </el-menu-item>
-        <el-menu-item index="/cards">
-          <el-icon><Ticket /></el-icon>
-          <span>卡模板管理</span>
-        </el-menu-item>
+        <el-sub-menu index="grp-overview">
+          <template #title>
+            <el-icon><DataAnalysis /></el-icon>
+            <span>概览</span>
+          </template>
+          <el-menu-item index="/dashboard">数据看板</el-menu-item>
+          <el-menu-item index="/activity">业务动态</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="grp-booking">
+          <template #title>
+            <el-icon><Calendar /></el-icon>
+            <span>预约与课程</span>
+          </template>
+          <el-menu-item index="/bookings">预约管理</el-menu-item>
+          <el-menu-item index="/group-classes">团课排期</el-menu-item>
+          <el-menu-item index="/coach-attendance">教练出勤</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="grp-venue">
+          <template #title>
+            <el-icon><Grid /></el-icon>
+            <span>场地</span>
+          </template>
+          <el-menu-item index="/courts">场地管理</el-menu-item>
+          <el-menu-item index="/prices">场地价格</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="grp-people">
+          <template #title>
+            <el-icon><User /></el-icon>
+            <span>人员</span>
+          </template>
+          <el-menu-item index="/coaches">教练管理</el-menu-item>
+          <el-menu-item index="/staff">员工管理</el-menu-item>
+          <el-menu-item index="/users">用户管理</el-menu-item>
+        </el-sub-menu>
+
+        <el-sub-menu index="grp-card">
+          <template #title>
+            <el-icon><Ticket /></el-icon>
+            <span>会员卡</span>
+          </template>
+          <el-menu-item index="/cards">卡模板管理</el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
@@ -105,18 +108,16 @@ import {
   User,
   UserFilled,
   ArrowDown,
-  Ticket,
-  Tickets,
-  Bell,
-  Avatar,
-  Money,
-  Notebook
+  Ticket
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 const adminName = localStorage.getItem('admin_name') || '管理员'
 const activeMenu = computed(() => route.path)
+
+// 默认展开所有分组，也可改成只展开当前相关组
+const defaultOpeneds = ['grp-overview', 'grp-booking', 'grp-venue', 'grp-people', 'grp-card']
 
 const venueList = ref([])
 const currentVenueId = ref(localStorage.getItem('venue_id') || '')
@@ -201,6 +202,25 @@ onMounted(loadVenues)
   color: #a8d5b5;
   font-size: 12px;
 }
+.side-menu {
+  border-right: none;
+}
+.side-menu :deep(.el-sub-menu__title) {
+  color: #c8e6d0 !important;
+}
+.side-menu :deep(.el-sub-menu__title:hover) {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+.side-menu :deep(.el-menu-item) {
+  min-width: auto;
+}
+.side-menu :deep(.el-menu--inline) {
+  background: #154d31 !important;
+}
+.side-menu :deep(.el-menu-item.is-active) {
+  background: #0f3d26 !important;
+  color: #fff !important;
+}
 .header {
   display: flex;
   align-items: center;
@@ -226,9 +246,6 @@ onMounted(loadVenues)
 .main {
   background: #f5f7fa;
   min-height: calc(100vh - 60px);
-}
-.el-menu {
-  border-right: none;
 }
 .venue-switch {
   cursor: pointer;
