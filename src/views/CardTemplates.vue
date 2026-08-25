@@ -15,7 +15,6 @@
           <el-tag :type="typeTag(row.type)" size="small">{{ typeLabel(row.type) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="price" label="价格(元)" width="100" />
       <el-table-column label="次数/天数" width="110">
         <template #default="{ row }">
           <span v-if="isTimesLike(row.type)">{{ row.totalTimes }} 次</span>
@@ -69,11 +68,7 @@
         <el-form-item v-if="form.type === 'group'" label="说明">
           <span class="hint" style="margin-left:0">团课：时间由场馆安排，同一教练同一时段可带多名学员（与一对一教练卡不同）</span>
         </el-form-item>
-        <el-form-item label="售价(元)">
-          <el-input-number v-model="form.price" :min="0" :precision="0" />
-        </el-form-item>
 
-        <!-- 次卡 / 教练卡 / 团课 -->
         <template v-if="isTimesLike(form.type)">
           <el-form-item label="总次数" required>
             <el-input-number v-model="form.totalTimes" :min="1" />
@@ -84,7 +79,6 @@
           </el-form-item>
         </template>
 
-        <!-- 时间卡 -->
         <template v-if="form.type === 'time'">
           <el-form-item label="有效天数" required>
             <el-input-number v-model="form.durationDays" :min="1" />
@@ -212,7 +206,6 @@ const emptyForm = () => ({
   _id: '',
   name: '',
   type: 'times',
-  price: 0,
   totalTimes: 10,
   durationDays: 30,
   timeRule: {
@@ -238,17 +231,18 @@ function typeLabel(t) {
 function typeTag(t) {
   return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[t] || 'info'
 }
-
 function timeRuleText(rule) {
   if (!rule) return '-'
   if (rule.mode === 'unlimited' || rule.mode === 'all') return '有效期内任意时间'
   if (rule.mode === 'rules' && rule.rules && rule.rules.length) {
-    return rule.rules.map((r) => {
-      const days = (r.weekdays || []).map((d) => weekName[d] || d).join('') || '?'
-      if (r.unlimited) return `${days}不限时`
-      const slots = (r.timeSlots || []).map((s) => `${s.start}-${s.end}`).join('/')
-      return `${days}${slots}`
-    }).join('；')
+    return rule.rules
+      .map((r) => {
+        const days = (r.weekdays || []).map((d) => weekName[d] || d).join('') || '?'
+        if (r.unlimited) return `${days}不限时`
+        const slots = (r.timeSlots || []).map((s) => `${s.start}-${s.end}`).join('/')
+        return `${days}${slots}`
+      })
+      .join('；')
   }
   if (rule.mode === 'weekly') {
     const days = (rule.weekdays || []).map((d) => weekName[d] || d).join('、') || '每天'
@@ -319,13 +313,18 @@ function openEdit(row) {
   if (!rules || !rules.length) {
     if (mode === 'weekly' || mode === 'custom' || mode === 'weekday') {
       mode = 'rules'
-      rules = [{
-        weekdays: rule.weekdays && rule.weekdays.length ? rule.weekdays : [1, 2, 3, 4, 5],
-        unlimited: false,
-        timeSlots: rule.timeSlots && rule.timeSlots.length
-          ? rule.timeSlots
-          : (rule.startTime ? [{ start: rule.startTime, end: rule.endTime }] : [{ start: '09:00', end: '18:00' }])
-      }]
+      rules = [
+        {
+          weekdays: rule.weekdays && rule.weekdays.length ? rule.weekdays : [1, 2, 3, 4, 5],
+          unlimited: false,
+          timeSlots:
+            rule.timeSlots && rule.timeSlots.length
+              ? rule.timeSlots
+              : rule.startTime
+                ? [{ start: rule.startTime, end: rule.endTime }]
+                : [{ start: '09:00', end: '18:00' }]
+        }
+      ]
     } else {
       mode = 'unlimited'
       rules = [emptyRule()]
@@ -336,7 +335,6 @@ function openEdit(row) {
     _id: row._id,
     name: row.name || '',
     type: row.type || 'times',
-    price: row.price || 0,
     totalTimes: row.totalTimes || 10,
     durationDays: row.durationDays || 30,
     timeRule: { mode, rules },
@@ -378,7 +376,7 @@ async function save() {
     const data = {
       name: form.value.name,
       type: form.value.type,
-      price: form.value.price,
+      price: 0,
       totalTimes: form.value.totalTimes,
       durationDays: form.value.durationDays,
       timeRule: form.value.type === 'time' ? form.value.timeRule : null,

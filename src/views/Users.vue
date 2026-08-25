@@ -45,13 +45,17 @@
       </el-table-column>
     </el-table>
 
-    <!-- 查看持卡 -->
     <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${displayName(currentUser)}`" width="800px">
       <el-table :data="memberCards" border v-loading="cardsLoading" size="small">
         <el-table-column prop="cardName" label="卡名称" min-width="120" />
         <el-table-column label="类型" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="typeTag(row.type)">{{ typeLabel(row.type) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="金额" width="90">
+          <template #default="{ row }">
+            {{ row.price != null && row.price !== '' ? row.price + '元' : '-' }}
           </template>
         </el-table-column>
         <el-table-column label="剩余/总次" width="100">
@@ -89,7 +93,6 @@
       <div v-if="!cardsLoading && memberCards.length === 0" class="empty">暂无持卡</div>
     </el-dialog>
 
-    <!-- 发卡 -->
     <el-dialog v-model="issueVisible" title="给会员发卡" width="480px" destroy-on-close>
       <el-form label-width="100px">
         <el-form-item label="会员">
@@ -112,6 +115,10 @@
         </el-form-item>
         <el-form-item v-if="selectedTemplate" label="卡类型">
           <el-tag :type="typeTag(selectedTemplate.type)">{{ typeLabel(selectedTemplate.type) }}</el-tag>
+        </el-form-item>
+        <el-form-item label="实收金额" required>
+          <el-input-number v-model="issueForm.price" :min="0" :precision="0" />
+          <span class="hint">元（本次发卡实际收款）</span>
         </el-form-item>
         <el-form-item
           v-if="selectedTemplate && isTimesLike(selectedTemplate.type)"
@@ -160,6 +167,7 @@ const issuing = ref(false)
 const templates = ref([])
 const issueForm = ref({
   templateId: '',
+  price: 0,
   totalTimes: 10,
   validFrom: '',
   validTo: '',
@@ -289,7 +297,6 @@ async function onRefund(card) {
       return
     }
     ElMessage.success('已退卡')
-    // 刷新持卡列表
     if (currentUser.value) openCards(currentUser.value)
     loadData()
   } catch (e) {
@@ -301,6 +308,7 @@ function openIssue(row) {
   currentUser.value = row
   issueForm.value = {
     templateId: '',
+    price: 0,
     totalTimes: 10,
     validFrom: new Date().toISOString().slice(0, 10),
     validTo: '',
@@ -313,6 +321,7 @@ function onTemplateChange(id) {
   const t = templates.value.find((x) => x._id === id)
   if (t) {
     issueForm.value.totalTimes = t.totalTimes || 10
+    issueForm.value.price = 0
     if (t.durationDays && t.durationDays > 0) {
       const d = new Date()
       d.setDate(d.getDate() + t.durationDays)
@@ -332,6 +341,10 @@ async function submitIssue() {
     ElMessage.warning('用户信息异常')
     return
   }
+  if (issueForm.value.price === null || issueForm.value.price === undefined) {
+    ElMessage.warning('请填写实收金额')
+    return
+  }
   const tpl = selectedTemplate.value
   if (tpl && isTimesLike(tpl.type) && !issueForm.value.totalTimes) {
     ElMessage.warning('请填写次数')
@@ -345,6 +358,7 @@ async function submitIssue() {
       userName: displayName(currentUser.value),
       templateId: issueForm.value.templateId,
       totalTimes: issueForm.value.totalTimes,
+      price: Number(issueForm.value.price) || 0,
       validFrom: issueForm.value.validFrom,
       validTo: issueForm.value.validTo || null,
       remark: issueForm.value.remark
@@ -395,5 +409,10 @@ h2 {
 }
 .muted {
   color: #ccc;
+}
+.hint {
+  margin-left: 8px;
+  color: #999;
+  font-size: 12px;
 }
 </style>
