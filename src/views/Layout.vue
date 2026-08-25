@@ -40,6 +40,10 @@
           <el-icon><User /></el-icon>
           <span>教练管理</span>
         </el-menu-item>
+        <el-menu-item index="/coach-attendance">
+          <el-icon><Notebook /></el-icon>
+          <span>教练出勤</span>
+        </el-menu-item>
         <el-menu-item index="/staff">
           <el-icon><Avatar /></el-icon>
           <span>员工管理</span>
@@ -105,7 +109,8 @@ import {
   Tickets,
   Bell,
   Avatar,
-  Money
+  Money,
+  Notebook
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
