@@ -8,23 +8,23 @@
       </div>
     </div>
 
-    <el-table :data="list" stripe border v-loading="loading">
+    <el-table :data="list" stripe border v-loading="loading" row-key="_id">
       <el-table-column prop="name" label="卡名称" min-width="140" />
-      <el-table-column label="类型" width="100">
+      <el-table-column label="类型" width="110">
         <template #default="{ row }">
           <el-tag :type="typeTag(row.type)" size="small">{{ typeLabel(row.type) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="次数/天数" width="110">
         <template #default="{ row }">
-          <span v-if="isTimesLike(row.type)">{{ row.totalTimes }} 次</span>
+          <span v-if="isTimesLike(row.type)">{{ row.totalTimes || 0 }} 次</span>
           <span v-else>{{ row.durationDays || '-' }} 天</span>
         </template>
       </el-table-column>
       <el-table-column label="时间规则" min-width="280">
         <template #default="{ row }">
           <span v-if="row.type === 'time'">{{ timeRuleText(row.timeRule) }}</span>
-          <span v-else-if="row.type === 'group'">多人同教练</span>
+          <span v-else-if="row.type === 'group'">多人同教练 · 仅团课报名</span>
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -55,18 +55,18 @@
     >
       <el-form label-width="110px">
         <el-form-item label="卡名称" required>
-          <el-input v-model="form.name" placeholder="如：10次次卡 / 月卡" />
+          <el-input v-model="form.name" placeholder="如：10次次卡 / 月卡 / 团课10次" />
         </el-form-item>
         <el-form-item label="类型" required>
           <el-radio-group v-model="form.type" :disabled="!!form._id">
-            <el-radio value="times">次卡</el-radio>
-            <el-radio value="coach">教练卡</el-radio>
-            <el-radio value="group">团课</el-radio>
-            <el-radio value="time">时间卡</el-radio>
+            <el-radio label="times" value="times">次卡</el-radio>
+            <el-radio label="coach" value="coach">教练卡</el-radio>
+            <el-radio label="group" value="group">团课</el-radio>
+            <el-radio label="time" value="time">时间卡</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="form.type === 'group'" label="说明">
-          <span class="hint" style="margin-left:0">团课：时间由场馆安排，同一教练同一时段可带多名学员</span>
+          <span class="hint" style="margin-left:0">团课：时间由场馆安排，同一教练同一时段可带多名学员（与一对一教练卡不同）</span>
         </el-form-item>
 
         <template v-if="isTimesLike(form.type)">
@@ -87,8 +87,8 @@
 
           <el-form-item label="可用规则">
             <el-radio-group v-model="form.timeRule.mode">
-              <el-radio value="unlimited">有效期内任意时间</el-radio>
-              <el-radio value="rules">自定义多组规则</el-radio>
+              <el-radio label="unlimited" value="unlimited">有效期内任意时间</el-radio>
+              <el-radio label="rules" value="rules">自定义多组规则</el-radio>
             </el-radio-group>
           </el-form-item>
 
@@ -110,20 +110,20 @@
 
               <el-form-item label="适用星期" label-width="90px">
                 <el-checkbox-group v-model="rule.weekdays">
-                  <el-checkbox :value="1">一</el-checkbox>
-                  <el-checkbox :value="2">二</el-checkbox>
-                  <el-checkbox :value="3">三</el-checkbox>
-                  <el-checkbox :value="4">四</el-checkbox>
-                  <el-checkbox :value="5">五</el-checkbox>
-                  <el-checkbox :value="6">六</el-checkbox>
-                  <el-checkbox :value="7">日</el-checkbox>
+                  <el-checkbox :label="1" :value="1">一</el-checkbox>
+                  <el-checkbox :label="2" :value="2">二</el-checkbox>
+                  <el-checkbox :label="3" :value="3">三</el-checkbox>
+                  <el-checkbox :label="4" :value="4">四</el-checkbox>
+                  <el-checkbox :label="5" :value="5">五</el-checkbox>
+                  <el-checkbox :label="6" :value="6">六</el-checkbox>
+                  <el-checkbox :label="7" :value="7">日</el-checkbox>
                 </el-checkbox-group>
               </el-form-item>
 
               <el-form-item label="时段限制" label-width="90px">
                 <el-radio-group v-model="rule.unlimited" @change="(v) => onUnlimitedChange(rule, v)">
-                  <el-radio :value="true">不限时</el-radio>
-                  <el-radio :value="false">限制时段</el-radio>
+                  <el-radio :label="true" :value="true">不限时</el-radio>
+                  <el-radio :label="false" :value="false">限制时段</el-radio>
                 </el-radio-group>
               </el-form-item>
 
@@ -231,14 +231,25 @@ const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
 
+function normalizeType(t) {
+  const s = String(t || '').trim().toLowerCase()
+  if (s === 'times' || s === 'coach' || s === 'group' || s === 'time') return s
+  if (t === '次卡') return 'times'
+  if (t === '教练卡') return 'coach'
+  if (t === '团课' || t === '团课卡') return 'group'
+  if (t === '时间卡' || t === '月卡') return 'time'
+  return 'times'
+}
+
 function isTimesLike(t) {
-  return t === 'times' || t === 'coach' || t === 'group'
+  const x = normalizeType(t)
+  return x === 'times' || x === 'coach' || x === 'group'
 }
 function typeLabel(t) {
-  return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }[t] || t
+  return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }[normalizeType(t)] || t
 }
 function typeTag(t) {
-  return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[t] || 'info'
+  return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[normalizeType(t)] || 'info'
 }
 function timeRuleText(rule) {
   if (!rule) return '-'
@@ -256,12 +267,7 @@ function timeRuleText(rule) {
       })
       .join('；')
   }
-  if (rule.mode === 'weekly') {
-    const days = (rule.weekdays || []).map((d) => weekName[d] || d).join('、') || '每天'
-    const slots = (rule.timeSlots || []).map((s) => `${s.start}-${s.end}`).join(' / ')
-    return `${days} ${slots}`
-  }
-  return rule.startTime ? `${rule.startTime}-${rule.endTime}` : '-'
+  return '-'
 }
 
 function addRule() {
@@ -304,7 +310,10 @@ async function loadData() {
       ElMessage.error(result.msg || '加载失败')
       return
     }
-    list.value = result.list || []
+    list.value = (result.list || []).map((row) => ({
+      ...row,
+      type: normalizeType(row.type)
+    }))
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
   } finally {
@@ -321,6 +330,7 @@ function openEdit(row) {
   const rule = row.timeRule || {}
   let mode = rule.mode || 'unlimited'
   let rules = rule.rules
+  const type = normalizeType(row.type)
 
   if (!rules || !rules.length) {
     if (mode === 'weekly' || mode === 'custom' || mode === 'weekday') {
@@ -344,7 +354,7 @@ function openEdit(row) {
     }
   } else {
     rules = rules.map((r) => ({
-      weekdays: r.weekdays || [],
+      weekdays: (r.weekdays || []).map((d) => Number(d)),
       unlimited: !!r.unlimited,
       timeSlots: r.timeSlots && r.timeSlots.length ? r.timeSlots : [{ start: '09:00', end: '18:00' }],
       maxHours: Number(r.maxHours) || 0
@@ -354,7 +364,7 @@ function openEdit(row) {
   form.value = {
     _id: row._id,
     name: row.name || '',
-    type: row.type || 'times',
+    type,
     totalTimes: row.totalTimes || 10,
     durationDays: row.durationDays || 30,
     timeRule: { mode, rules },
@@ -369,15 +379,16 @@ async function save() {
     ElMessage.warning('请填写卡名称')
     return
   }
-  if (isTimesLike(form.value.type) && !form.value.totalTimes) {
+  const type = normalizeType(form.value.type)
+  if (isTimesLike(type) && !form.value.totalTimes) {
     ElMessage.warning('请填写总次数')
     return
   }
-  if (form.value.type === 'time' && !form.value.durationDays) {
+  if (type === 'time' && !form.value.durationDays) {
     ElMessage.warning('请填写有效天数')
     return
   }
-  if (form.value.type === 'time' && form.value.timeRule.mode === 'rules') {
+  if (type === 'time' && form.value.timeRule.mode === 'rules') {
     for (let i = 0; i < form.value.timeRule.rules.length; i++) {
       const r = form.value.timeRule.rules[i]
       if (!r.weekdays || !r.weekdays.length) {
@@ -395,11 +406,11 @@ async function save() {
   try {
     const data = {
       name: form.value.name,
-      type: form.value.type,
+      type,
       price: 0,
       totalTimes: form.value.totalTimes,
       durationDays: form.value.durationDays,
-      timeRule: form.value.type === 'time' ? form.value.timeRule : null,
+      timeRule: type === 'time' ? form.value.timeRule : null,
       status: form.value.active ? 'active' : 'disabled',
       description: form.value.description
     }
