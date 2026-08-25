@@ -49,25 +49,59 @@
           <el-option label="团课" value="group" />
         </el-select>
       </el-form-item>
+      <el-form-item label="状态">
+        <el-select v-model="filters.attendStatus" clearable placeholder="全部" style="width: 120px">
+          <el-option label="已完成" value="completed" />
+          <el-option label="待上课" value="pending" />
+          <el-option label="已取消" value="cancelled" />
+        </el-select>
+      </el-form-item>
       <el-form-item>
         <el-button type="primary" :loading="loading" @click="loadData">查询</el-button>
       </el-form-item>
     </el-form>
 
-    <div class="summary" v-if="list.length">
-      共 <b>{{ list.length }}</b> 条上课记录
+    <div class="summary-cards" v-if="stats">
+      <div class="card">
+        <div class="num">{{ stats.total }}</div>
+        <div class="label">记录数</div>
+      </div>
+      <div class="card done">
+        <div class="num">{{ stats.completedHours }}</div>
+        <div class="label">出勤课时（小时）</div>
+      </div>
+      <div class="card pending">
+        <div class="num">{{ stats.pending }}</div>
+        <div class="label">待上课</div>
+      </div>
+      <div class="card cancel">
+        <div class="num">{{ stats.cancelled }}</div>
+        <div class="label">已取消</div>
+      </div>
     </div>
 
-    <el-table :data="list" stripe border v-loading="loading" height="calc(100vh - 280px)">
+    <el-table :data="list" stripe border v-loading="loading" height="calc(100vh - 340px)">
       <el-table-column prop="date" label="日期" width="120" sortable />
       <el-table-column prop="coachName" label="教练姓名" width="120" />
       <el-table-column prop="time" label="时间段" width="130" />
+      <el-table-column prop="hours" label="课时" width="80">
+        <template #default="{ row }">{{ row.hours }}h</template>
+      </el-table-column>
       <el-table-column prop="courseName" label="上的课程" min-width="140" />
       <el-table-column prop="venueName" label="门店" min-width="140" />
       <el-table-column prop="court" label="场地" width="100" />
       <el-table-column prop="userName" label="学员姓名" width="120" />
       <el-table-column prop="phone" label="学员手机号" width="130" />
-      <el-table-column prop="statusText" label="状态" width="90" />
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag
+            size="small"
+            :type="row.attendStatus === 'completed' ? 'success' : row.attendStatus === 'cancelled' ? 'info' : 'warning'"
+          >
+            {{ row.statusText }}
+          </el-tag>
+        </template>
+      </el-table-column>
     </el-table>
   </div>
 </template>
@@ -77,6 +111,7 @@ import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const list = ref([])
+const stats = ref(null)
 const loading = ref(false)
 const coachOptions = ref([])
 
@@ -94,7 +129,8 @@ const filters = reactive({
   startDate: fmt(start),
   endDate: fmt(today),
   coachId: '',
-  courseType: ''
+  courseType: '',
+  attendStatus: ''
 })
 
 const base = import.meta.env.DEV
@@ -134,17 +170,21 @@ async function loadData() {
       startDate: filters.startDate || '',
       endDate: filters.endDate || '',
       coachId: filters.coachId || '',
-      courseType: filters.courseType || ''
+      courseType: filters.courseType || '',
+      attendStatus: filters.attendStatus || ''
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '加载失败')
       list.value = []
+      stats.value = null
       return
     }
     list.value = result.list || []
+    stats.value = result.stats || null
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
     list.value = []
+    stats.value = null
   } finally {
     loading.value = false
   }
@@ -155,11 +195,23 @@ function exportExcel() {
     ElMessage.warning('没有可导出的数据')
     return
   }
-  const headers = ['日期', '教练姓名', '时间段', '上的课程', '门店', '场地', '学员姓名', '学员手机号', '状态']
+  const headers = [
+    '日期',
+    '教练姓名',
+    '时间段',
+    '课时(小时)',
+    '上的课程',
+    '门店',
+    '场地',
+    '学员姓名',
+    '学员手机号',
+    '状态'
+  ]
   const rows = list.value.map((r) => [
     r.date || '',
     r.coachName || '',
     r.time || '',
+    r.hours ?? 1,
     r.courseName || '',
     r.venueName || '',
     r.court || '',
@@ -177,16 +229,14 @@ function exportExcel() {
   const lines = [headers.map(escape).join(',')].concat(
     rows.map((row) => row.map(escape).join(','))
   )
-  // Excel 识别 UTF-8
   const bom = '\uFEFF'
   const blob = new Blob([bom + lines.join('\r\n')], {
     type: 'text/csv;charset=utf-8;'
   })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  const name = `教练出勤_${filters.startDate || ''}_${filters.endDate || ''}.csv`
   a.href = url
-  a.download = name
+  a.download = `教练出勤_${filters.startDate || ''}_${filters.endDate || ''}.csv`
   a.click()
   URL.revokeObjectURL(url)
   ElMessage.success('已导出，可用 Excel 打开')
@@ -229,12 +279,35 @@ h2 {
   border-radius: 8px;
   margin-bottom: 12px;
 }
-.summary {
-  margin-bottom: 8px;
-  color: #666;
-  font-size: 13px;
+.summary-cards {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
 }
-.summary b {
+.summary-cards .card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px 20px;
+  min-width: 120px;
+  border: 1px solid #ebeef5;
+}
+.summary-cards .num {
+  font-size: 22px;
+  font-weight: 700;
+  color: #303133;
+}
+.summary-cards .label {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+.summary-cards .done .num {
   color: #1a5c3a;
+}
+.summary-cards .pending .num {
+  color: #e6a23c;
+}
+.summary-cards .cancel .num {
+  color: #909399;
 }
 </style>

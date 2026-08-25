@@ -21,6 +21,7 @@
           </template>
           <el-menu-item index="/dashboard">数据看板</el-menu-item>
           <el-menu-item index="/activity">业务动态</el-menu-item>
+          <el-menu-item index="/coach-attendance">教练出勤</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="grp-booking">
@@ -30,7 +31,6 @@
           </template>
           <el-menu-item index="/bookings">预约管理</el-menu-item>
           <el-menu-item index="/group-classes">团课排期</el-menu-item>
-          <el-menu-item index="/coach-attendance">教练出勤</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="grp-venue">
@@ -106,7 +106,6 @@ import {
   Calendar,
   Grid,
   User,
-  UserFilled,
   ArrowDown,
   Ticket
 } from '@element-plus/icons-vue'
@@ -116,7 +115,6 @@ const router = useRouter()
 const adminName = localStorage.getItem('admin_name') || '管理员'
 const activeMenu = computed(() => route.path)
 
-// 默认展开所有分组，也可改成只展开当前相关组
 const defaultOpeneds = ['grp-overview', 'grp-booking', 'grp-venue', 'grp-people', 'grp-card']
 
 const venueList = ref([])
