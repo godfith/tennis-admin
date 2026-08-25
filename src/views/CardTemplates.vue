@@ -21,7 +21,7 @@
           <span v-else>{{ row.durationDays || '-' }} 天</span>
         </template>
       </el-table-column>
-      <el-table-column label="时间规则" min-width="240">
+      <el-table-column label="时间规则" min-width="280">
         <template #default="{ row }">
           <span v-if="row.type === 'time'">{{ timeRuleText(row.timeRule) }}</span>
           <span v-else-if="row.type === 'group'">多人同教练</span>
@@ -49,13 +49,13 @@
     <el-dialog
       v-model="visible"
       :title="form._id ? '编辑卡模板' : '新增卡模板'"
-      width="640px"
+      width="680px"
       destroy-on-close
       top="5vh"
     >
-      <el-form label-width="100px">
+      <el-form label-width="110px">
         <el-form-item label="卡名称" required>
-          <el-input v-model="form.name" placeholder="如：10次次卡 / 团课10次" />
+          <el-input v-model="form.name" placeholder="如：10次次卡 / 月卡" />
         </el-form-item>
         <el-form-item label="类型" required>
           <el-radio-group v-model="form.type" :disabled="!!form._id">
@@ -66,7 +66,7 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="form.type === 'group'" label="说明">
-          <span class="hint" style="margin-left:0">团课：时间由场馆安排，同一教练同一时段可带多名学员（与一对一教练卡不同）</span>
+          <span class="hint" style="margin-left:0">团课：时间由场馆安排，同一教练同一时段可带多名学员</span>
         </el-form-item>
 
         <template v-if="isTimesLike(form.type)">
@@ -108,7 +108,7 @@
                 >删除规则</el-button>
               </div>
 
-              <el-form-item label="适用星期" label-width="80px">
+              <el-form-item label="适用星期" label-width="90px">
                 <el-checkbox-group v-model="rule.weekdays">
                   <el-checkbox :value="1">一</el-checkbox>
                   <el-checkbox :value="2">二</el-checkbox>
@@ -120,7 +120,7 @@
                 </el-checkbox-group>
               </el-form-item>
 
-              <el-form-item label="时段限制" label-width="80px">
+              <el-form-item label="时段限制" label-width="90px">
                 <el-radio-group v-model="rule.unlimited" @change="(v) => onUnlimitedChange(rule, v)">
                   <el-radio :value="true">不限时</el-radio>
                   <el-radio :value="false">限制时段</el-radio>
@@ -159,12 +159,20 @@
                 </div>
                 <el-button type="primary" link @click="addSlot(rule)">+ 添加时段</el-button>
               </div>
+
+              <el-form-item label="每日可约" label-width="90px">
+                <el-input-number v-model="rule.maxHours" :min="0" :max="24" />
+                <span class="hint">小时（按 1 小时一格计）。0 = 不限制当天时长</span>
+              </el-form-item>
             </div>
 
             <el-button type="primary" plain @click="addRule" style="width: 100%; margin-top: 8px">
               + 添加一组规则
             </el-button>
-            <p class="rule-tip">提示：未覆盖到的星期默认不可预约。不同规则的星期不要重叠。</p>
+            <p class="rule-tip">
+              示例：规则1 勾选周一 maxHours=3；规则2 勾选周二 maxHours=2。
+              未覆盖到的星期默认不可预约。不同规则的星期不要重叠。
+            </p>
           </div>
         </template>
 
@@ -198,7 +206,8 @@ function emptyRule() {
   return {
     weekdays: [1, 2, 3, 4, 5],
     unlimited: false,
-    timeSlots: [{ start: '09:00', end: '18:00' }]
+    timeSlots: [{ start: '09:00', end: '18:00' }],
+    maxHours: 0
   }
 }
 
@@ -238,9 +247,12 @@ function timeRuleText(rule) {
     return rule.rules
       .map((r) => {
         const days = (r.weekdays || []).map((d) => weekName[d] || d).join('') || '?'
-        if (r.unlimited) return `${days}不限时`
-        const slots = (r.timeSlots || []).map((s) => `${s.start}-${s.end}`).join('/')
-        return `${days}${slots}`
+        let body = r.unlimited
+          ? '不限时'
+          : (r.timeSlots || []).map((s) => `${s.start}-${s.end}`).join('/')
+        const mh = Number(r.maxHours) || 0
+        if (mh > 0) body += `·日限${mh}h`
+        return `${days}${body}`
       })
       .join('；')
   }
@@ -322,13 +334,21 @@ function openEdit(row) {
               ? rule.timeSlots
               : rule.startTime
                 ? [{ start: rule.startTime, end: rule.endTime }]
-                : [{ start: '09:00', end: '18:00' }]
+                : [{ start: '09:00', end: '18:00' }],
+          maxHours: Number(rule.maxHours) || 0
         }
       ]
     } else {
       mode = 'unlimited'
       rules = [emptyRule()]
     }
+  } else {
+    rules = rules.map((r) => ({
+      weekdays: r.weekdays || [],
+      unlimited: !!r.unlimited,
+      timeSlots: r.timeSlots && r.timeSlots.length ? r.timeSlots : [{ start: '09:00', end: '18:00' }],
+      maxHours: Number(r.maxHours) || 0
+    }))
   }
 
   form.value = {
@@ -474,7 +494,7 @@ h2 {
   color: #1a5c3a;
 }
 .slots-box {
-  margin-left: 80px;
+  margin-left: 90px;
   margin-bottom: 8px;
 }
 .slot-row {
