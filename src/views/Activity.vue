@@ -53,7 +53,9 @@
       <el-table-column label="手机号" width="120">
         <template #default="{ row }">{{ row.phone || '-' }}</template>
       </el-table-column>
-      <el-table-column prop="detail" label="详情" min-width="280" />
+      <el-table-column label="详情" min-width="280">
+        <template #default="{ row }">{{ formatDetail(row.detail) }}</template>
+      </el-table-column>
       <el-table-column label="场馆" width="140">
         <template #default="{ row }">{{ row.venueName || '-' }}</template>
       </el-table-column>
@@ -116,6 +118,11 @@ function typeTag(t) {
   }[t] || 'info'
 }
 
+const MONTHS = {
+  Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6,
+  Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
+}
+
 /** 统一中文时间：2026年8月25日 14:30 */
 function formatTime(t) {
   if (!t) return '-'
@@ -136,6 +143,43 @@ function formatTime(t) {
   const hh = String(d.getHours()).padStart(2, '0')
   const mm = String(d.getMinutes()).padStart(2, '0')
   return `${y}年${m}月${day}日 ${hh}:${mm}`
+}
+
+/**
+ * 详情文本清洗：去掉 Date.toString() 英文整段，改成 8月26日
+ * 例：Wed Aug 26 2026 00:00:00 GMT+0000 (Coordinated Universal Time)
+ */
+function formatDetail(detail) {
+  if (!detail) return '-'
+  let s = String(detail)
+
+  // JS Date 默认字符串（含 GMT / Coordinated Universal Time）
+  s = s.replace(
+    /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s*\([^)]*\))?/gi,
+    (_, mon, day, year) => {
+      const m = MONTHS[mon] || MONTHS[mon.slice(0, 1).toUpperCase() + mon.slice(1).toLowerCase()]
+      return `${year}年${m}月${Number(day)}日`
+    }
+  )
+
+  // 再兜底：万一没有周几前缀
+  s = s.replace(
+    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s*\([^)]*\))?/gi,
+    (_, mon, day, year) => {
+      const m = MONTHS[mon] || 1
+      return `${year}年${m}月${Number(day)}日`
+    }
+  )
+
+  // ISO：2026-08-26T00:00:00.000Z / 2026-08-26 00:00:00
+  s = s.replace(
+    /\b(\d{4})-(\d{2})-(\d{2})(?:[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?/g,
+    (_, y, m, d) => `${y}年${Number(m)}月${Number(d)}日`
+  )
+
+  // 多余空格
+  s = s.replace(/\s{2,}/g, ' ').trim()
+  return s || '-'
 }
 
 function clearFilters() {
