@@ -131,58 +131,48 @@ function cnDateTime(y, m, d, hh, mm) {
   return `${y}年${Number(m)}月${Number(d)}日 ${pad2(hh)}:${pad2(mm)}`
 }
 
-/** 任意绝对时刻 → 中国时区（Asia/Shanghai，不受本机/VPN 影响） */
-function formatChinaFromMs(ms) {
-  const d = new Date(ms)
-  if (Number.isNaN(d.getTime())) return '-'
-  const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(d)
-  const get = (type) => {
-    const p = parts.find((x) => x.type === type)
-    return p ? p.value : ''
-  }
-  return cnDateTime(get('year'), get('month'), get('day'), get('hour'), get('minute'))
-}
-
 /**
- * 一律按中国时区显示。
- * MySQL DATETIME 无时区，按北京时间原文；带 Z 的按 UTC 再转上海。
+ * 数据库 DATETIME 已是北京时间。
+ * 接口常把 20:58 序列化成 20:58Z，再换算会多加 8 小时。
+ * 这里只读字符串里的年月日时分，不做任何时区换算。
  */
 function formatTime(t) {
   if (t == null || t === '') return '-'
 
-  if (typeof t === 'number') return formatChinaFromMs(t)
   if (t && t.$date) return formatTime(t.$date)
-  if (t instanceof Date) return formatChinaFromMs(t.getTime())
+
+  if (typeof t === 'number') {
+    const d = new Date(t)
+    if (Number.isNaN(d.getTime())) return '-'
+    // 时间戳按上海时区拆
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(d)
+    const get = (type) => (parts.find((x) => x.type === type) || {}).value || ''
+    return cnDateTime(get('year'), get('month'), get('day'), get('hour'), get('minute'))
+  }
 
   const s = String(t).trim()
 
-  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/)
-  if (m1) {
-    const isUtc = /Z$/i.test(s) || /[+-]00:00$/.test(s) || /GMT\+0{4}/i.test(s)
-    if (isUtc) {
-      const ms = Date.UTC(
-        Number(m1[1]), Number(m1[2]) - 1, Number(m1[3]),
-        Number(m1[4]), Number(m1[5]), Number(m1[6] || 0)
-      )
-      return formatChinaFromMs(ms)
-    }
-    // 无时区：库内已是北京时间，直接显示，不跟本机时区走
-    return cnDateTime(m1[1], m1[2], m1[3], m1[4], m1[5])
-  }
+  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/)
+  if (m1) return cnDateTime(m1[1], m1[2], m1[3], m1[4], m1[5])
 
   const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
   if (m2) return `${m2[1]}年${Number(m2[2])}月${Number(m2[3])}日`
 
-  const parsed = Date.parse(s)
-  if (!Number.isNaN(parsed)) return formatChinaFromMs(parsed)
+  const en = s.match(
+    /(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+(\d{2}):(\d{2})/i
+  )
+  if (en) {
+    const mon = MONTHS[en[1]] || 1
+    return cnDateTime(en[3], mon, en[2], en[4], en[5])
+  }
 
   return s.slice(0, 19).replace('T', ' ')
 }
@@ -193,13 +183,6 @@ function formatDetail(detail) {
 
   s = s.replace(
     /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s*\([^)]*\))?/gi,
-    (_, mon, day, year) => {
-      const m = MONTHS[mon] || 1
-      return `${year}年${m}月${Number(day)}日`
-    }
-  )
-  s = s.replace(
-    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s*\([^)]*\))?/gi,
     (_, mon, day, year) => {
       const m = MONTHS[mon] || 1
       return `${year}年${m}月${Number(day)}日`
