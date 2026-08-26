@@ -131,59 +131,58 @@ function cnDateTime(y, m, d, hh, mm) {
   return `${y}年${Number(m)}月${Number(d)}日 ${pad2(hh)}:${pad2(mm)}`
 }
 
+/** 任意绝对时刻 → 中国时区（Asia/Shanghai，不受本机/VPN 影响） */
+function formatChinaFromMs(ms) {
+  const d = new Date(ms)
+  if (Number.isNaN(d.getTime())) return '-'
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(d)
+  const get = (type) => {
+    const p = parts.find((x) => x.type === type)
+    return p ? p.value : ''
+  }
+  return cnDateTime(get('year'), get('month'), get('day'), get('hour'), get('minute'))
+}
+
 /**
- * 按「北京时间原文」显示，不再 new Date() 做时区换算。
- * MySQL DATETIME 存的就是北京时间，被当成 UTC 再 +8 会变成第二天凌晨。
+ * 一律按中国时区显示。
+ * MySQL DATETIME 无时区，按北京时间原文；带 Z 的按 UTC 再转上海。
  */
 function formatTime(t) {
   if (t == null || t === '') return '-'
 
-  // 数字时间戳（毫秒）
-  if (typeof t === 'number') {
-    const d = new Date(t)
-    if (Number.isNaN(d.getTime())) return '-'
-    // 用 UTC 分量：云函数若按北京时间 getTime，这里可能仍偏；优先走字符串
-    return cnDateTime(
-      d.getFullYear(),
-      d.getMonth() + 1,
-      d.getDate(),
-      d.getHours(),
-      d.getMinutes()
-    )
-  }
-
-  if (t && t.$date) {
-    return formatTime(t.$date)
-  }
+  if (typeof t === 'number') return formatChinaFromMs(t)
+  if (t && t.$date) return formatTime(t.$date)
+  if (t instanceof Date) return formatChinaFromMs(t.getTime())
 
   const s = String(t).trim()
 
-  // 2026-08-25 20:58:00 / 2026-08-25T20:58:00 / 2026-08-25T20:58:00.000Z
-  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/)
+  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/)
   if (m1) {
-    // 有 Z 或 +00:00 表示被序列化成 UTC，要减 8 小时还原北京时间
-    const isUtc = /Z$|[+-]00:00$|[+-]0000$/i.test(s) || /GMT\+0000/i.test(s)
+    const isUtc = /Z$/i.test(s) || /[+-]00:00$/.test(s) || /GMT\+0{4}/i.test(s)
     if (isUtc) {
-      const utc = Date.UTC(
+      const ms = Date.UTC(
         Number(m1[1]), Number(m1[2]) - 1, Number(m1[3]),
-        Number(m1[4]), Number(m1[5])
+        Number(m1[4]), Number(m1[5]), Number(m1[6] || 0)
       )
-      const bj = new Date(utc + 8 * 3600 * 1000)
-      return cnDateTime(
-        bj.getUTCFullYear(),
-        bj.getUTCMonth() + 1,
-        bj.getUTCDate(),
-        bj.getUTCHours(),
-        bj.getUTCMinutes()
-      )
+      return formatChinaFromMs(ms)
     }
-    // 无时区：当作北京时间原文
+    // 无时区：库内已是北京时间，直接显示，不跟本机时区走
     return cnDateTime(m1[1], m1[2], m1[3], m1[4], m1[5])
   }
 
-  // 2026-08-25
   const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
   if (m2) return `${m2[1]}年${Number(m2[2])}月${Number(m2[3])}日`
+
+  const parsed = Date.parse(s)
+  if (!Number.isNaN(parsed)) return formatChinaFromMs(parsed)
 
   return s.slice(0, 19).replace('T', ' ')
 }
