@@ -3,7 +3,10 @@
     <div class="page-header">
       <div>
         <h2>员工管理</h2>
-        <p class="tip">当前场馆：{{ venueName || '未选择' }} · 含教练、前台、客服等</p>
+        <p class="tip">
+          当前场馆：{{ venueName || '未选择' }} · 仅前台 / 客服 / 店长等行政岗
+          · 教练请在「教练管理」维护，两边互不影响
+        </p>
       </div>
       <div>
         <el-button :loading="loading" @click="loadData">刷新</el-button>
@@ -13,7 +16,6 @@
 
     <div class="filters">
       <el-select v-model="filterRole" clearable placeholder="全部岗位" style="width: 140px" @change="loadData">
-        <el-option label="教练" value="coach" />
         <el-option label="前台" value="front" />
         <el-option label="客服" value="service" />
         <el-option label="店长" value="manager" />
@@ -29,7 +31,7 @@
           <el-tag size="small" :type="roleTag(row.role)">{{ roleLabel(row.role) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="specialty" label="备注/擅长" min-width="140" />
+      <el-table-column prop="specialty" label="备注" min-width="140" />
       <el-table-column prop="sort" label="排序" width="80" />
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
@@ -59,17 +61,13 @@
         </el-form-item>
         <el-form-item label="岗位" required>
           <el-select v-model="form.role" style="width: 100%">
-            <el-option label="教练" value="coach" />
             <el-option label="前台" value="front" />
             <el-option label="客服" value="service" />
             <el-option label="店长" value="manager" />
             <el-option label="其他" value="other" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.role === 'coach'" label="擅长">
-          <el-input v-model="form.specialty" placeholder="如：底线 / 发球 / 青少年" />
-        </el-form-item>
-        <el-form-item v-else label="备注岗位">
+        <el-form-item label="备注">
           <el-input v-model="form.specialty" placeholder="选填说明" />
         </el-form-item>
         <el-form-item label="排序">
@@ -78,7 +76,7 @@
         <el-form-item label="状态">
           <el-switch v-model="form.active" active-text="在职" inactive-text="停用" />
         </el-form-item>
-        <el-form-item label="备注">
+        <el-form-item label="补充说明">
           <el-input v-model="form.remark" type="textarea" :rows="2" />
         </el-form-item>
       </el-form>
@@ -121,10 +119,10 @@ function venueId() {
 }
 
 function roleLabel(r) {
-  return { coach: '教练', front: '前台', service: '客服', manager: '店长', other: '其他' }[r] || r
+  return { front: '前台', service: '客服', manager: '店长', other: '其他', coach: '教练(请改到教练管理)' }[r] || r
 }
 function roleTag(r) {
-  return { coach: 'warning', front: 'success', service: 'primary', manager: 'danger', other: 'info' }[r] || 'info'
+  return { front: 'success', service: 'primary', manager: 'danger', other: 'info', coach: 'warning' }[r] || 'info'
 }
 
 async function post(path, body = {}) {
@@ -158,7 +156,8 @@ async function loadData() {
       ElMessage.error(result.msg || '加载失败')
       return
     }
-    list.value = result.list || []
+    // 列表不展示教练岗（历史脏数据仍可见时可在编辑时改掉）
+    list.value = (result.list || []).filter((r) => r.role !== 'coach')
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
   } finally {
@@ -189,7 +188,7 @@ function openEdit(row) {
     _id: row._id,
     name: row.name || '',
     phone: row.phone || '',
-    role: row.role || 'other',
+    role: row.role === 'coach' ? 'other' : row.role || 'other',
     specialty: row.specialty || '',
     sort: row.sort || 0,
     active: row.status === 'active',
@@ -203,8 +202,8 @@ async function save() {
     ElMessage.warning('请填写姓名')
     return
   }
-  if (!form.value.role) {
-    ElMessage.warning('请选择岗位')
+  if (!form.value.role || form.value.role === 'coach') {
+    ElMessage.warning('请选择行政岗位；教练请到「教练管理」')
     return
   }
   saving.value = true
@@ -295,6 +294,8 @@ h2 {
   margin: 0;
   color: #888;
   font-size: 13px;
+  max-width: 520px;
+  line-height: 1.5;
 }
 .filters {
   margin-bottom: 12px;

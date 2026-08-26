@@ -24,8 +24,12 @@
 
     <el-table :data="list" stripe border v-loading="loading">
       <el-table-column prop="name" label="名称" min-width="120" />
-      <el-table-column prop="date" label="日期" width="120" />
-      <el-table-column prop="time" label="时段" width="120" />
+      <el-table-column label="日期" width="150">
+        <template #default="{ row }">{{ formatDateCn(row.date) }}</template>
+      </el-table-column>
+      <el-table-column label="时段" width="130">
+        <template #default="{ row }">{{ formatTimeSlot(row.time) }}</template>
+      </el-table-column>
       <el-table-column prop="court" label="场地" width="100" />
       <el-table-column prop="coachName" label="教练" width="100" />
       <el-table-column label="人数" width="100">
@@ -52,7 +56,6 @@
       </el-table-column>
     </el-table>
 
-    <!-- 新增/编辑团课 -->
     <el-dialog
       v-model="visible"
       :title="form._id ? '编辑团课' : '新增团课'"
@@ -68,7 +71,7 @@
         </el-form-item>
         <el-form-item label="时段" required>
           <el-select v-model="form.time" placeholder="选择时段" style="width:100%">
-            <el-option v-for="t in timeSlots" :key="t" :label="t" :value="t" />
+            <el-option v-for="t in timeSlots" :key="t" :label="formatTimeSlot(t)" :value="t" />
           </el-select>
         </el-form-item>
         <el-form-item label="场地" required>
@@ -97,7 +100,6 @@
       </template>
     </el-dialog>
 
-    <!-- 报名名单 -->
     <el-dialog
       v-model="memberVisible"
       :title="`报名名单 · ${currentClass.name || ''}`"
@@ -125,7 +127,6 @@
       </template>
     </el-dialog>
 
-    <!-- 添加学员 -->
     <el-dialog v-model="addMemberVisible" title="添加学员到团课" width="480px" destroy-on-close>
       <el-form label-width="90px">
         <el-form-item label="学员" required>
@@ -186,6 +187,26 @@ const timeSlots = [
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
   '18:00-19:00', '19:00-20:00', '20:00-21:00'
 ]
+
+const weekNames = ['日', '一', '二', '三', '四', '五', '六']
+
+/** 2026-08-25 → 8月25日（周一） */
+function formatDateCn(dateStr) {
+  if (!dateStr) return '-'
+  const s = String(dateStr).slice(0, 10)
+  const d = new Date(s.replace(/-/g, '/'))
+  if (Number.isNaN(d.getTime())) return s
+  const m = d.getMonth() + 1
+  const day = d.getDate()
+  const w = weekNames[d.getDay()]
+  return `${m}月${day}日（周${w}）`
+}
+
+/** 08:00-09:00 → 08:00–09:00 */
+function formatTimeSlot(t) {
+  if (!t) return '-'
+  return String(t).replace('-', '–')
+}
 
 const list = ref([])
 const courts = ref([])

@@ -36,7 +36,7 @@
     </div>
 
     <el-table :data="filteredList" stripe border v-loading="loading" row-key="_key">
-      <el-table-column label="时间" width="170">
+      <el-table-column label="时间" width="180">
         <template #default="{ row }">{{ formatTime(row.time) }}</template>
       </el-table-column>
       <el-table-column label="类型" width="110">
@@ -80,24 +80,17 @@ const base = import.meta.env.DEV
 
 const filteredList = computed(() => {
   const type = String(filterType.value || '').trim()
-  // 只取纯文本关键词
   const k = String(keyword.value || '').trim()
   const list = rawList.value || []
-
   const out = []
   for (let i = 0; i < list.length; i++) {
     const item = list[i]
     if (!item) continue
-
-    // 类型过滤（可选）
     if (type && String(item.type) !== type) continue
-
-    // 只匹配预约人 userName，不匹配操作人、不匹配详情
     if (k) {
       const userName = String(item.userName || '')
       if (userName.indexOf(k) === -1) continue
     }
-
     out.push(item)
   }
   return out
@@ -123,11 +116,26 @@ function typeTag(t) {
   }[t] || 'info'
 }
 
+/** 统一中文时间：2026年8月25日 14:30 */
 function formatTime(t) {
   if (!t) return '-'
-  if (typeof t === 'number') return new Date(t).toLocaleString()
-  if (t.$date) return new Date(t.$date).toLocaleString()
-  return String(t).slice(0, 19).replace('T', ' ')
+  let d
+  if (typeof t === 'number') d = new Date(t)
+  else if (t && t.$date) d = new Date(t.$date)
+  else if (t instanceof Date) d = t
+  else {
+    const s = String(t).trim().replace('T', ' ').replace(/-/g, '/')
+    d = new Date(s)
+  }
+  if (!d || Number.isNaN(d.getTime())) {
+    return String(t).slice(0, 19).replace('T', ' ')
+  }
+  const y = d.getFullYear()
+  const m = d.getMonth() + 1
+  const day = d.getDate()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${y}年${m}月${day}日 ${hh}:${mm}`
 }
 
 function clearFilters() {
@@ -161,7 +169,6 @@ async function fetchAll() {
       rawList.value = []
       return
     }
-    // 给每条加稳定 key，避免表格错乱
     const list = Array.isArray(result.list) ? result.list : []
     rawList.value = list.map((item, idx) => ({
       ...item,
