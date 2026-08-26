@@ -123,46 +123,82 @@ const MONTHS = {
   Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
 }
 
-/** 统一中文时间：2026年8月25日 14:30 */
-function formatTime(t) {
-  if (!t) return '-'
-  let d
-  if (typeof t === 'number') d = new Date(t)
-  else if (t && t.$date) d = new Date(t.$date)
-  else if (t instanceof Date) d = t
-  else {
-    const s = String(t).trim().replace('T', ' ').replace(/-/g, '/')
-    d = new Date(s)
-  }
-  if (!d || Number.isNaN(d.getTime())) {
-    return String(t).slice(0, 19).replace('T', ' ')
-  }
-  const y = d.getFullYear()
-  const m = d.getMonth() + 1
-  const day = d.getDate()
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  return `${y}年${m}月${day}日 ${hh}:${mm}`
+function pad2(n) {
+  return String(n).padStart(2, '0')
+}
+
+function cnDateTime(y, m, d, hh, mm) {
+  return `${y}年${Number(m)}月${Number(d)}日 ${pad2(hh)}:${pad2(mm)}`
 }
 
 /**
- * 详情文本清洗：去掉 Date.toString() 英文整段，改成 8月26日
- * 例：Wed Aug 26 2026 00:00:00 GMT+0000 (Coordinated Universal Time)
+ * 按「北京时间原文」显示，不再 new Date() 做时区换算。
+ * MySQL DATETIME 存的就是北京时间，被当成 UTC 再 +8 会变成第二天凌晨。
  */
+function formatTime(t) {
+  if (t == null || t === '') return '-'
+
+  // 数字时间戳（毫秒）
+  if (typeof t === 'number') {
+    const d = new Date(t)
+    if (Number.isNaN(d.getTime())) return '-'
+    // 用 UTC 分量：云函数若按北京时间 getTime，这里可能仍偏；优先走字符串
+    return cnDateTime(
+      d.getFullYear(),
+      d.getMonth() + 1,
+      d.getDate(),
+      d.getHours(),
+      d.getMinutes()
+    )
+  }
+
+  if (t && t.$date) {
+    return formatTime(t.$date)
+  }
+
+  const s = String(t).trim()
+
+  // 2026-08-25 20:58:00 / 2026-08-25T20:58:00 / 2026-08-25T20:58:00.000Z
+  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/)
+  if (m1) {
+    // 有 Z 或 +00:00 表示被序列化成 UTC，要减 8 小时还原北京时间
+    const isUtc = /Z$|[+-]00:00$|[+-]0000$/i.test(s) || /GMT\+0000/i.test(s)
+    if (isUtc) {
+      const utc = Date.UTC(
+        Number(m1[1]), Number(m1[2]) - 1, Number(m1[3]),
+        Number(m1[4]), Number(m1[5])
+      )
+      const bj = new Date(utc + 8 * 3600 * 1000)
+      return cnDateTime(
+        bj.getUTCFullYear(),
+        bj.getUTCMonth() + 1,
+        bj.getUTCDate(),
+        bj.getUTCHours(),
+        bj.getUTCMinutes()
+      )
+    }
+    // 无时区：当作北京时间原文
+    return cnDateTime(m1[1], m1[2], m1[3], m1[4], m1[5])
+  }
+
+  // 2026-08-25
+  const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m2) return `${m2[1]}年${Number(m2[2])}月${Number(m2[3])}日`
+
+  return s.slice(0, 19).replace('T', ' ')
+}
+
 function formatDetail(detail) {
   if (!detail) return '-'
   let s = String(detail)
 
-  // JS Date 默认字符串（含 GMT / Coordinated Universal Time）
   s = s.replace(
     /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s*\([^)]*\))?/gi,
     (_, mon, day, year) => {
-      const m = MONTHS[mon] || MONTHS[mon.slice(0, 1).toUpperCase() + mon.slice(1).toLowerCase()]
+      const m = MONTHS[mon] || 1
       return `${year}年${m}月${Number(day)}日`
     }
   )
-
-  // 再兜底：万一没有周几前缀
   s = s.replace(
     /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s*\([^)]*\))?/gi,
     (_, mon, day, year) => {
@@ -170,14 +206,10 @@ function formatDetail(detail) {
       return `${year}年${m}月${Number(day)}日`
     }
   )
-
-  // ISO：2026-08-26T00:00:00.000Z / 2026-08-26 00:00:00
   s = s.replace(
     /\b(\d{4})-(\d{2})-(\d{2})(?:[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?/g,
     (_, y, m, d) => `${y}年${Number(m)}月${Number(d)}日`
   )
-
-  // 多余空格
   s = s.replace(/\s{2,}/g, ' ').trim()
   return s || '-'
 }
