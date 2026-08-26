@@ -37,11 +37,11 @@
 
     <el-table :data="filteredList" stripe border v-loading="loading" row-key="_key">
       <el-table-column label="时间" width="180">
-        <template #default="{ row }">{{ formatTime(row.time) }}</template>
+        <template #default="{ row }">{{ formatTime(row.timeText || row.time) }}</template>
       </el-table-column>
       <el-table-column label="类型" width="110">
         <template #default="{ row }">
-          <el-tag :type="typeTag(row.type)" size="small">{{ typeLabel(row.type) }}</el-tag>
+          <el-tag :type="typeTag(row.type)" size="small">{{ row.typeLabel || typeLabel(row.type) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="用户/预约人" min-width="110">
@@ -131,20 +131,21 @@ function cnDateTime(y, m, d, hh, mm) {
   return `${y}年${Number(m)}月${Number(d)}日 ${pad2(hh)}:${pad2(mm)}`
 }
 
-/**
- * 数据库 DATETIME 已是北京时间。
- * 接口常把 20:58 序列化成 20:58Z，再换算会多加 8 小时。
- * 这里只读字符串里的年月日时分，不做任何时区换算。
- */
+/** 优先解析 timeText：2026-08-26 14:24:22 */
 function formatTime(t) {
   if (t == null || t === '') return '-'
-
   if (t && t.$date) return formatTime(t.$date)
+
+  const s = String(t).trim()
+  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/)
+  if (m1) return cnDateTime(m1[1], m1[2], m1[3], m1[4], m1[5])
+
+  const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m2) return `${m2[1]}年${Number(m2[2])}月${Number(m2[3])}日`
 
   if (typeof t === 'number') {
     const d = new Date(t)
     if (Number.isNaN(d.getTime())) return '-'
-    // 时间戳按上海时区拆
     const parts = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Shanghai',
       year: 'numeric',
@@ -158,29 +159,12 @@ function formatTime(t) {
     return cnDateTime(get('year'), get('month'), get('day'), get('hour'), get('minute'))
   }
 
-  const s = String(t).trim()
-
-  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/)
-  if (m1) return cnDateTime(m1[1], m1[2], m1[3], m1[4], m1[5])
-
-  const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (m2) return `${m2[1]}年${Number(m2[2])}月${Number(m2[3])}日`
-
-  const en = s.match(
-    /(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+(\d{2}):(\d{2})/i
-  )
-  if (en) {
-    const mon = MONTHS[en[1]] || 1
-    return cnDateTime(en[3], mon, en[2], en[4], en[5])
-  }
-
   return s.slice(0, 19).replace('T', ' ')
 }
 
 function formatDetail(detail) {
   if (!detail) return '-'
   let s = String(detail)
-
   s = s.replace(
     /\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s*\([^)]*\))?/gi,
     (_, mon, day, year) => {
@@ -230,7 +214,7 @@ async function fetchAll() {
     const list = Array.isArray(result.list) ? result.list : []
     rawList.value = list.map((item, idx) => ({
       ...item,
-      _key: `${item.type || ''}_${item.userName || ''}_${item.time || ''}_${idx}`
+      _key: item.id || `${item.type}_${item.timeText || item.time}_${idx}`
     }))
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
