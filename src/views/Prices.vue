@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>场地价格</h2>
-        <p class="sub">按星期配置各场地各时段价格，支持多选行列批量填写</p>
+        <p class="sub">按星期配置各场地各时段价格，支持小数（如 0.01）与多选行列批量填写</p>
       </div>
       <div class="toolbar">
         <el-button :loading="loading" @click="loadAll">刷新</el-button>
@@ -45,7 +45,7 @@
 
     <div class="card batch-bar">
       <span class="batch-label">批量填价</span>
-      <el-input-number v-model="batchPrice" :min="0" :precision="0" size="default" />
+      <el-input-number v-model="batchPrice" :min="0" :precision="2" :step="0.01" size="default" />
       <span class="unit">元</span>
       <el-button type="success" plain :disabled="!selectedCols.length" @click="fillSelectedCols">
         应用到选中列 ({{ selectedCols.length }})
@@ -109,7 +109,8 @@
                 <el-input-number
                   v-model="matrix[c.name][t]"
                   :min="0"
-                  :precision="0"
+                  :precision="2"
+                  :step="0.01"
                   size="small"
                   controls-position="right"
                   class="cell-input"
@@ -179,6 +180,12 @@ async function post(path, body = {}) {
     : data
 }
 
+function money(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.round(n * 100) / 100
+}
+
 function ensureMatrix(courtNames) {
   courtNames.forEach((name) => {
     if (!matrix[name]) matrix[name] = {}
@@ -214,7 +221,7 @@ function clearSelection() {
 }
 
 function fillSelectedCols() {
-  const p = Number(batchPrice.value) || 0
+  const p = money(batchPrice.value)
   selectedCols.value.forEach((t) => {
     courts.value.forEach((c) => {
       matrix[c.name][t] = p
@@ -224,7 +231,7 @@ function fillSelectedCols() {
 }
 
 function fillSelectedRows() {
-  const p = Number(batchPrice.value) || 0
+  const p = money(batchPrice.value)
   selectedRows.value.forEach((name) => {
     timeSlots.forEach((t) => {
       matrix[name][t] = p
@@ -234,7 +241,7 @@ function fillSelectedRows() {
 }
 
 function fillAll() {
-  const p = Number(batchPrice.value) || 0
+  const p = money(batchPrice.value)
   courts.value.forEach((c) => {
     timeSlots.forEach((t) => {
       matrix[c.name][t] = p
@@ -282,7 +289,7 @@ async function loadPrices() {
     })
     ;(result.list || []).forEach((row) => {
       if (matrix[row.court] && timeSlots.includes(row.timeSlot)) {
-        matrix[row.court][row.timeSlot] = Number(row.price) || 0
+        matrix[row.court][row.timeSlot] = money(row.price)
       }
     })
   } catch (e) {
@@ -318,7 +325,7 @@ async function save() {
       items.push({
         court: c.name,
         timeSlot: t,
-        price: Number(matrix[c.name][t]) || 0
+        price: money(matrix[c.name][t])
       })
     })
   })
@@ -501,7 +508,7 @@ h2 {
   background: #f3faf6;
 }
 .cell-input {
-  width: 92px;
+  width: 108px;
 }
 .empty {
   text-align: center;
