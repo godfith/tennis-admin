@@ -27,6 +27,11 @@
         </template>
       </el-table-column>
       <el-table-column prop="userId" label="会员号" width="150" />
+      <el-table-column label="所属场馆" min-width="160">
+        <template #default="{ row }">
+          {{ row.venueName || '-' }}
+        </template>
+      </el-table-column>
       <el-table-column label="持卡数" width="90">
         <template #default="{ row }">
           {{ row.cardCount ?? 0 }}
@@ -45,13 +50,19 @@
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${displayName(currentUser)}`" width="800px">
+    <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${displayName(currentUser)}`" width="920px">
       <el-table :data="memberCards" border v-loading="cardsLoading" size="small">
         <el-table-column prop="cardName" label="卡名称" min-width="120" />
         <el-table-column label="类型" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="typeTag(row.type)">{{ typeLabel(row.type) }}</el-tag>
           </template>
+        </el-table-column>
+        <el-table-column label="场馆" min-width="140">
+          <template #default="{ row }">{{ row.venueName || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="发卡人" width="100">
+          <template #default="{ row }">{{ row.issuerName || '-' }}</template>
         </el-table-column>
         <el-table-column label="金额" width="90">
           <template #default="{ row }">
@@ -93,10 +104,23 @@
       <div v-if="!cardsLoading && memberCards.length === 0" class="empty">暂无持卡</div>
     </el-dialog>
 
-    <el-dialog v-model="issueVisible" title="给会员发卡" width="480px" destroy-on-close>
+    <el-dialog v-model="issueVisible" title="给会员发卡" width="520px" destroy-on-close>
       <el-form label-width="100px">
         <el-form-item label="会员">
           <el-input :model-value="displayName(currentUser)" disabled />
+        </el-form-item>
+        <el-form-item label="发卡场馆" required>
+          <el-select v-model="issueForm.venueId" placeholder="请选择场馆" style="width: 100%" @change="onVenuePick">
+            <el-option
+              v-for="v in venueList"
+              :key="v._id || v.venueId"
+              :label="v.name"
+              :value="v.venueId || v._id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="发卡人" required>
+          <el-input v-model="issueForm.issuerName" placeholder="前台 / 管理员姓名" />
         </el-form-item>
         <el-form-item label="选择卡模板" required>
           <el-select
@@ -117,8 +141,8 @@
           <el-tag :type="typeTag(selectedTemplate.type)">{{ typeLabel(selectedTemplate.type) }}</el-tag>
         </el-form-item>
         <el-form-item label="实收金额" required>
-          <el-input-number v-model="issueForm.price" :min="0" :precision="0" />
-          <span class="hint">元（本次发卡实际收款）</span>
+          <el-input-number v-model="issueForm.price" :min="0" :precision="2" :step="1" />
+          <span class="hint">元（本次发卡实际收款，计入营业额）</span>
         </el-form-item>
         <el-form-item
           v-if="selectedTemplate && isTimesLike(selectedTemplate.type)"
@@ -157,6 +181,7 @@ const list = ref([])
 const loading = ref(false)
 const keyword = ref('')
 const currentUser = ref(null)
+const venueList = ref([])
 
 const cardsVisible = ref(false)
 const cardsLoading = ref(false)
@@ -171,12 +196,15 @@ const issueForm = ref({
   totalTimes: 10,
   validFrom: '',
   validTo: '',
-  remark: ''
+  remark: '',
+  venueId: '',
+  venueName: '',
+  issuerName: ''
 })
 
 const base = import.meta.env.DEV
   ? '/api'
-  : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
+  : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 
 const activeTemplates = computed(() => templates.value.filter((t) => t.status === 'active'))
 const selectedTemplate = computed(() =>
@@ -231,6 +259,15 @@ async function post(path, body = {}) {
       ? JSON.parse(data.body)
       : data.body
     : data
+}
+
+async function loadVenues() {
+  try {
+    const result = await post('/adminGetVenues', {})
+    venueList.value = result.list || []
+  } catch (e) {
+    venueList.value = []
+  }
 }
 
 async function loadData() {
@@ -304,15 +341,29 @@ async function onRefund(card) {
   }
 }
 
+function onVenuePick(id) {
+  const v = venueList.value.find((x) => (x.venueId || x._id) === id)
+  issueForm.value.venueName = v ? v.name : ''
+}
+
 function openIssue(row) {
   currentUser.value = row
+  const vid = row.venueId || localStorage.getItem('venue_id') || ''
+  const vname =
+    row.venueName ||
+    localStorage.getItem('venue_name') ||
+    (venueList.value.find((x) => (x.venueId || x._id) === vid) || {}).name ||
+    ''
   issueForm.value = {
     templateId: '',
     price: 0,
     totalTimes: 10,
     validFrom: new Date().toISOString().slice(0, 10),
     validTo: '',
-    remark: ''
+    remark: '',
+    venueId: vid,
+    venueName: vname,
+    issuerName: localStorage.getItem('admin_name') || ''
   }
   issueVisible.value = true
 }
@@ -335,6 +386,14 @@ function onTemplateChange(id) {
 async function submitIssue() {
   if (!issueForm.value.templateId) {
     ElMessage.warning('请选择卡模板')
+    return
+  }
+  if (!issueForm.value.venueId) {
+    ElMessage.warning('请选择发卡场馆')
+    return
+  }
+  if (!String(issueForm.value.issuerName || '').trim()) {
+    ElMessage.warning('请填写发卡人')
     return
   }
   if (!currentUser.value?._id) {
@@ -361,7 +420,10 @@ async function submitIssue() {
       price: Number(issueForm.value.price) || 0,
       validFrom: issueForm.value.validFrom,
       validTo: issueForm.value.validTo || null,
-      remark: issueForm.value.remark
+      remark: issueForm.value.remark,
+      venueId: issueForm.value.venueId,
+      venueName: issueForm.value.venueName,
+      issuerName: String(issueForm.value.issuerName).trim()
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '发卡失败')
@@ -379,6 +441,7 @@ async function submitIssue() {
 }
 
 onMounted(() => {
+  loadVenues()
   loadData()
   loadTemplates()
 })
