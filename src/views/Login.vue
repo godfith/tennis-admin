@@ -3,7 +3,6 @@
     <div class="login-card">
       <div class="brand">山羊Goat网球馆</div>
       <div class="subtitle">管理后台</div>
-
       <el-form @submit.prevent="onLogin">
         <el-form-item>
           <el-input v-model="username" placeholder="管理员账号" size="large" />
@@ -42,10 +41,9 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 
-// 云函数 HTTP 地址
 const LOGIN_URL = import.meta.env.DEV
   ? '/api/adminLogin'
-  : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com/adminLogin'
+  : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com/adminLogin'
 
 async function onLogin() {
   if (!username.value || !password.value) {
@@ -57,9 +55,7 @@ async function onLogin() {
   try {
     const res = await fetch(LOGIN_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: username.value,
         password: password.value
@@ -67,9 +63,6 @@ async function onLogin() {
     })
 
     const data = await res.json()
-    console.log('登录返回：', data)
-
-    // 有的网关会包一层 body
     const result = data.body
       ? typeof data.body === 'string'
         ? JSON.parse(data.body)
@@ -81,8 +74,10 @@ async function onLogin() {
       return
     }
 
-    localStorage.setItem('admin_token', result.admin._id)
-    localStorage.setItem('admin_name', result.admin.name || result.admin.username)
+    const admin = result.admin || {}
+    localStorage.setItem('admin_token', admin._id || admin.id || '')
+    localStorage.setItem('admin_name', admin.name || admin.username || '')
+    localStorage.setItem('admin_role', admin.role || 'admin')
 
     ElMessage.success('登录成功')
     router.push('/dashboard')
@@ -94,7 +89,6 @@ async function onLogin() {
   }
 }
 </script>
-
 
 <style scoped>
 .login-page {
