@@ -36,7 +36,6 @@
           <template #default="{ row }">
             <el-button v-if="canExtendCards && row.status !== 'refunded'" link type="primary" @click="openExtend(row)">延期</el-button>
             <el-button v-if="row.status === 'active'" link type="danger" @click="onRefund(row)">退卡</el-button>
-            <span v-if="!canExtendCards && row.status !== 'active'" class="muted">-</span>
           </template>
         </el-table-column>
       </el-table>
@@ -76,16 +75,18 @@
     <el-dialog v-model="extendVisible" title="会员卡延期" width="420px" destroy-on-close>
       <el-form label-width="100px">
         <el-form-item label="卡名称"><el-input :model-value="extendCard.cardName" disabled /></el-form-item>
+        <el-form-item label="发卡日期"><el-input :model-value="extendCard.validFrom || '-'" disabled /></el-form-item>
         <el-form-item label="当前到期"><el-input :model-value="extendCard.validTo || '不限 / 未设置'" disabled /></el-form-item>
         <el-form-item label="调整天数" required>
           <el-input-number v-model="extendDays" :min="extendMin" :max="extendMax" :step="1" />
           <div class="hint">正数延长，负数缩短{{ isStoreManager ? '（店长限 ±120 天）' : '' }}</div>
         </el-form-item>
-        <el-form-item label="调整后"><span>{{ previewNewValidTo }}</span></el-form-item>
+        <el-form-item label="调整后"><span :style="extendBeforeIssue ? 'color:#c45656' : ''">{{ previewNewValidTo }}</span></el-form-item>
+        <div v-if="extendBeforeIssue" class="err">调整后到期日不能早于发卡日期</div>
       </el-form>
       <template #footer>
         <el-button @click="extendVisible = false">取消</el-button>
-        <el-button type="primary" :loading="extending" @click="submitExtend">确认延期</el-button>
+        <el-button type="primary" :loading="extending" :disabled="extendBeforeIssue" @click="submitExtend">确认延期</el-button>
       </template>
     </el-dialog>
   </div>
@@ -108,12 +109,14 @@ const extendVisible = ref(false)
 const extending = ref(false)
 const extendCard = ref({})
 const extendDays = ref(30)
-const adminRole = (localStorage.getItem('admin_role') || 'admin').toLowerCase()
-const isSuperAdmin = ['admin', 'super', 'superadmin', '超级管理员', '管理员'].includes(adminRole)
-const isStoreManager = ['manager', '店长'].includes(adminRole)
-const canExtendCards = isSuperAdmin || isStoreManager
-const extendMin = isStoreManager ? -120 : -36500
-const extendMax = isStoreManager ? 120 : 36500
+const rawRole = localStorage.getItem('admin_role') || ''
+const adminName = localStorage.getItem('admin_name') || ''
+const adminRole = rawRole.toLowerCase()
+const isSuperAdmin = ['admin', 'super', 'superadmin', '超级管理员', '管理员'].includes(adminRole) || adminName.includes('超级') || (!rawRole && adminName.includes('管理员'))
+const isStoreManager = ['manager', '店长'].includes(adminRole) || adminName.includes('店长')
+const canExtendCards = isSuperAdmin || isStoreManager || !rawRole
+const extendMin = isStoreManager && !isSuperAdmin ? -120 : -36500
+const extendMax = isStoreManager && !isSuperAdmin ? 120 : 36500
 const issueForm = ref({ templateId: '', price: 0, totalTimes: 10, validFrom: '', validTo: '', remark: '', venueId: '', venueName: '', issuerName: '' })
 const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 const activeTemplates = computed(() => templates.value.filter((t) => t.status === 'active'))
@@ -153,6 +156,11 @@ function addDaysYmd(ymd, days) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 const previewNewValidTo = computed(() => { if (!extendVisible.value) return '-'; return addDaysYmd(extendCard.value.validTo, extendDays.value) })
+const extendBeforeIssue = computed(() => {
+  const from = extendCard.value.validFrom
+  if (!from || !extendVisible.value) return false
+  return previewNewValidTo.value < String(from).slice(0, 10)
+})
 function openExtend(card) {
   if (!canExtendCards) { ElMessage.warning('当前账号无延期权限'); return }
   extendCard.value = card; extendDays.value = 30; extendVisible.value = true
@@ -160,10 +168,20 @@ function openExtend(card) {
 async function submitExtend() {
   const days = Number(extendDays.value)
   if (!days) { ElMessage.warning('请填写非 0 的天数'); return }
-  if (isStoreManager && (days < -120 || days > 120)) { ElMessage.warning('店长只能调整 ±120 天以内'); return }
+  if (isStoreManager && !isSuperAdmin && (days < -120 || days > 120)) { ElMessage.warning('店长只能调整 ±120 天以内'); return }
+  if (extendBeforeIssue.value) {
+    ElMessage.error('调整后到期日不能早于发卡日期 ' + (extendCard.value.validFrom || ''))
+    return
+  }
   extending.value = true
   try {
-    const result = await post('/adminExtendCard', { cardId: extendCard.value._id, days, adminId: localStorage.getItem('admin_token') || '', operatorName: localStorage.getItem('admin_name') || '管理员' })
+    const result = await post('/adminExtendCard', {
+      cardId: extendCard.value._id,
+      days,
+      adminId: localStorage.getItem('admin_token') || '',
+      role: localStorage.getItem('admin_role') || 'admin',
+      operatorName: localStorage.getItem('admin_name') || '管理员'
+    })
     if (!result.ok) { ElMessage.error(result.msg || '延期失败'); return }
     ElMessage.success('已调整到期日：' + (result.validTo || previewNewValidTo.value))
     extendVisible.value = false
@@ -220,4 +238,5 @@ h2 { margin: 0; font-size: 20px; }
 .empty { text-align: center; color: #999; padding: 24px; }
 .muted { color: #ccc; }
 .hint { margin-left: 8px; color: #999; font-size: 12px; }
+.err { color: #c45656; font-size: 13px; margin: 0 0 8px 100px; }
 </style>
