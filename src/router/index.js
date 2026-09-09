@@ -1,76 +1,25 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { canAccess, homePath } from '../utils/auth'
 
 const routes = [
-  {
-    path: '/login',
-    name: 'Login',
-    component: () => import('../views/Login.vue')
-  },
+  { path: '/login', name: 'Login', component: () => import('../views/Login.vue') },
   {
     path: '/',
     component: () => import('../views/Layout.vue'),
     redirect: '/dashboard',
     children: [
-      {
-        path: 'dashboard',
-        name: 'Dashboard',
-        component: () => import('../views/Dashboard.vue')
-      },
-      {
-        path: 'activity',
-        name: 'Activity',
-        component: () => import('../views/Activity.vue')
-      },
-      {
-        path: 'finance',
-        name: 'Finance',
-        component: () => import('../views/Finance.vue')
-      },
-      {
-        path: 'bookings',
-        name: 'Bookings',
-        component: () => import('../views/Bookings.vue')
-      },
-      {
-        path: 'group-classes',
-        name: 'GroupClasses',
-        component: () => import('../views/GroupClasses.vue')
-      },
-      {
-        path: 'courts',
-        name: 'Courts',
-        component: () => import('../views/Courts.vue')
-      },
-      {
-        path: 'prices',
-        name: 'Prices',
-        component: () => import('../views/Prices.vue')
-      },
-      {
-        path: 'coaches',
-        name: 'Coaches',
-        component: () => import('../views/Coaches.vue')
-      },
-      {
-        path: 'coach-attendance',
-        name: 'CoachAttendance',
-        component: () => import('../views/CoachAttendance.vue')
-      },
-      {
-        path: 'staff',
-        name: 'Staff',
-        component: () => import('../views/Staff.vue')
-      },
-      {
-        path: 'users',
-        name: 'Users',
-        component: () => import('../views/Users.vue')
-      },
-      {
-        path: 'cards',
-        name: 'CardTemplates',
-        component: () => import('../views/CardTemplates.vue')
-      }
+      { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
+      { path: 'activity', name: 'Activity', component: () => import('../views/Activity.vue') },
+      { path: 'finance', name: 'Finance', component: () => import('../views/Finance.vue') },
+      { path: 'bookings', name: 'Bookings', component: () => import('../views/Bookings.vue') },
+      { path: 'group-classes', name: 'GroupClasses', component: () => import('../views/GroupClasses.vue') },
+      { path: 'courts', name: 'Courts', component: () => import('../views/Courts.vue') },
+      { path: 'prices', name: 'Prices', component: () => import('../views/Prices.vue') },
+      { path: 'coaches', name: 'Coaches', component: () => import('../views/Coaches.vue') },
+      { path: 'coach-attendance', name: 'CoachAttendance', component: () => import('../views/CoachAttendance.vue') },
+      { path: 'staff', name: 'Staff', component: () => import('../views/Staff.vue') },
+      { path: 'users', name: 'Users', component: () => import('../views/Users.vue') },
+      { path: 'cards', name: 'CardTemplates', component: () => import('../views/CardTemplates.vue') }
     ]
   }
 ]
@@ -88,9 +37,20 @@ router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('admin_token')
   if (!token) {
     next('/login')
-  } else {
-    next()
+    return
   }
+  if (to.path === '/' || to.path === '/dashboard') {
+    const home = homePath()
+    if (to.path !== home) {
+      next(home)
+      return
+    }
+  }
+  if (!canAccess(to.path)) {
+    next(homePath())
+    return
+  }
+  next()
 })
 
 export default router
