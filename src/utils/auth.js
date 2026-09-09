@@ -41,13 +41,14 @@ export const ALLOWED = {
     '/finance',
     '/coach-attendance',
     '/bookings',
+    '/coach-schedule',
     '/group-classes',
     '/courts',
     '/prices',
     '/coaches',
     '/users'
   ],
-  front: ['/bookings', '/users'],
+  front: ['/bookings', '/coach-schedule', '/users'],
   service: ['/bookings', '/users']
 }
 
