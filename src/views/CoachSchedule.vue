@@ -18,7 +18,7 @@
 
     <div class="grid-wrap" v-loading="loading">
       <div class="grid" :style="{ gridTemplateColumns: gridCols }">
-        <div class="cell head corner">教练 \ 时段</div>
+        <div class="cell head corner">教练 \\ 时段</div>
         <div v-for="t in timeSlots" :key="t" class="cell head">{{ t.slice(0, 5) }}</div>
         <template v-for="coach in coaches" :key="coach._id">
           <div class="cell time-col">{{ coach.name }}</div>
@@ -104,11 +104,12 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-const timeSlots = [
+const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
   '18:00-19:00', '19:00-20:00', '20:00-21:00'
 ]
+const timeSlots = ref(FALLBACK_SLOTS.slice())
 
 const loading = ref(false)
 const saving = ref(false)
@@ -135,7 +136,7 @@ const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 
-const gridCols = computed(() => '140px repeat(' + timeSlots.length + ', minmax(88px, 1fr))')
+const gridCols = computed(() => '140px repeat(' + timeSlots.value.length + ', minmax(88px, 1fr))')
 const weekLabel = computed(() => {
   const s = currentDate.value
   if (!s) return ''
@@ -209,16 +210,22 @@ async function loadAll() {
   if (!venueId() || !currentDate.value) return
   loading.value = true
   try {
-    const [cRes, bRes, gRes, courtRes] = await Promise.all([
+    const d = new Date(String(currentDate.value).replace(/-/g, '/'))
+    let wd = d.getDay()
+    if (wd === 0) wd = 7
+    const [cRes, bRes, gRes, courtRes, hRes] = await Promise.all([
       post('/adminGetCoaches', { venueId: venueId() }),
       post('/adminGetBookings', { venueId: venueId(), date: currentDate.value }),
       post('/adminGetGroupClasses', { venueId: venueId(), date: currentDate.value }),
-      post('/adminGetCourts', { venueId: venueId() })
+      post('/adminGetCourts', { venueId: venueId() }),
+      post('/adminGetVenueHours', { venueId: venueId(), weekday: wd }).catch(() => ({ slots: [] }))
     ])
     coaches.value = (cRes.list || []).filter((c) => c.status === 'active' || c.status === '在职' || !c.status)
     bookings.value = bRes.list || bRes.bookings || []
     groups.value = gRes.list || gRes.groupClasses || []
     courts.value = courtRes.list || []
+    const savedSlots = (hRes && (hRes.byWeekday?.[wd] || hRes.slots)) || []
+    timeSlots.value = savedSlots.length ? savedSlots.slice() : FALLBACK_SLOTS.slice()
   } catch (e) {
     ElMessage.error(e.message || '加载失败')
   } finally {
