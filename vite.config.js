@@ -32,7 +32,9 @@ const proxyPaths = [
   'adminSaveCourtPrices',
   'adminGetCoachAttendance',
   'adminGetFinance',
-  'adminGetOccupancy'
+  'adminGetOccupancy',
+  'adminGetVenueHours',
+  'adminSaveVenueHours'
 ]
 
 const proxy = {}
