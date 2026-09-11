@@ -39,6 +39,7 @@ export const ALLOWED = {
     '/dashboard',
     '/activity',
     '/finance',
+    '/occupancy',
     '/coach-attendance',
     '/bookings',
     '/coach-schedule',

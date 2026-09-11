@@ -11,6 +11,7 @@ const routes = [
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
       { path: 'activity', name: 'Activity', component: () => import('../views/Activity.vue') },
       { path: 'finance', name: 'Finance', component: () => import('../views/Finance.vue') },
+      { path: 'occupancy', name: 'Occupancy', component: () => import('../views/Occupancy.vue') },
       { path: 'bookings', name: 'Bookings', component: () => import('../views/Bookings.vue') },
       { path: 'coach-schedule', name: 'CoachSchedule', component: () => import('../views/CoachSchedule.vue') },
       { path: 'group-classes', name: 'GroupClasses', component: () => import('../views/GroupClasses.vue') },
