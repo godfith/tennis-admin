@@ -11,6 +11,7 @@
           <el-menu-item v-if="ok('/dashboard')" index="/dashboard">数据看板</el-menu-item>
           <el-menu-item v-if="ok('/activity')" index="/activity">业务动态</el-menu-item>
           <el-menu-item v-if="ok('/finance')" index="/finance">财务报表</el-menu-item>
+          <el-menu-item v-if="ok('/occupancy')" index="/occupancy">订场率</el-menu-item>
           <el-menu-item v-if="ok('/coach-attendance')" index="/coach-attendance">教练出勤</el-menu-item>
         </el-sub-menu>
         <el-sub-menu v-if="showBooking" index="grp-booking">
@@ -76,7 +77,7 @@ const currentVenueId = ref(localStorage.getItem('venue_id') || '')
 const currentVenueName = ref(localStorage.getItem('venue_name') || '选择场馆')
 const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 function ok(path) { return canAccess(path) }
-const showOverview = computed(() => ['/dashboard', '/activity', '/finance', '/coach-attendance'].some(ok))
+const showOverview = computed(() => ['/dashboard', '/activity', '/finance', '/occupancy', '/coach-attendance'].some(ok))
 const showBooking = computed(() => ['/bookings', '/coach-schedule', '/group-classes'].some(ok))
 const showVenue = computed(() => ['/courts', '/prices'].some(ok))
 const showPeople = computed(() => ['/coaches', '/staff', '/users'].some(ok))
