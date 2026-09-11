@@ -23,6 +23,7 @@
         <el-sub-menu v-if="showVenue" index="grp-venue">
           <template #title><el-icon><Grid /></el-icon><span>场地</span></template>
           <el-menu-item v-if="ok('/courts')" index="/courts">场地管理</el-menu-item>
+          <el-menu-item v-if="ok('/hours')" index="/hours">场地时间</el-menu-item>
           <el-menu-item v-if="ok('/prices')" index="/prices">场地价格</el-menu-item>
         </el-sub-menu>
         <el-sub-menu v-if="showPeople" index="grp-people">
@@ -79,7 +80,7 @@ const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d8
 function ok(path) { return canAccess(path) }
 const showOverview = computed(() => ['/dashboard', '/activity', '/finance', '/occupancy', '/coach-attendance'].some(ok))
 const showBooking = computed(() => ['/bookings', '/coach-schedule', '/group-classes'].some(ok))
-const showVenue = computed(() => ['/courts', '/prices'].some(ok))
+const showVenue = computed(() => ['/courts', '/hours', '/prices'].some(ok))
 const showPeople = computed(() => ['/coaches', '/staff', '/users'].some(ok))
 const showCard = computed(() => ok('/cards'))
 async function loadVenues() {
