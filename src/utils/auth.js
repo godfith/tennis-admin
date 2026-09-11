@@ -45,6 +45,7 @@ export const ALLOWED = {
     '/coach-schedule',
     '/group-classes',
     '/courts',
+    '/hours',
     '/prices',
     '/coaches',
     '/users'
