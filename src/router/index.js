@@ -16,6 +16,7 @@ const routes = [
       { path: 'coach-schedule', name: 'CoachSchedule', component: () => import('../views/CoachSchedule.vue') },
       { path: 'group-classes', name: 'GroupClasses', component: () => import('../views/GroupClasses.vue') },
       { path: 'courts', name: 'Courts', component: () => import('../views/Courts.vue') },
+      { path: 'hours', name: 'Hours', component: () => import('../views/Hours.vue') },
       { path: 'prices', name: 'Prices', component: () => import('../views/Prices.vue') },
       { path: 'coaches', name: 'Coaches', component: () => import('../views/Coaches.vue') },
       { path: 'coach-attendance', name: 'CoachAttendance', component: () => import('../views/CoachAttendance.vue') },
