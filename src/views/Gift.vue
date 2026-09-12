@@ -17,20 +17,24 @@
             <el-radio-button value="add">已有卡加次</el-radio-button>
           </el-radio-group>
           <el-form label-width="96px">
-            <el-form-item label="查找用户" required>
+            <el-form-item label="查找用户">
               <el-input v-model="keyword" placeholder="昵称 / 手机，多个用空格或逗号隔开" clearable @keyup.enter="searchUsers">
-                <template #append>
-                  <el-button :loading="searching" @click="searchUsers">搜索</el-button>
-                </template>
+                <template #append><el-button :loading="searching" @click="searchUsers">搜索</el-button></template>
               </el-input>
             </el-form-item>
+            <el-form-item label="按标签">
+              <el-select v-model="filterTagId" clearable placeholder="选标签直接带出这批人" style="width: 100%" @change="searchUsers">
+                <el-option v-for="t in tagList" :key="t._id" :label="t.name" :value="t._id" />
+              </el-select>
+            </el-form-item>
             <el-form-item v-if="hits.length" label="搜索结果">
-              <div class="hit-tools">
-                <el-button link type="primary" @click="pickAllHits">全选本页 {{ hits.length }} 人</el-button>
+              <div class="hit-tools"><el-button link type="primary" @click="pickAllHits">全选本页 {{ hits.length }} 人</el-button></div>
+              <div class="hit-list">
+                <div v-for="u in hits" :key="u._id" class="hit-row">
+                  <el-checkbox :model-value="hitChecks.includes(u._id)" @change="(v) => toggleHit(u, v)">{{ displayName(u) }} · {{ u.phone || '无手机' }}</el-checkbox>
+                  <el-button link type="danger" @click="removeHit(u._id)">删</el-button>
+                </div>
               </div>
-              <el-checkbox-group v-model="hitChecks" class="hit-list" @change="onHitCheck">
-                <el-checkbox v-for="u in hits" :key="u._id" :value="u._id">{{ displayName(u) }} · {{ u.phone || '无手机' }}</el-checkbox>
-              </el-checkbox-group>
             </el-form-item>
             <el-form-item label="已选">
               <div v-if="!picked.length" class="muted">还没选人，可多次搜索往里加</div>
@@ -113,6 +117,8 @@ const searching = ref(false)
 const hits = ref([])
 const hitChecks = ref([])
 const picked = ref([])
+const tagList = ref([])
+const filterTagId = ref('')
 const mode = ref('new')
 const venueList = ref([])
 const userCards = ref([])
@@ -144,32 +150,45 @@ function addPicked(list) {
 }
 async function searchUsers() {
   const raw = keyword.value.trim()
-  if (!raw) { ElMessage.warning('请输入昵称或手机号'); return }
   const parts = raw.split(/[\s,，;；]+/).filter(Boolean)
+  if (!parts.length && !filterTagId.value) { ElMessage.warning('请输入昵称/手机，或选择标签'); return }
   searching.value = true
   try {
     const found = []
-    for (const kw of parts) {
-      const result = await post('/adminGetUsers', { action: 'list', keyword: kw })
+    if (!parts.length) {
+      const result = await post('/adminGetUsers', { action: 'list', tagId: filterTagId.value })
       ;(result.list || []).forEach((u) => found.push(u))
+    } else {
+      for (const kw of parts) {
+        const result = await post('/adminGetUsers', { action: 'list', keyword: kw, tagId: filterTagId.value || undefined })
+        ;(result.list || []).forEach((u) => found.push(u))
+      }
     }
     const uniq = {}
     found.forEach((u) => { uniq[u._id] = u })
     hits.value = Object.keys(uniq).map((k) => uniq[k])
     hitChecks.value = []
     if (!hits.value.length) ElMessage.info('没找到用户')
-  } catch (e) {
-    ElMessage.error(e.message || '搜索失败')
-  } finally {
-    searching.value = false
-  }
+  } catch (e) { ElMessage.error(e.message || '搜索失败') }
+  finally { searching.value = false }
 }
 function pickAllHits() {
   hitChecks.value = hits.value.map((u) => u._id)
   addPicked(hits.value)
 }
-function onHitCheck(ids) {
-  addPicked(hits.value.filter((u) => new Set(ids).has(u._id)))
+function toggleHit(u, checked) {
+  if (checked) {
+    if (!hitChecks.value.includes(u._id)) hitChecks.value = hitChecks.value.concat(u._id)
+    addPicked([u])
+  } else {
+    hitChecks.value = hitChecks.value.filter((x) => x !== u._id)
+    picked.value = picked.value.filter((x) => x._id !== u._id)
+  }
+}
+function removeHit(id) {
+  hits.value = hits.value.filter((u) => u._id !== id)
+  hitChecks.value = hitChecks.value.filter((x) => x !== id)
+  picked.value = picked.value.filter((u) => u._id !== id)
 }
 function removePicked(id) {
   picked.value = picked.value.filter((u) => u._id !== id)
@@ -213,7 +232,7 @@ async function submit() {
     let result
     const users = picked.value.map((u) => ({ _id: u._id, userId: u._id, nickName: displayName(u), openid: u._openid || '', phone: u.phone }))
     if (mode.value === 'add') {
-      if (picked.value.length !== 1) { ElMessage.warning('给已有卡加次一次只能选一个人'); return }
+      if (picked.value.length !== 1) { ElMessage.warning('加次一次只能选一个人'); return }
       if (!form.value.cardId) { ElMessage.warning('请选择要加次的卡'); return }
       result = await post('/adminGift', authBody({ action: 'addTimes', cardId: form.value.cardId, times: form.value.times, remark: form.value.remark }))
     } else if (mode.value === 'class') {
@@ -232,13 +251,11 @@ async function submit() {
     form.value.remark = ''
     loadHistory()
     if (mode.value === 'class') loadClasses()
-  } catch (e) {
-    ElMessage.error(e.message || '请先部署 adminGift 云函数')
-  } finally {
-    saving.value = false
-  }
+  } catch (e) { ElMessage.error(e.message || '请先部署 adminGift 云函数') }
+  finally { saving.value = false }
 }
 onMounted(async () => {
+  try { tagList.value = (await post('/adminGetUsers', { action: 'listTags' })).list || [] } catch (e) {}
   try {
     venueList.value = (await post('/adminGetVenues', {})).list || []
     if (!form.value.venueId && venueList.value[0]) {
@@ -255,7 +272,8 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .sub { margin: 4px 0 0; color: #909399; font-size: 13px; }
 .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
 .card-title { font-weight: 700; margin-bottom: 12px; }
-.hit-list { display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow: auto; }
+.hit-list { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow: auto; }
+.hit-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hit-tools { margin-bottom: 4px; }
 .picked { line-height: 1.6; }
 .muted { color: #bbb; }
