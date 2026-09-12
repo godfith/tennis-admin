@@ -35,7 +35,7 @@
         <el-sub-menu v-if="showCard" index="grp-card">
           <template #title><el-icon><Ticket /></el-icon><span>会员卡</span></template>
           <el-menu-item v-if="ok('/cards')" index="/cards">卡模板管理</el-menu-item>
-          <el-menu-item v-if="ok('/gift') && canGift" index="/gift">赠课赠次</el-menu-item>
+          <el-menu-item v-if="ok('/gift') && canGift" index="/gift">体验发放</el-menu-item>
         </el-sub-menu>
       </el-menu>
     </el-aside>
