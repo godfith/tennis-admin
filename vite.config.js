@@ -18,7 +18,7 @@ proxyPaths.forEach((name) => {
 
 export default defineConfig({
   plugins: [vue()],
-  base: '/tennis/',
+  base: '/',
   server: { port: 5173, proxy },
   preview: { port: 4173 }
 })
