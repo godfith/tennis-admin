@@ -35,6 +35,7 @@
         <el-sub-menu v-if="showCard" index="grp-card">
           <template #title><el-icon><Ticket /></el-icon><span>会员卡</span></template>
           <el-menu-item v-if="ok('/cards')" index="/cards">卡模板管理</el-menu-item>
+          <el-menu-item v-if="ok('/gift') && canGift" index="/gift">赠课赠次</el-menu-item>
         </el-sub-menu>
       </el-menu>
     </el-aside>
@@ -71,6 +72,7 @@ const router = useRouter()
 const adminName = localStorage.getItem('admin_name') || '管理员'
 const roleText = roleLabel()
 const canSwitchVenue = can('switchVenue')
+const canGift = can('gift')
 const activeMenu = computed(() => route.path)
 const defaultOpeneds = ['grp-overview', 'grp-booking', 'grp-venue', 'grp-people', 'grp-card']
 const venueList = ref([])
@@ -82,7 +84,7 @@ const showOverview = computed(() => ['/dashboard', '/activity', '/finance', '/oc
 const showBooking = computed(() => ['/bookings', '/coach-schedule', '/group-classes'].some(ok))
 const showVenue = computed(() => ['/courts', '/hours', '/prices'].some(ok))
 const showPeople = computed(() => ['/coaches', '/staff', '/users'].some(ok))
-const showCard = computed(() => ok('/cards'))
+const showCard = computed(() => ok('/cards') || (ok('/gift') && canGift))
 async function loadVenues() {
   try {
     const res = await fetch(base + '/adminGetVenues', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })

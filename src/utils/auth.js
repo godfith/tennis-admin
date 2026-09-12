@@ -39,18 +39,15 @@ export const ALLOWED = {
     '/dashboard',
     '/activity',
     '/finance',
-    '/occupancy',
     '/coach-attendance',
     '/bookings',
-    '/coach-schedule',
     '/group-classes',
     '/courts',
-    '/hours',
     '/prices',
     '/coaches',
     '/users'
   ],
-  front: ['/bookings', '/coach-schedule', '/users'],
+  front: ['/bookings', '/users'],
   service: ['/bookings', '/users']
 }
 
@@ -76,7 +73,8 @@ export function can(action) {
     editPrice: k === 'admin' || k === 'manager',
     editCoach: k === 'admin' || k === 'manager',
     editStaff: k === 'admin',
-    editTemplate: k === 'admin'
+    editTemplate: k === 'admin',
+    gift: k === 'admin'
   }
   return !!map[action]
 }

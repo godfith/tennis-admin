@@ -22,7 +22,8 @@ const routes = [
       { path: 'coach-attendance', name: 'CoachAttendance', component: () => import('../views/CoachAttendance.vue') },
       { path: 'staff', name: 'Staff', component: () => import('../views/Staff.vue') },
       { path: 'users', name: 'Users', component: () => import('../views/Users.vue') },
-      { path: 'cards', name: 'CardTemplates', component: () => import('../views/CardTemplates.vue') }
+      { path: 'cards', name: 'CardTemplates', component: () => import('../views/CardTemplates.vue') },
+      { path: 'gift', name: 'Gift', component: () => import('../views/Gift.vue') }
     ]
   }
 ]
