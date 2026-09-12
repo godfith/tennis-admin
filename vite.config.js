@@ -4,38 +4,7 @@ import vue from '@vitejs/plugin-vue'
 const CLOUD_BASE = 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 
 const proxyPaths = [
-  'adminLogin',
-  'adminGetVenues',
-  'adminGetCourts',
-  'adminSaveCourt',
-  'adminGetBookings',
-  'adminSaveBooking',
-  'adminSearchUsers',
-  'adminGetUsers',
-  'adminGetCardTemplates',
-  'adminSaveCardTemplate',
-  'adminGetMemberCards',
-  'adminIssueCard',
-  'adminRefundCard',
-  'adminExtendCard',
-  'adminGetCoaches',
-  'adminSaveCoach',
-  'adminGetDashboard',
-  'adminGetGroupClasses',
-  'adminSaveGroupClass',
-  'adminEnrollGroupClass',
-  'adminGetGroupEnrollments',
-  'adminGetActivityLogs',
-  'adminGetStaff',
-  'adminSaveStaff',
-  'adminGetCourtPrices',
-  'adminSaveCourtPrices',
-  'adminGetCoachAttendance',
-  'adminGetFinance',
-  'adminGetOccupancy',
-  'adminGetVenueHours',
-  'adminSaveVenueHours',
-  'adminGift'
+  'adminLogin','adminGetVenues','adminGetCourts','adminSaveCourt','adminGetBookings','adminSaveBooking','adminSearchUsers','adminGetUsers','adminGetCardTemplates','adminSaveCardTemplate','adminGetMemberCards','adminIssueCard','adminRefundCard','adminExtendCard','adminGetCoaches','adminSaveCoach','adminGetDashboard','adminGetGroupClasses','adminSaveGroupClass','adminEnrollGroupClass','adminGetGroupEnrollments','adminGetActivityLogs','adminGetStaff','adminSaveStaff','adminGetCourtPrices','adminSaveCourtPrices','adminGetCoachAttendance','adminGetFinance','adminGetOccupancy','adminGetVenueHours','adminSaveVenueHours','adminGift'
 ]
 
 const proxy = {}
@@ -49,12 +18,7 @@ proxyPaths.forEach((name) => {
 
 export default defineConfig({
   plugins: [vue()],
-  base: './',
-  server: {
-    port: 5173,
-    proxy
-  },
-  preview: {
-    port: 4173
-  }
+  base: '/tennis/',
+  server: { port: 5173, proxy },
+  preview: { port: 4173 }
 })
