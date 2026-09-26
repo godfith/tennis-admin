@@ -42,10 +42,12 @@
       <el-table-column label="角色" width="110"><template #default="{ row }"><el-tag size="small" :type="roleTag(row.role)">{{ roleLabel(row.role) }}</el-tag></template></el-table-column>
       <el-table-column prop="venueName" label="所属场馆" min-width="160" />
       <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">{{ row.status === 'active' ? '启用' : '停用' }}</el-tag></template></el-table-column>
-      <el-table-column label="操作" width="220" fixed="right">
+      <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" @click="openEditAdmin(row)">编辑</el-button>
           <el-button link type="primary" @click="resetPwd(row)">重置密码</el-button>
           <el-button link type="warning" @click="toggleAdmin(row)">{{ row.status === 'active' ? '停用' : '启用' }}</el-button>
+          <el-button link type="danger" @click="onDeleteAdmin(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -81,6 +83,25 @@
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="adminVisible" title="编辑登录账号" width="480px" destroy-on-close>
+      <el-form label-width="100px">
+        <el-form-item label="登录账号"><el-input :model-value="adminForm.username" disabled /></el-form-item>
+        <el-form-item label="显示名"><el-input v-model="adminForm.name" /></el-form-item>
+        <el-form-item label="角色">
+          <el-select v-model="adminForm.role" style="width: 100%" :disabled="adminForm.role === 'admin'">
+            <el-option label="前台 / 店员" value="front" />
+            <el-option label="客服" value="service" />
+            <el-option label="店长" value="manager" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="新密码"><el-input v-model="adminForm.password" type="password" show-password placeholder="不改请留空" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="adminVisible = false">取消</el-button>
+        <el-button type="primary" :loading="adminSaving" @click="saveAdmin">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 <script setup>
@@ -92,6 +113,9 @@ const loading = ref(false)
 const adminLoading = ref(false)
 const saving = ref(false)
 const visible = ref(false)
+const adminVisible = ref(false)
+const adminSaving = ref(false)
+const adminForm = ref({ _id: '', username: '', name: '', role: 'front', password: '' })
 const filterRole = ref('')
 const venueName = ref(localStorage.getItem('venue_name') || '')
 const form = ref({ _id: '', name: '', phone: '', role: 'front', specialty: '', sort: 0, active: true, remark: '', openLogin: true, username: '', password: '' })
@@ -177,10 +201,48 @@ async function toggleStatus(row) {
 }
 async function onDelete(row) {
   try {
-    await ElMessageBox.confirm('确定删除员工「' + row.name + '」？不会自动删登录账号。', '警告', { type: 'warning' })
+    await ElMessageBox.confirm('确定删除员工「' + row.name + '」？将同时删除同名/同手机号的登录账号。', '警告', { type: 'warning' })
     const result = await post('/adminSaveStaff', { action: 'delete', id: row._id })
     if (!result.ok) { ElMessage.error(result.msg || '删除失败'); return }
-    ElMessage.success('已删除'); loadData()
+    const acc = await post('/adminSaveAdmin', { action: 'deleteMatch', phone: row.phone || '', name: row.name || '', venueId: venueId() })
+    ElMessage.success(acc.ok && acc.deleted ? '员工和登录账号已删除' : '员工已删除')
+    loadData()
+  } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || '失败') }
+}
+function openEditAdmin(row) {
+  if (row.role === 'admin' || String(row.username).toLowerCase() === 'admin') {
+    ElMessage.warning('超级管理员请在库里改，这里只改店员账号')
+    return
+  }
+  adminForm.value = { _id: row._id, username: row.username, name: row.name || '', role: row.role || 'front', password: '' }
+  adminVisible.value = true
+}
+async function saveAdmin() {
+  adminSaving.value = true
+  try {
+    const result = await post('/adminSaveAdmin', {
+      action: 'update',
+      id: adminForm.value._id,
+      name: adminForm.value.name,
+      role: adminForm.value.role,
+      password: adminForm.value.password || '',
+      venueId: venueId(),
+      venueName: venueName.value
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
+    ElMessage.success('账号已更新')
+    adminVisible.value = false
+    loadAdmins()
+  } catch (e) { ElMessage.error(e.message || '失败') }
+  finally { adminSaving.value = false }
+}
+async function onDeleteAdmin(row) {
+  try {
+    await ElMessageBox.confirm('确定删除登录账号「' + row.username + '」？删除后无法登录后台。', '警告', { type: 'warning' })
+    const result = await post('/adminSaveAdmin', { action: 'delete', id: row._id })
+    if (!result.ok) { ElMessage.error(result.msg || '删除失败'); return }
+    ElMessage.success('账号已删除')
+    loadAdmins()
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || '失败') }
 }
 async function resetPwd(row) {
