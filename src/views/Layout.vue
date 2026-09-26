@@ -94,9 +94,16 @@ async function loadVenues() {
     const lockedId = localStorage.getItem('admin_venue_id') || ''
     if (!canSwitchVenue && lockedId) {
       list = list.filter((v) => (v.venueId || v._id) === lockedId)
+      venueList.value = list
       if (list[0]) selectVenue(list[0], true)
+      return
     }
     venueList.value = list
+    if (!canSwitchVenue && list.length) {
+      const found = list.find((v) => (v.venueId || v._id) === currentVenueId.value) || list[0]
+      selectVenue(found, true)
+      return
+    }
     if (!currentVenueId.value && venueList.value.length) selectVenue(venueList.value[0], true)
     else if (currentVenueId.value) {
       const found = venueList.value.find((v) => (v.venueId || v._id) === currentVenueId.value)
@@ -118,7 +125,7 @@ function selectVenue(v, silent) {
 }
 function onVenueCommand(v) { selectVenue(v) }
 function logout() {
-  ;['admin_token', 'admin_name', 'admin_role', 'admin_venue_id', 'admin_venue_name'].forEach((k) => localStorage.removeItem(k))
+  ;['admin_token', 'admin_name', 'admin_role', 'admin_venue_id', 'admin_venue_name', 'venue_id', 'venue_name'].forEach((k) => localStorage.removeItem(k))
   router.push('/login')
 }
 onMounted(loadVenues)
