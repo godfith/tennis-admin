@@ -29,6 +29,8 @@ const LOGIN_URL = import.meta.env.DEV
   ? '/api/adminLogin'
   : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com/adminLogin'
 
+const VENUE_KEYS = ['admin_venue_id', 'admin_venue_name', 'venue_id', 'venue_name']
+
 async function onLogin() {
   if (!username.value || !password.value) {
     ElMessage.warning('请输入账号和密码')
@@ -48,6 +50,7 @@ async function onLogin() {
       return
     }
     const admin = result.admin || {}
+    VENUE_KEYS.forEach((k) => localStorage.removeItem(k))
     localStorage.setItem('admin_token', admin._id || admin.id || '')
     localStorage.setItem('admin_name', admin.name || admin.username || '')
     localStorage.setItem('admin_role', admin.role || 'admin')
@@ -58,9 +61,6 @@ async function onLogin() {
       localStorage.setItem('admin_venue_name', vname)
       localStorage.setItem('venue_id', vid)
       localStorage.setItem('venue_name', vname)
-    } else {
-      localStorage.removeItem('admin_venue_id')
-      localStorage.removeItem('admin_venue_name')
     }
     ElMessage.success('登录成功')
     router.push(homePath())
