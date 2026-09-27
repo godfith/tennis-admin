@@ -257,9 +257,11 @@
         <el-form-item label="客户">
           <div v-if="!isLockBooking(current)">
             <el-button type="primary" link @click="goUser(current)">{{ current.userName || '-' }}</el-button>
-            <div class="phone-link" @click="goUser(current)">{{ current.phone || '点此查看用户' }}</div>
           </div>
           <span v-else>锁场</span>
+        </el-form-item>
+        <el-form-item v-if="current && !isLockBooking(current)" label="手机号">
+          <span class="phone-link" @click="goUser(current)">{{ current.phone || detailPhone || '暂无号码' }}</span>
         </el-form-item>
         <el-form-item label="使用卡">
           <div class="row-edit">
@@ -337,6 +339,7 @@ const detailVisible = ref(false)
 const editField = ref('')
 const editForm = ref({ court: '', date: '', time: '', cardId: '', cardName: '', amount: 0, remark: '' })
 const current = ref(null)
+const detailPhone = ref('')
 const currentGroup = ref(null)
 
 const bookForm = ref({
@@ -533,6 +536,8 @@ function onCellClick(courtName, time) {
   const b = getBooking(courtName, time)
   if (b) {
     current.value = b
+    detailPhone.value = b.phone || ''
+    fillBookingPhone(b)
     editField.value = ''
     editForm.value = {
       court: b.court || '',
@@ -800,6 +805,23 @@ async function saveDetail() {
   } catch (e) {
     ElMessage.error(e.message || '保存失败，请覆盖部署 adminSaveBooking')
   } finally { saving.value = false }
+}
+async function fillBookingPhone(b) {
+  if (!b) return
+  if (b.phone) { detailPhone.value = b.phone; return }
+  const uid = b.memberId || b.userId || b.user_id
+  const name = b.userName || ''
+  try {
+    const q = b.phone || name || uid
+    if (!q) return
+    const result = await post('/adminGetUsers', { keyword: String(q) })
+    const list = result.list || []
+    const hit = list.find((u) => String(u._id) === String(uid) || u.phone === b.phone || (name && (u.nickName === name || u.nickname === name))) || list[0]
+    if (hit && hit.phone) {
+      detailPhone.value = hit.phone
+      current.value = { ...b, phone: hit.phone }
+    }
+  } catch (e) {}
 }
 function goUser(b) {
   const q = b.phone || b.userName || b.memberId || b.userId || ''
