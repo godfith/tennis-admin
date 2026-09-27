@@ -1059,6 +1059,15 @@ async function submitIssue() {
     ElMessage.warning('用户信息异常')
     return
   }
+  const tpl = selectedTemplate.value
+  const who = batchMode.value ? `${selected.value.length} 人` : displayName(currentUser.value)
+  try {
+    await ElMessageBox.confirm(
+      `确认给 ${who} 发放「${tpl ? tpl.name : '会员卡'}」，实收 ¥${Number(issueForm.value.price || 0).toFixed(2)}？`,
+      '发卡确认',
+      { type: 'warning', confirmButtonText: '确认发卡' }
+    )
+  } catch (e) { return }
   issuing.value = true
   try {
     let ok = 0

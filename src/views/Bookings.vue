@@ -52,9 +52,9 @@
             </template>
             <template v-else-if="getBooking(c.name, t)">
               <div class="booked-user">
-                {{ getBooking(c.name, t).status === 'locked' ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
+                {{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
               </div>
-              <div class="booked-status">{{ getBooking(c.name, t).status === 'locked' ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
+              <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
             </template>
             <template v-else>
               <div class="free-text">可约</div>
@@ -229,31 +229,68 @@
     </el-dialog>
 
     <!-- 普通预约详情 -->
-    <el-dialog v-model="detailVisible" title="预约详情" width="420px">
-      <el-descriptions v-if="current" :column="1" border>
-        <el-descriptions-item label="订单号">{{ current.orderNo || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="场地">{{ current.court }}</el-descriptions-item>
-        <el-descriptions-item label="日期">{{ shortDate(current.date) }}</el-descriptions-item>
-        <el-descriptions-item label="时段">{{ current.time }}</el-descriptions-item>
-        <el-descriptions-item label="客户">
-          <el-button v-if="current.status !== 'locked'" type="primary" link @click="goUser(current)">{{ current.userName || '-' }}</el-button>
+    <el-dialog v-model="detailVisible" title="预约详情" width="480px">
+      <el-form v-if="current" label-width="88px">
+        <el-form-item label="订单号">{{ current.orderNo || '-' }}</el-form-item>
+        <el-form-item label="场地">
+          <div class="row-edit">
+            <el-select v-if="editField==='court'" v-model="editForm.court" style="flex:1">
+              <el-option v-for="c in courts" :key="c._id" :label="c.name" :value="c.name" />
+            </el-select>
+            <span v-else>{{ editForm.court }}</span>
+            <el-button link type="primary" @click="editField = editField==='court' ? '' : 'court'">{{ editField==='court' ? '完成' : '更改场地' }}</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="日期">
+          <div class="row-edit">
+            <el-date-picker v-if="editField==='datetime'" v-model="editForm.date" type="date" value-format="YYYY-MM-DD" />
+            <span v-else>{{ shortDate(editForm.date) }}</span>
+            <el-button link type="primary" @click="editField = editField==='datetime' ? '' : 'datetime'">{{ editField==='datetime' ? '完成' : '更改日期/时段' }}</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="时段">
+          <el-select v-if="editField==='datetime'" v-model="editForm.time" style="width:100%">
+            <el-option v-for="t in timeSlots" :key="t" :label="t" :value="t" />
+          </el-select>
+          <span v-else>{{ editForm.time }}</span>
+        </el-form-item>
+        <el-form-item label="客户">
+          <div v-if="!isLockBooking(current)">
+            <el-button type="primary" link @click="goUser(current)">{{ current.userName || '-' }}</el-button>
+            <div class="phone-link" @click="goUser(current)">{{ current.phone || '点此查看用户' }}</div>
+          </div>
           <span v-else>锁场</span>
-        </el-descriptions-item>
-        <el-descriptions-item label="使用卡">
-          <template v-if="current.cardName">
-            {{ current.cardName }}
-            <span v-if="current.cardRemaining != null">（剩{{ current.cardRemaining }}）</span>
-          </template>
-          <template v-else>未使用卡</template>
-        </el-descriptions-item>
-        <el-descriptions-item v-if="current.coachName" label="教练">{{ current.coachName }}</el-descriptions-item>
-        <el-descriptions-item label="备注">{{ current.remark || '-' }}</el-descriptions-item>
-      </el-descriptions>
+        </el-form-item>
+        <el-form-item label="使用卡">
+          <div class="row-edit">
+            <el-select v-if="editField==='card'" v-model="editForm.cardId" clearable placeholder="不使用卡" style="flex:1" :loading="cardLoading">
+              <el-option label="不使用卡" value="" />
+              <el-option v-for="c in memberCards" :key="c._id" :label="cardOptionLabel(c)" :value="c._id" />
+            </el-select>
+            <span v-else>{{ editForm.cardName || '未使用卡' }}</span>
+            <el-button link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="本次实收">
+          <div class="row-edit">
+            <el-input-number v-if="editField==='amount'" v-model="editForm.amount" :min="0" :precision="2" :step="10" />
+            <span v-else>¥{{ Number(editForm.amount || 0).toFixed(2) }}</span>
+            <el-button link type="primary" @click="editField = editField==='amount' ? '' : 'amount'">{{ editField==='amount' ? '完成' : '修改金额' }}</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="备注">
+          <div class="row-edit">
+            <el-input v-if="editField==='remark'" v-model="editForm.remark" type="textarea" :rows="2" />
+            <span v-else>{{ editForm.remark || '-' }}</span>
+            <el-button link type="primary" @click="editField = editField==='remark' ? '' : 'remark'">{{ editField==='remark' ? '完成' : '修改备注' }}</el-button>
+          </div>
+        </el-form-item>
+      </el-form>
       <template #footer>
-        <el-button v-if="current && current.status === 'locked'" type="primary" @click="lockToBook">转为预约</el-button>
-        <el-button v-if="canCancelBook && current && current.status === 'locked'" type="warning" @click="cancelBook">解锁</el-button>
-        <el-button v-if="canCancelBook && current && current.status !== 'locked'" type="warning" @click="cancelBook">取消预约</el-button>
-        <el-button v-if="current && current.status !== 'locked'" type="primary" link @click="goUser(current)">查看用户</el-button>
+        <el-button v-if="current && isLockBooking(current)" type="primary" @click="lockToBook">转为预约</el-button>
+        <el-button v-if="canCancelBook && current && isLockBooking(current)" type="warning" @click="cancelBook">解锁</el-button>
+        <el-button v-if="canCancelBook && current && !isLockBooking(current)" type="warning" @click="cancelBook">取消预约</el-button>
+        <el-button type="primary" :loading="saving" @click="saveDetail">保存修改</el-button>
         <el-button @click="detailVisible = false">关闭</el-button>
       </template>
     </el-dialog>
@@ -297,6 +334,8 @@ const bookMode = ref('book')
 const bookVisible = ref(false)
 const groupVisible = ref(false)
 const detailVisible = ref(false)
+const editField = ref('')
+const editForm = ref({ court: '', date: '', time: '', cardId: '', cardName: '', amount: 0, remark: '' })
 const current = ref(null)
 const currentGroup = ref(null)
 
@@ -392,17 +431,20 @@ function isCardUsable(card, dateStr, timeStr) {
   if (card.validFrom && dateStr < card.validFrom) return false
   if (card.validTo && dateStr > card.validTo) return false
   if (card.type === 'times' || card.type === 'coach' || card.type === 'group') {
-    return (card.remainingTimes || 0) > 0
+    if ((card.remainingTimes || 0) <= 0) return false
   }
-  if (card.type === 'time') {
-    const rule = card.timeRule
-    if (!rule || rule.mode === 'unlimited' || rule.mode === 'all') return true
+  const rule = card.timeRule || card.time_rule
+  if (rule && typeof rule === 'string') {
+    try { card.timeRule = JSON.parse(rule) } catch (e) {}
+  }
+  const ruleObj = card.timeRule || (rule && typeof rule === 'object' ? rule : null)
+  if (ruleObj && ruleObj.mode !== 'unlimited' && ruleObj.mode !== 'all') {
     const d = new Date(dateStr.replace(/-/g, '/'))
     let weekday = d.getDay()
     if (weekday === 0) weekday = 7
     const slotStart = (timeStr || '').split('-')[0]
-    if (rule.mode === 'rules' && Array.isArray(rule.rules)) {
-      for (const r of rule.rules) {
+    if (ruleObj.mode === 'rules' && Array.isArray(ruleObj.rules)) {
+      for (const r of ruleObj.rules) {
         if (!(r.weekdays || []).includes(weekday)) continue
         const slots = r.timeSlots || []
         if (!slots.length) {
@@ -425,12 +467,18 @@ async function post(path, body = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   })
-  const data = await res.json()
-  return data.body
-    ? typeof data.body === 'string'
-      ? JSON.parse(data.body)
-      : data.body
+  const text = await res.text()
+  let data
+  try { data = text ? JSON.parse(text) : {} } catch (e) {
+    throw new Error('接口异常 ' + res.status)
+  }
+  const result = data.body
+    ? typeof data.body === 'string' ? JSON.parse(data.body) : data.body
     : data
+  if (!res.ok && result && result.ok == null) {
+    throw new Error(result.msg || ('HTTP ' + res.status))
+  }
+  return result
 }
 
 function shortDate(v) {
@@ -463,7 +511,7 @@ function getPrice(courtName, time) {
 function cellClass(courtName, time) {
   if (getGroupClass(courtName, time)) return 'group'
   const b = getBooking(courtName, time)
-  if (b && b.status === 'locked') return 'locked'
+  if (b && isLockBooking(b)) return 'locked'
   if (b) return 'booked'
   return 'free'
 }
@@ -485,6 +533,16 @@ function onCellClick(courtName, time) {
   const b = getBooking(courtName, time)
   if (b) {
     current.value = b
+    editField.value = ''
+    editForm.value = {
+      court: b.court || '',
+      date: shortDate(b.date),
+      time: b.time || '',
+      cardId: b.cardId || b.card_id || '',
+      cardName: b.cardName || '',
+      amount: Number(b.amount || 0),
+      remark: b.remark || ''
+    }
     detailVisible.value = true
     return
   }
@@ -638,28 +696,50 @@ function onCardChange() {
   if (isCoachCard.value) loadCoaches()
 }
 
+function isLockBooking(b) {
+  if (!b) return false
+  if (b.status === 'locked') return true
+  if (b.source === 'lock' || b.source === 'court_lock') return true
+  const name = String(b.userName || b.displayUser || '')
+  const remark = String(b.remark || '')
+  return name === '锁场' || remark.startsWith('[锁场]')
+}
 async function submitLock() {
   if (!venueId()) { ElMessage.warning('请先选择场馆'); return }
   saving.value = true
+  const payload = {
+    court: bookForm.value.court,
+    date: bookForm.value.date,
+    time: bookForm.value.time,
+    venueId: venueId(),
+    venueName: venueName.value,
+    userName: '锁场',
+    remark: '[锁场] ' + (bookForm.value.remark || '锁场'),
+    operatorName: localStorage.getItem('admin_name') || '管理员',
+    source: 'lock'
+  }
   try {
-    const result = await post('/adminSaveBooking', {
-      action: 'lock',
-      data: {
-        court: bookForm.value.court,
-        date: bookForm.value.date,
-        time: bookForm.value.time,
-        venueId: venueId(),
-        venueName: venueName.value,
-        remark: bookForm.value.remark || '锁场',
-        operatorName: localStorage.getItem('admin_name') || '管理员'
-      }
-    })
-    if (!result.ok) { ElMessage.error(result.msg || '锁场失败'); return }
+    let result
+    try {
+      result = await post('/adminSaveBooking', { action: 'lock', data: payload })
+    } catch (e) {
+      result = { ok: false }
+    }
+    if (!result || result.ok === false) {
+      result = await post('/adminSaveBooking', { action: 'add', data: payload })
+    }
+    if (!result.ok) {
+      ElMessage.error(result.msg || '锁场失败')
+      return
+    }
     ElMessage.success('已锁场')
     bookVisible.value = false
     loadAll()
-  } catch (e) { ElMessage.error(e.message || '网络错误') }
-  finally { saving.value = false }
+  } catch (e) {
+    ElMessage.error('锁场失败：请把 adminSaveBooking.js 用上传 zip 覆盖部署')
+  } finally {
+    saving.value = false
+  }
 }
 function lockToBook() {
   const b = current.value
@@ -683,6 +763,43 @@ function lockToBook() {
   bookVisible.value = true
   loadCoaches()
   loadTemplates()
+}
+async function toggleEditCard() {
+  if (editField.value === 'card') { editField.value = ''; return }
+  editField.value = 'card'
+  const uid = current.value && (current.value.memberId || current.value.userId || current.value.user_id)
+  const openid = current.value && (current.value.openid || current.value._openid)
+  if (!uid && !openid) return
+  cardLoading.value = true
+  try {
+    const cards = await post('/adminGetMemberCards', { userId: uid, openid: openid || '' })
+    memberCards.value = (cards.list || []).filter((c) => c.status === 'active' && c.type !== 'group')
+  } finally { cardLoading.value = false }
+}
+async function saveDetail() {
+  if (!current.value || !(current.value._id || current.value.id)) return
+  saving.value = true
+  try {
+    const result = await post('/adminSaveBooking', {
+      action: 'update',
+      id: current.value._id || current.value.id,
+      data: {
+        court: editForm.value.court,
+        date: editForm.value.date,
+        time: editForm.value.time,
+        remark: editForm.value.remark,
+        amount: editForm.value.amount,
+        cardId: editForm.value.cardId,
+        operatorName: localStorage.getItem('admin_name') || '管理员'
+      }
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
+    ElMessage.success('已保存')
+    detailVisible.value = false
+    loadAll()
+  } catch (e) {
+    ElMessage.error(e.message || '保存失败，请覆盖部署 adminSaveBooking')
+  } finally { saving.value = false }
 }
 function goUser(b) {
   const q = b.phone || b.userName || b.memberId || b.userId || ''
@@ -730,24 +847,14 @@ async function submitBook() {
       if (!unlocked.ok) { ElMessage.error(unlocked.msg || '解锁失败'); return }
     }
     if (bookForm.value.issueTpl) {
-      const issued = await post('/adminIssueCard', {
-        userId: bookForm.value.memberKey,
-        openid: bookForm.value.userOpenid || '',
-        userName: bookForm.value.userName,
-        templateId: bookForm.value.issueTpl,
-        price: Number(bookForm.value.payAmount) || 0,
-        venueId: venueId(),
-        venueName: venueName.value,
-        issuerName: localStorage.getItem('admin_name') || '前台',
-        remark: '订场同时发卡'
-      })
-      if (!issued.ok) { ElMessage.error(issued.msg || '发卡失败'); return }
-      const cards = await post('/adminGetMemberCards', { userId: bookForm.value.memberKey, openid: bookForm.value.userOpenid || '' })
-      memberCards.value = (cards.list || []).filter((c) => c.status === 'active')
-      if (issued.id) {
-        bookForm.value.cardId = String(issued.id)
-        selCard = memberCards.value.find((c) => String(c._id) === String(issued.id)) || { _id: String(issued.id), cardName: '新发卡', type: 'times' }
-      }
+      const tpl = templates.value.find((t) => t._id === bookForm.value.issueTpl)
+      try {
+        await ElMessageBox.confirm(
+          `确认给 ${bookForm.value.userName} 发放「${tpl ? tpl.name : '会员卡'}」，实收 ¥${Number(bookForm.value.payAmount || 0).toFixed(2)}？`,
+          '发卡确认',
+          { type: 'warning', confirmButtonText: '确认发卡' }
+        )
+      } catch (e) { return }
     }
     const result = await post('/adminSaveBooking', {
       action: 'add',
@@ -768,7 +875,10 @@ async function submitBook() {
         cardType: selCard ? selCard.type : '',
         coachId: bookForm.value.coachId || '',
         coachName,
-        amount: Number(bookForm.value.payAmount) || 0
+        amount: Number(bookForm.value.payAmount) || 0,
+        issueTemplateId: bookForm.value.issueTpl || '',
+        issuePrice: Number(bookForm.value.payAmount) || 0,
+        operatorName: localStorage.getItem('admin_name') || '管理员'
       }
     })
     if (!result.ok) {
@@ -833,7 +943,7 @@ async function cancelBook() {
   if (!current.value?._id) return
   try {
     await ElMessageBox.confirm(
-      current.value.status === 'locked'
+      isLockBooking(current.value)
         ? '确定解锁该时段？'
         : ('确定取消该预约？' + (current.value.cardId ? '（将退还次数）' : '')),
       '提示',
@@ -844,7 +954,7 @@ async function cancelBook() {
       ElMessage.error(result.msg || '取消失败')
       return
     }
-    ElMessage.success(current.value.status === 'locked' ? '已解锁' : '已取消')
+    ElMessage.success(isLockBooking(current.value) ? '已解锁' : '已取消')
     detailVisible.value = false
     loadAll()
   } catch (e) {
@@ -900,7 +1010,7 @@ async function loadAll() {
       (c) => c.status === 'open' || c.status === '开门' || c.status === 1 || c.status === true
     )
     courts.value = openList.length ? openList : list
-    bookings.value = (bRes.list || []).filter((b) => b.status === 'booked')
+    bookings.value = (bRes.list || []).filter((b) => b.status === 'booked' || b.status === 'locked' || String(b.userName || '') === '锁场')
     groupClasses.value = (gRes.list || []).filter((g) => g.status === 'open')
     const savedSlots = (hRes && (hRes.byWeekday?.[wd] || hRes.slots)) || []
     const extra = []
@@ -965,6 +1075,8 @@ h2 { margin: 0; font-size: 20px; }
 .slot.locked { background: #eceff1; color: #546e7a; }
 .slot.locked:hover { background: #cfd8dc; }
 .mode-switch { margin-bottom: 12px; }
+.row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
+.phone-link { color: #1a5c3a; cursor: pointer; font-size: 13px; }
 .slot.group { background: #fce4ec; color: #c2185b; }
 .slot.group:hover { background: #f8bbd0; }
 .booked-user {
