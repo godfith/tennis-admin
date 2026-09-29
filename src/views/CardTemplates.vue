@@ -71,6 +71,10 @@
           </el-form-item>
         </template>
 
+        <el-form-item label="每日最多约">
+          <el-input-number v-model="form.timeRule.maxHoursPerDay" :min="0" :max="24" :step="1" />
+          <span class="hint">小时，0 = 不限制</span>
+        </el-form-item>
         <el-form-item v-if="form.type !== 'group'" label="可用规则">
           <el-radio-group v-model="form.timeRule.mode">
             <el-radio label="unlimited" value="unlimited">有效期内任意时间</el-radio>
@@ -141,17 +145,18 @@ function parseRule(raw) {
   if (typeof r === 'string') {
     try { r = JSON.parse(r) } catch (e) { return { mode: 'unlimited', rules: [emptyRule()] } }
   }
-  if (r.mode === 'unlimited' || r.mode === 'all') return { mode: 'unlimited', rules: r.rules && r.rules.length ? r.rules : [emptyRule()] }
+  const maxH = Number(r.maxHoursPerDay) > 0 ? Number(r.maxHoursPerDay) : 0
+  if (r.mode === 'unlimited' || r.mode === 'all') return { mode: 'unlimited', rules: r.rules && r.rules.length ? r.rules : [emptyRule()], maxHoursPerDay: maxH }
   const rules = Array.isArray(r.rules) && r.rules.length ? r.rules.map((x) => ({
     weekdays: (x.weekdays || [1, 2, 3, 4, 5]).map(Number),
     unlimited: x.unlimited !== false,
     timeSlots: (x.timeSlots && x.timeSlots.length) ? x.timeSlots.map((s) => ({ start: s.start, end: s.end })) : [{ start: '10:00', end: '18:00' }]
   })) : [emptyRule()]
-  return { mode: 'rules', rules }
+  return { mode: 'rules', rules, maxHoursPerDay: maxH }
 }
 const emptyForm = () => ({
   _id: '', name: '', type: 'times', totalTimes: 10, durationDays: 30,
-  timeRule: { mode: 'unlimited', rules: [emptyRule()] }, active: true, description: ''
+  timeRule: { mode: 'unlimited', rules: [emptyRule()], maxHoursPerDay: 0 }, active: true, description: ''
 })
 const form = ref(emptyForm())
 const base = import.meta.env.DEV
@@ -175,12 +180,13 @@ function weekdayText(days) {
 }
 function timeRuleText(rule) {
   const r = parseRule(rule)
-  if (r.mode === 'unlimited') return '有效期内任意时间'
+  const cap = r.maxHoursPerDay > 0 ? `（每天最多${r.maxHoursPerDay}小时）` : ''
+  if (r.mode === 'unlimited') return '有效期内任意时间' + cap
   return r.rules.map((g) => {
     const days = weekdayText(g.weekdays) || '未选星期'
     const slots = (g.timeSlots || []).map((s) => `${s.start}-${s.end}`).join('、') || '全天'
     return `周${days} ${slots}`
-  }).join('；')
+  }).join('；') + cap
 }
 function addRule() { form.value.timeRule.rules.push(emptyRule()) }
 function removeRule(i) { form.value.timeRule.rules.splice(i, 1) }
@@ -230,8 +236,8 @@ async function save() {
     const payloadRule = form.value.type === 'group'
       ? null
       : (form.value.timeRule.mode === 'unlimited'
-        ? { mode: 'unlimited' }
-        : { mode: 'rules', rules: form.value.timeRule.rules })
+        ? { mode: 'unlimited', maxHoursPerDay: Number(form.value.timeRule.maxHoursPerDay) || 0 }
+        : { mode: 'rules', rules: form.value.timeRule.rules, maxHoursPerDay: Number(form.value.timeRule.maxHoursPerDay) || 0 })
     const data = {
       name: form.value.name,
       type: normalizeType(form.value.type),
