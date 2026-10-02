@@ -3,9 +3,10 @@
     <div class="page-header">
       <div>
         <h2>用户管理</h2>
-        <p class="sub">点昵称看详情。可按姓名/手机/会员号/标签查找，勾选后批量发卡。</p>
+        <p class="sub">点昵称看详情。批量发卡：先选卡，再按姓名/手机/标签搜人多选发放。</p>
       </div>
       <div class="toolbar">
+        <el-button v-if="backFrom" @click="goBack">返回{{ backLabel }}</el-button>
         <el-button type="primary" @click="regVisible = true">新增用户</el-button>
         <el-button :loading="loading" @click="loadData">刷新</el-button>
       </div>
@@ -22,6 +23,17 @@
       <el-select v-model="filterTagId" clearable placeholder="标签" style="width: 140px" @change="loadData">
         <el-option v-for="t in tagList" :key="t._id" :label="t.name" :value="t._id" />
       </el-select>
+      <el-select v-model="filterCardType" clearable placeholder="卡券类型" style="width: 120px" @change="loadData">
+        <el-option label="次卡" value="times" />
+        <el-option label="教练卡" value="coach" />
+        <el-option label="团课" value="group" />
+        <el-option label="时间卡" value="time" />
+      </el-select>
+      <el-select v-model="filterCardName" filterable allow-create default-first-option clearable placeholder="卡券名称" style="width: 180px" @change="loadData">
+        <el-option v-for="t in activeTemplates" :key="t._id" :label="t.name" :value="t.name" />
+      </el-select>
+      <el-date-picker v-model="createdFrom" type="date" value-format="YYYY-MM-DD" placeholder="注册起" style="width: 140px" @change="loadData" />
+      <el-date-picker v-model="createdTo" type="date" value-format="YYYY-MM-DD" placeholder="注册止" style="width: 140px" @change="loadData" />
       <el-select v-model="sort" style="width: 150px" @change="loadData">
         <el-option label="最新注册" value="id_desc" />
         <el-option label="最早注册" value="created_asc" />
@@ -33,9 +45,7 @@
       </el-select>
       <el-button type="primary" :loading="loading" @click="loadData">搜索</el-button>
       <el-button @click="resetAndLoad">重置</el-button>
-      <el-button v-if="canIssueCard" type="success" :disabled="!selected.length" @click="openBatchIssue">
-        批量发卡 ({{ selected.length }})
-      </el-button>
+      <el-button v-if="canIssueCard" type="success" @click="openBatchIssue">批量发卡</el-button>
       <el-button link type="primary" @click="tagManageVisible = true">管理标签</el-button>
       <el-button :loading="exporting" @click="exportExcel">导出 Excel</el-button>
     </div>
@@ -117,6 +127,7 @@
             <div class="drawer-name">{{ displayName(detailUser) }}</div>
             <div class="drawer-sub">{{ detailUser.phone || '无手机号' }} · {{ detailUser.userId }}</div>
           </div>
+          <el-button v-if="backFrom" size="small" @click="goBack">返回{{ backLabel }}</el-button>
         </div>
       </template>
       <div v-loading="detailLoading" class="detail">
@@ -193,10 +204,21 @@
         <div class="block">
           <div class="block-title">持卡</div>
           <el-table :data="detailCards" size="small" border>
-            <el-table-column prop="cardName" label="卡" min-width="100" />
-            <el-table-column label="余次" width="80">
+            <el-table-column label="卡" min-width="120">
+              <template #default="{ row }">
+                {{ row.cardName }}
+                <el-tag v-if="row.rulesEdited" size="small" type="warning" style="margin-left:4px">已改规则</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="余次" width="90">
               <template #default="{ row }">
                 <span v-if="isTimesLike(row.type)">{{ row.remainingTimes }}/{{ row.totalTimes }}</span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="已用" width="70">
+              <template #default="{ row }">
+                <span v-if="isTimesLike(row.type)">{{ Math.max(0, Number(row.totalTimes || 0) - Number(row.remainingTimes || 0)) }}</span>
                 <span v-else>-</span>
               </template>
             </el-table-column>
@@ -205,8 +227,11 @@
                 <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="" width="140">
+            <el-table-column label="" width="260">
               <template #default="{ row }">
+                <el-button link type="primary" @click="openCardDetail(row)">详情</el-button>
+                <el-button v-if="row.status === 'active'" link type="warning" @click="toggleListCard(row, 'disable')">停用</el-button>
+                <el-button v-if="row.status === 'disabled'" link type="success" @click="toggleListCard(row, 'enable')">启用</el-button>
                 <el-button v-if="canExtendCards && row.status !== 'refunded' && row.status !== 'deleted'" link type="primary" @click="openExtend(row)">延期</el-button>
                 <el-button v-if="canRefundCard && row.status !== 'deleted'" link type="danger" @click="onDeleteCard(row)">删除</el-button>
               </template>
@@ -216,17 +241,45 @@
         </div>
 
         <div class="block">
-          <div class="block-title">最近预约</div>
+          <div class="block-title">预约（含已完成 / 未完成 / 已取消）</div>
           <el-table :data="detailBookings" size="small" border>
             <el-table-column label="日期" width="110">
               <template #default="{ row }">{{ ymd(row.date) }}</template>
             </el-table-column>
             <el-table-column prop="time" label="时段" width="110" />
-            <el-table-column prop="court" label="场地" />
+            <el-table-column prop="court" label="场地" min-width="100" />
+            <el-table-column label="状态" width="80">
+              <template #default="{ row }">
+                <el-tag size="small" :type="bookingTag(row)">{{ bookingLabel(row) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="cardName" label="用卡" min-width="120" show-overflow-tooltip />
             <el-table-column label="金额" width="80">
               <template #default="{ row }">{{ row.amount ? '¥' + money(row.amount) : '-' }}</template>
             </el-table-column>
+            <el-table-column label="" width="70">
+              <template #default="{ row }">
+                <el-button v-if="canEditBooking(row)" link type="primary" @click="openBookingEdit(row)">修改</el-button>
+              </template>
+            </el-table-column>
           </el-table>
+        </div>
+
+        <div class="block">
+          <div class="block-title">卡使用情况</div>
+          <el-table :data="cardUses" size="small" border>
+            <el-table-column label="日期" width="110">
+              <template #default="{ row }">{{ ymd(row.date) }}</template>
+            </el-table-column>
+            <el-table-column label="类型" width="90">
+              <template #default="{ row }">{{ ledgerLabel(row.type) }}</template>
+            </el-table-column>
+            <el-table-column label="金额" width="90">
+              <template #default="{ row }">¥{{ money(row.amount) }}</template>
+            </el-table-column>
+            <el-table-column prop="remark" label="用了哪张卡 / 场地" min-width="160" />
+          </el-table>
+          <div v-if="!cardUses.length" class="muted">还没有用卡记录</div>
         </div>
 
         <div class="block">
@@ -247,7 +300,19 @@
       </div>
     </el-drawer>
 
-    <!-- 标签管理 -->
+    <el-dialog v-model="bookEditVisible" title="修改未开始的预约" width="460px">
+      <el-form label-width="80px">
+        <el-form-item label="场地"><el-input v-model="bookEdit.court" /></el-form-item>
+        <el-form-item label="日期"><el-date-picker v-model="bookEdit.date" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="时段"><el-input v-model="bookEdit.time" placeholder="17:00-18:00" /></el-form-item>
+        <el-form-item label="金额"><el-input-number v-model="bookEdit.amount" :min="0" :precision="2" /></el-form-item>
+        <el-form-item label="备注"><el-input v-model="bookEdit.remark" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="bookEditVisible = false">取消</el-button>
+        <el-button type="primary" :loading="bookEditSaving" @click="saveBookingEdit">保存</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="tagManageVisible" title="标签管理" width="420px">
       <el-form inline>
         <el-form-item>
@@ -277,7 +342,12 @@
 
     <el-dialog v-model="cardsVisible" :title="`持卡列表 - ${displayName(currentUser)}`" width="920px">
       <el-table :data="memberCards" border v-loading="cardsLoading" size="small">
-        <el-table-column prop="cardName" label="卡名称" min-width="120" />
+        <el-table-column label="卡名称" min-width="140">
+          <template #default="{ row }">
+            {{ row.cardName }}
+            <el-tag v-if="row.rulesEdited" size="small" type="warning" style="margin-left:4px">已改规则</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="类型" width="90">
           <template #default="{ row }">
             <el-tag size="small" :type="typeTag(row.type)">{{ typeLabel(row.type) }}</el-tag>
@@ -305,6 +375,7 @@
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
+            <el-button link type="primary" @click="openCardDetail(row)">详情</el-button>
             <el-button v-if="canExtendCards && row.status !== 'refunded' && row.status !== 'deleted'" link type="primary" @click="openExtend(row)">延期</el-button>
             <el-button v-if="canRefundCard && row.status === 'active'" link type="danger" @click="onRefund(row)">退卡</el-button>
             <el-button v-if="canRefundCard && row.status !== 'deleted'" link type="danger" @click="onDeleteCard(row)">删除</el-button>
@@ -313,7 +384,88 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="issueVisible" :title="batchMode ? `批量发卡（${selected.length}人）` : '给会员发卡'" width="520px" destroy-on-close>
+    <el-dialog v-model="batchVisible" title="批量发卡" width="860px" top="4vh" destroy-on-close>
+      <el-form label-width="96px" class="batch-card-form">
+        <el-form-item label="发卡场馆" required>
+          <el-select v-model="issueForm.venueId" placeholder="请选择场馆" style="width: 280px" @change="onVenuePick">
+            <el-option v-for="v in venueList" :key="v._id || v.venueId" :label="v.name" :value="v.venueId || v._id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="选择卡券" required>
+          <el-select v-model="issueForm.templateId" filterable placeholder="先选一张要发的卡" style="width: 360px" @change="onTemplateChange">
+            <el-option v-for="t in activeTemplates" :key="t._id" :label="`${t.name}（${typeLabel(t.type)}）`" :value="t._id" />
+          </el-select>
+          <el-tag v-if="selectedTemplate" :type="typeTag(selectedTemplate.type)" size="small" style="margin-left:8px">{{ typeLabel(selectedTemplate.type) }}</el-tag>
+        </el-form-item>
+        <el-form-item label="发卡人" required>
+          <el-input v-model="issueForm.issuerName" style="width: 220px" />
+        </el-form-item>
+        <el-form-item label="实收金额">
+          <el-input-number v-model="issueForm.price" :min="0" :precision="2" :step="1" />
+          <span class="hint">元 / 每人</span>
+        </el-form-item>
+        <el-form-item v-if="selectedTemplate && isTimesLike(selectedTemplate.type)" label="次数">
+          <el-input-number v-model="issueForm.totalTimes" :min="1" />
+        </el-form-item>
+        <el-form-item label="有效期">
+          <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" />
+          <span style="margin:0 8px">至</span>
+          <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="可留空" />
+        </el-form-item>
+        <el-form-item label="可用门店">
+          <el-select v-model="issueForm.allowedVenueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 360px">
+            <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="issueForm.remark" style="width: 360px" />
+        </el-form-item>
+      </el-form>
+      <div class="batch-user-head">选择发放对象 · 已选 {{ batchSelected.length }} 人</div>
+      <div class="filters" style="padding:0;margin-bottom:8px;background:transparent;border:none">
+        <el-input v-model="batchKeyword" placeholder="昵称 / 手机 / 会员号" clearable style="width: 220px" @keyup.enter="loadBatchUsers" />
+        <el-select v-model="batchTagId" clearable placeholder="按标签筛选" style="width: 160px" @change="loadBatchUsers">
+          <el-option v-for="t in tagList" :key="t._id" :label="t.name" :value="t._id" />
+        </el-select>
+        <el-button type="primary" :loading="batchLoading" @click="loadBatchUsers">搜索用户</el-button>
+      </div>
+      <el-table
+        :data="batchList"
+        border
+        size="small"
+        max-height="360"
+        v-loading="batchLoading"
+        @selection-change="onBatchSelect"
+      >
+        <el-table-column type="selection" width="42" />
+        <el-table-column label="会员" min-width="140">
+          <template #default="{ row }">{{ displayName(row) }}</template>
+        </el-table-column>
+        <el-table-column label="手机" width="120">
+          <template #default="{ row }">{{ row.phone || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="标签" min-width="180">
+          <template #default="{ row }">
+            <el-tag
+              v-for="t in row.tags || []"
+              :key="t._id"
+              size="small"
+              class="tag"
+              :style="{ background: t.color, borderColor: t.color, color: '#fff' }"
+            >{{ t.name }}</el-tag>
+            <span v-if="!(row.tags && row.tags.length)" class="muted">-</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="batchVisible = false">取消</el-button>
+        <el-button type="primary" :loading="issuing" :disabled="!batchSelected.length || !issueForm.templateId" @click="submitBatchIssue">
+          发给已选 {{ batchSelected.length }} 人
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="issueVisible" title="给会员发卡" width="520px" destroy-on-close>
       <el-form label-width="100px">
         <el-form-item v-if="!batchMode" label="会员">
           <el-input :model-value="displayName(currentUser)" disabled />
@@ -330,7 +482,7 @@
           <el-input v-model="issueForm.issuerName" placeholder="前台 / 管理员姓名" />
         </el-form-item>
         <el-form-item label="选择卡模板" required>
-          <el-select v-model="issueForm.templateId" placeholder="请选择" style="width: 100%" @change="onTemplateChange">
+          <el-select v-model="issueForm.templateId" filterable placeholder="输入名称搜索卡模板" style="width: 100%" @change="onTemplateChange">
             <el-option v-for="t in activeTemplates" :key="t._id" :label="`${t.name}（${typeLabel(t.type)}）`" :value="t._id" />
           </el-select>
         </el-form-item>
@@ -349,6 +501,12 @@
         </el-form-item>
         <el-form-item label="到期日期">
           <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="可留空" />
+        </el-form-item>
+        <el-form-item label="可用门店">
+          <el-select v-model="issueForm.allowedVenueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 100%">
+            <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+          </el-select>
+          <div class="hint">默认不限制。选了之后这张卡只能在这些店用。</div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="issueForm.remark" type="textarea" :rows="2" />
@@ -381,6 +539,102 @@
         <el-button type="primary" :loading="extending" @click="submitExtend">确认延期</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="cardDetailVisible" :title="(cardForm.cardName || '卡详情') + (cardForm.rulesEdited ? '（已改规则）' : '')" width="720px" top="5vh" destroy-on-close>
+      <el-form label-width="110px" v-if="cardForm._id">
+        <el-form-item label="标识">
+          <el-tag v-if="cardForm.rulesEdited" type="warning" size="small">已改规则 · 仅此张卡</el-tag>
+          <el-tag v-else type="info" size="small">沿用模板</el-tag>
+          <span class="hint">改这里只动这一张持卡，不会改卡模板，也不能批量套到别人卡上</span>
+        </el-form-item>
+        <el-form-item label="卡名称">
+          <el-input v-model="cardForm.cardName" />
+        </el-form-item>
+        <el-form-item label="类型">
+          <el-tag :type="typeTag(cardForm.type)" size="small">{{ typeLabel(cardForm.type) }}</el-tag>
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-tag :type="statusTag(cardForm.status)" size="small">{{ statusLabel(cardForm.status) }}</el-tag>
+        </el-form-item>
+        <el-form-item v-if="isTimesLike(cardForm.type)" label="剩余/总次">
+          <el-input-number v-model="cardForm.remainingTimes" :min="0" />
+          <span style="margin:0 8px">/</span>
+          <el-input-number v-model="cardForm.totalTimes" :min="0" />
+        </el-form-item>
+        <el-form-item label="生效日期">
+          <el-date-picker v-model="cardForm.validFrom" type="date" value-format="YYYY-MM-DD" />
+        </el-form-item>
+        <el-form-item label="到期日期">
+          <el-date-picker v-model="cardForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="可留空" />
+        </el-form-item>
+        <el-form-item label="每日最多约">
+          <el-input-number v-model="cardForm.timeRule.maxHoursPerDay" :min="0" :max="24" :step="1" />
+          <span class="hint">小时，0 = 不限制。只改这张卡</span>
+        </el-form-item>
+        <el-form-item label="可用门店">
+          <el-select v-model="cardForm.timeRule.venueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 100%">
+            <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="cardForm.type !== 'group'" label="可用规则">
+          <el-radio-group v-model="cardForm.timeRule.mode">
+            <el-radio label="unlimited" value="unlimited">有效期内任意时间</el-radio>
+            <el-radio label="rules" value="rules">自定义星期 + 时段</el-radio>
+            <el-radio label="dates" value="dates">节假日 / 指定日期</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <div v-if="cardForm.type !== 'group' && cardForm.timeRule && cardForm.timeRule.mode === 'dates'" class="rules-box">
+          <div v-for="(rg, i) in (cardForm.timeRule.dateRanges || [])" :key="i" class="slot-row" style="margin-bottom:8px">
+            <el-date-picker
+              :model-value="rg.range && rg.range.length ? rg.range : (rg.start && rg.end ? [rg.start, rg.end] : [])"
+              type="daterange"
+              value-format="YYYY-MM-DD"
+              start-placeholder="开始"
+              end-placeholder="结束"
+              @update:model-value="(val) => { rg.range = val || []; rg.start = val && val[0]; rg.end = val && val[1] }"
+            />
+            <el-button link type="danger" @click="cardForm.timeRule.dateRanges.splice(i, 1)">删</el-button>
+          </div>
+          <el-button size="small" @click="(cardForm.timeRule.dateRanges || (cardForm.timeRule.dateRanges = [])).push({ start: '', end: '', range: [] })">加一段日期</el-button>
+        </div>
+        <div v-if="cardForm.type !== 'group' && cardForm.timeRule && cardForm.timeRule.mode === 'rules'" class="rules-box">
+          <div v-for="(rule, ri) in cardForm.timeRule.rules" :key="ri" class="rule-card">
+            <div class="rule-head">
+              <b>规则 {{ ri + 1 }}</b>
+              <el-button v-if="cardForm.timeRule.rules.length > 1" link type="danger" @click="cardForm.timeRule.rules.splice(ri, 1)">删除这组</el-button>
+            </div>
+            <el-form-item label="可用星期">
+              <el-checkbox-group v-model="rule.weekdays">
+                <el-checkbox :label="1" :value="1">一</el-checkbox>
+                <el-checkbox :label="2" :value="2">二</el-checkbox>
+                <el-checkbox :label="3" :value="3">三</el-checkbox>
+                <el-checkbox :label="4" :value="4">四</el-checkbox>
+                <el-checkbox :label="5" :value="5">五</el-checkbox>
+                <el-checkbox :label="6" :value="6">六</el-checkbox>
+                <el-checkbox :label="7" :value="7">日</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+            <el-form-item label="时段">
+              <div class="slots">
+                <div v-for="(slot, si) in rule.timeSlots" :key="si" class="slot-row">
+                  <el-time-select v-model="slot.start" start="06:00" step="00:30" end="23:30" placeholder="开始" />
+                  <span>至</span>
+                  <el-time-select v-model="slot.end" start="06:00" step="00:30" end="23:30" placeholder="结束" />
+                  <el-button link type="danger" @click="rule.timeSlots.splice(si, 1)">删</el-button>
+                </div>
+                <el-button size="small" @click="rule.timeSlots.push({ start: '10:00', end: '18:00' })">加时段</el-button>
+              </div>
+            </el-form-item>
+          </div>
+          <el-button size="small" type="primary" plain @click="cardForm.timeRule.rules.push(emptyCardRule())">再加一组规则</el-button>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button v-if="cardForm.status === 'active'" type="warning" :loading="cardSaving" @click="toggleCardStatus('disable')">停用此卡</el-button>
+        <el-button v-if="cardForm.status === 'disabled'" type="success" :loading="cardSaving" @click="toggleCardStatus('enable')">恢复启用</el-button>
+        <el-button @click="cardDetailVisible = false">取消</el-button>
+        <el-button type="primary" :loading="cardSaving" @click="saveCardDetail">保存修改</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="regVisible" title="新增用户" width="420px" destroy-on-close>
       <el-form label-width="80px">
         <el-form-item label="手机号" required><el-input v-model="regForm.phone" maxlength="11" /></el-form-item>
@@ -396,15 +650,27 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { can, roleKind } from '../utils/auth'
 const route = useRoute()
+const router = useRouter()
+const backFrom = computed(() => String(route.query.from || ''))
+const backLabel = computed(() => ({ finance: '财务报表', activity: '业务动态' }[backFrom.value] || '上一页'))
+function goBack() {
+  if (backFrom.value === 'finance') router.push('/finance')
+  else if (backFrom.value === 'activity') router.push('/activity')
+  else router.back()
+}
 
 const list = ref([])
 const loading = ref(false)
 const keyword = ref('')
 const filterTagId = ref('')
+const filterCardType = ref('')
+const filterCardName = ref('')
+const createdFrom = ref('')
+const createdTo = ref('')
 const sort = ref('id_desc')
 const selected = ref([])
 const tagList = ref([])
@@ -416,12 +682,22 @@ const regForm = ref({ phone: '', nickName: '' })
 const currentUser = ref(null)
 const venueList = ref([])
 const batchMode = ref(false)
+const batchVisible = ref(false)
+const batchKeyword = ref('')
+const batchTagId = ref('')
+const batchList = ref([])
+const batchSelected = ref([])
+const batchLoading = ref(false)
 
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailUser = ref({})
 const detailCards = ref([])
 const detailBookings = ref([])
+const bookEditVisible = ref(false)
+const bookEditSaving = ref(false)
+const bookEdit = ref({ id: '', court: '', date: '', time: '', amount: 0, remark: '' })
+const cardUses = computed(() => (detailLedger.value || []).filter((r) => ['card_use', 'card_use_cancel', 'issue_card', 'refund_card'].includes(r.type)))
 const detailLedger = ref([])
 const detailTagIds = ref([])
 const detailRemark = ref('')
@@ -444,6 +720,9 @@ const extendVisible = ref(false)
 const extending = ref(false)
 const extendCard = ref({})
 const extendDays = ref(30)
+const cardDetailVisible = ref(false)
+const cardSaving = ref(false)
+const cardForm = ref({ _id: '', cardName: '', type: '', status: '', remainingTimes: 0, totalTimes: 0, validFrom: '', validTo: '', timeRule: { mode: 'unlimited', rules: [] }, rulesEdited: false })
 const isStoreManager = roleKind() === 'manager'
 const canExtendCards = can('extendCard')
 const canRefundCard = can('refundCard')
@@ -514,10 +793,127 @@ function typeTag(t) {
   return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[t] || 'info'
 }
 function statusLabel(s) {
-  return { active: '有效', expired: '已过期', used_up: '已用完', refunded: '已退卡', deleted: '已删除' }[s] || s
+  return { active: '有效', expired: '已过期', used_up: '已用完', refunded: '已退卡', deleted: '已删除', disabled: '已停用' }[s] || s
 }
 function statusTag(s) {
-  return { active: 'success', expired: 'info', used_up: 'warning', refunded: 'danger' }[s] || 'info'
+  return { active: 'success', expired: 'info', used_up: 'warning', refunded: 'danger', disabled: 'info' }[s] || 'info'
+}
+function emptyCardRule() {
+  return { weekdays: [1, 2, 3, 4, 5], unlimited: false, timeSlots: [{ start: '10:00', end: '18:00' }] }
+}
+function parseCardRule(raw) {
+  const base = { mode: 'unlimited', rules: [emptyCardRule()], maxHoursPerDay: 0, dateRanges: [], holidayKey: '', venueIds: [] }
+  if (!raw) return base
+  let r = raw
+  if (typeof r === 'string') {
+    try { r = JSON.parse(r) } catch (e) { return base }
+  }
+  const extra = {
+    maxHoursPerDay: Number(r.maxHoursPerDay) > 0 ? Number(r.maxHoursPerDay) : 0,
+    dateRanges: Array.isArray(r.dateRanges) ? r.dateRanges.map((x) => ({
+      start: x.start || '', end: x.end || '', range: [x.start || '', x.end || ''].filter(Boolean)
+    })) : [],
+    holidayKey: r.holidayKey || '',
+    venueIds: Array.isArray(r.venueIds) ? r.venueIds.slice() : []
+  }
+  if (r.mode === 'dates') return { mode: 'dates', rules: r.rules && r.rules.length ? r.rules : [emptyCardRule()], ...extra }
+  if (r.mode === 'unlimited' || r.mode === 'all') return { mode: 'unlimited', rules: r.rules && r.rules.length ? r.rules : [emptyCardRule()], ...extra }
+  const rules = Array.isArray(r.rules) && r.rules.length ? r.rules.map((x) => ({
+    weekdays: (x.weekdays || [1, 2, 3, 4, 5]).map(Number),
+    unlimited: x.unlimited === true,
+    timeSlots: (x.timeSlots && x.timeSlots.length) ? x.timeSlots.map((s) => ({ start: s.start, end: s.end })) : [{ start: '10:00', end: '18:00' }]
+  })) : [emptyCardRule()]
+  return { mode: 'rules', rules, ...extra }
+}
+function openCardDetail(card) {
+  const rule = parseCardRule(card.timeRule || card.time_rule)
+  if (!(Number(rule.maxHoursPerDay) > 0)) {
+    const tpl = templates.value.find((t) => String(t._id) === String(card.templateId || card.template_id || ''))
+    const fromTpl = parseCardRule(tpl && (tpl.timeRule || tpl.time_rule))
+    if (Number(fromTpl.maxHoursPerDay) > 0) rule.maxHoursPerDay = Number(fromTpl.maxHoursPerDay)
+  }
+  cardForm.value = {
+    _id: card._id,
+    cardName: card.cardName || '',
+    type: card.type,
+    status: card.status,
+    remainingTimes: Number(card.remainingTimes || 0),
+    totalTimes: Number(card.totalTimes || 0),
+    validFrom: card.validFrom || '',
+    validTo: card.validTo || '',
+    timeRule: rule,
+    rulesEdited: !!card.rulesEdited
+  }
+  cardDetailVisible.value = true
+}
+async function toggleListCard(row, action) {
+  const name = row.cardName || '这张卡'
+  try {
+    await ElMessageBox.confirm(
+      action === 'disable' ? `停用「${name}」后，预约时不能再选这张卡。` : `恢复启用「${name}」？`,
+      action === 'disable' ? '停用此卡' : '启用此卡',
+      { type: 'warning', confirmButtonText: action === 'disable' ? '确认停用' : '确认启用' }
+    )
+  } catch (e) { return }
+  try {
+    const result = await post('/adminGetUsers', {
+      action: action === 'disable' ? 'disableCard' : 'enableCard',
+      cardId: row._id,
+      operatorName: localStorage.getItem('admin_name') || '管理员'
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '操作失败'); return }
+    ElMessage.success(action === 'disable' ? '已停用' : '已启用')
+    row.status = action === 'disable' ? 'disabled' : 'active'
+    refreshCards()
+  } catch (e) {
+    ElMessage.error(e.message || '失败')
+  }
+}
+async function toggleCardStatus(action) {
+  cardSaving.value = true
+  try {
+    const result = await post('/adminGetUsers', {
+      action: action === 'disable' ? 'disableCard' : 'enableCard',
+      cardId: cardForm.value._id,
+      operatorName: localStorage.getItem('admin_name') || '管理员'
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '操作失败'); return }
+    ElMessage.success(action === 'disable' ? '已停用，预约时不能再选这张卡' : '已恢复启用')
+    cardForm.value.status = action === 'disable' ? 'disabled' : 'active'
+    refreshCards()
+  } catch (e) {
+    ElMessage.error(e.message || '失败')
+  } finally { cardSaving.value = false }
+}
+async function saveCardDetail() {
+  if (!cardForm.value._id) return
+  cardSaving.value = true
+  try {
+    const result = await post('/adminGetUsers', {
+      action: 'saveMemberCard',
+      cardId: cardForm.value._id,
+      operatorName: localStorage.getItem('admin_name') || '管理员',
+      data: {
+        cardName: cardForm.value.cardName,
+        validFrom: cardForm.value.validFrom,
+        validTo: cardForm.value.validTo,
+        remainingTimes: cardForm.value.remainingTimes,
+        totalTimes: cardForm.value.totalTimes,
+        timeRule: cardForm.value.timeRule
+      }
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
+    ElMessage.success('已改这一张卡，模板和其他人的卡不受影响')
+    cardForm.value.rulesEdited = true
+    cardDetailVisible.value = false
+    refreshCards()
+  } catch (e) {
+    ElMessage.error(e.message || '保存失败')
+  } finally { cardSaving.value = false }
+}
+function refreshCards() {
+  if (detailVisible.value && detailUser.value && detailUser.value._id) openDetail(detailUser.value)
+  if (cardsVisible.value && currentUser.value) openCards(currentUser.value)
 }
 function ledgerLabel(t) {
   return { court_pay: '订场支付', card_issue: '发卡', card_refund: '退卡', card_use: '用卡', enroll: '团课' }[t] || t
@@ -534,7 +930,10 @@ async function post(path, body = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   })
-  const data = await res.json()
+  const text = await res.text()
+  if (!text) return { ok: false, msg: '接口无返回，请覆盖部署对应云函数' }
+  let data
+  try { data = JSON.parse(text) } catch (e) { return { ok: false, msg: '接口返回不是 JSON，请检查云函数是否部署' } }
   const result = data.body ? (typeof data.body === 'string' ? JSON.parse(data.body) : data.body) : data
   if (result && result.msg) result.msg = friendlyMsg(result.msg)
   return result
@@ -576,6 +975,10 @@ async function loadData() {
       action: 'list',
       keyword: keyword.value.trim(),
       tagId: filterTagId.value || '',
+      cardType: filterCardType.value || '',
+      cardName: filterCardName.value || '',
+      createdFrom: createdFrom.value || '',
+      createdTo: createdTo.value || '',
       sort: sort.value
     })
     if (!result.ok) {
@@ -595,6 +998,10 @@ async function loadData() {
 function resetAndLoad() {
   keyword.value = ''
   filterTagId.value = ''
+  filterCardType.value = ''
+  filterCardName.value = ''
+  createdFrom.value = ''
+  createdTo.value = ''
   sort.value = 'id_desc'
   loadData()
 }
@@ -606,6 +1013,10 @@ async function exportExcel() {
       action: 'list',
       keyword: keyword.value.trim(),
       tagId: filterTagId.value || '',
+      cardType: filterCardType.value || '',
+      cardName: filterCardName.value || '',
+      createdFrom: createdFrom.value || '',
+      createdTo: createdTo.value || '',
       sort: sort.value,
       export: true,
       pageSize: 500
@@ -666,6 +1077,56 @@ async function exportExcel() {
   }
 }
 
+function bookingLabel(row) {
+  if (row.status === 'cancelled') return '已取消'
+  if (row.status === 'done' || row.status === 'completed') return '已完成'
+  if (!canEditBooking(row) && row.status === 'booked') return '已开始'
+  return '未完成'
+}
+function bookingTag(row) {
+  if (row.status === 'cancelled') return 'info'
+  if (row.status === 'done' || row.status === 'completed') return 'success'
+  return 'warning'
+}
+function canEditBooking(row) {
+  if (!row || row.status !== 'booked') return false
+  const start = String(row.date || '') + ' ' + String(row.time || '00:00').split('-')[0]
+  return new Date(start.replace(/-/g, '/')).getTime() > Date.now()
+}
+function openBookingEdit(row) {
+  bookEdit.value = {
+    id: row._id || row.id,
+    court: row.court || '',
+    date: ymd(row.date),
+    time: row.time || '',
+    amount: Number(row.amount) || 0,
+    remark: row.remark || ''
+  }
+  bookEditVisible.value = true
+}
+async function saveBookingEdit() {
+  bookEditSaving.value = true
+  try {
+    const result = await post('/adminSaveBooking', {
+      action: 'update',
+      id: bookEdit.value.id,
+      data: {
+        court: bookEdit.value.court,
+        date: bookEdit.value.date,
+        time: bookEdit.value.time,
+        amount: bookEdit.value.amount,
+        remark: bookEdit.value.remark,
+        operatorName: localStorage.getItem('admin_name') || '管理员'
+      }
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
+    ElMessage.success('已改未开始的预约')
+    bookEditVisible.value = false
+    if (detailUser.value && detailUser.value._id) openDetail(detailUser.value)
+  } catch (e) {
+    ElMessage.error(e.message || '保存失败')
+  } finally { bookEditSaving.value = false }
+}
 function onSelect(rows) {
   selected.value = rows
 }
@@ -987,7 +1448,8 @@ function blankIssue(extra) {
     remark: '',
     venueId: extra.venueId || localStorage.getItem('venue_id') || '',
     venueName: extra.venueName || localStorage.getItem('venue_name') || '',
-    issuerName: localStorage.getItem('admin_name') || ''
+    issuerName: localStorage.getItem('admin_name') || '',
+    allowedVenueIds: []
   }
 }
 
@@ -999,14 +1461,75 @@ function openIssue(row) {
 }
 
 function openBatchIssue() {
-  if (!selected.value.length) return
   batchMode.value = true
-  currentUser.value = selected.value[0]
+  batchKeyword.value = keyword.value
+  batchTagId.value = filterTagId.value
+  batchSelected.value = []
   issueForm.value = blankIssue({
     venueId: localStorage.getItem('venue_id') || '',
     venueName: localStorage.getItem('venue_name') || ''
   })
-  issueVisible.value = true
+  batchVisible.value = true
+  loadTemplates()
+  loadBatchUsers()
+}
+function onBatchSelect(rows) {
+  batchSelected.value = rows || []
+}
+async function loadBatchUsers() {
+  batchLoading.value = true
+  try {
+    const result = await post('/adminGetUsers', {
+      action: 'list',
+      keyword: batchKeyword.value.trim(),
+      tagId: batchTagId.value || '',
+      sort: 'id_desc'
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '搜索失败')
+      batchList.value = []
+      return
+    }
+    batchList.value = result.list || []
+    if (result.tags) tagList.value = result.tags
+  } catch (e) {
+    ElMessage.error(e.message || '搜索失败')
+    batchList.value = []
+  } finally {
+    batchLoading.value = false
+  }
+}
+async function submitBatchIssue() {
+  if (!issueForm.value.templateId) { ElMessage.warning('请先选择要发的卡'); return }
+  if (!issueForm.value.venueId) { ElMessage.warning('请选择发卡场馆'); return }
+  if (!String(issueForm.value.issuerName || '').trim()) { ElMessage.warning('请填写发卡人'); return }
+  if (!batchSelected.value.length) { ElMessage.warning('请勾选要发卡的用户'); return }
+  const tpl = selectedTemplate.value
+  try {
+    await ElMessageBox.confirm(
+      `确认给 ${batchSelected.value.length} 人发放「${tpl ? tpl.name : '会员卡'}」，每人实收 ¥${Number(issueForm.value.price || 0).toFixed(2)}？`,
+      '批量发卡确认',
+      { type: 'warning', confirmButtonText: '确认发放' }
+    )
+  } catch (e) { return }
+  issuing.value = true
+  try {
+    let ok = 0
+    let fail = 0
+    for (const u of batchSelected.value) {
+      const result = await issueOne(u)
+      if (result && result.ok) ok++
+      else fail++
+    }
+    if (fail && !ok) { ElMessage.error('发卡失败'); return }
+    ElMessage.success(fail ? `成功 ${ok} 人，失败 ${fail} 人` : `已发给 ${ok} 人`)
+    batchVisible.value = false
+    loadData()
+  } catch (e) {
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    issuing.value = false
+  }
 }
 
 function onTemplateChange(id) {
@@ -1014,7 +1537,14 @@ function onTemplateChange(id) {
   if (t) {
     issueForm.value.totalTimes = t.totalTimes || 10
     issueForm.value.price = 0
-    if (t.durationDays && t.durationDays > 0) {
+    const rule = parseCardRule(t.timeRule || t.time_rule)
+    issueForm.value.allowedVenueIds = (rule.venueIds || []).slice()
+    if (rule.mode === 'dates' && rule.dateRanges && rule.dateRanges.length) {
+      const starts = rule.dateRanges.map((x) => x.start).filter(Boolean).sort()
+      const ends = rule.dateRanges.map((x) => x.end).filter(Boolean).sort()
+      if (starts[0]) issueForm.value.validFrom = starts[0]
+      if (ends.length) issueForm.value.validTo = ends[ends.length - 1]
+    } else if (t.durationDays && t.durationDays > 0) {
       const d = new Date()
       d.setDate(d.getDate() + t.durationDays)
       issueForm.value.validTo = d.toISOString().slice(0, 10)
@@ -1037,7 +1567,8 @@ async function issueOne(user) {
     remark: issueForm.value.remark,
     venueId: issueForm.value.venueId,
     venueName: issueForm.value.venueName,
-    issuerName: String(issueForm.value.issuerName).trim()
+    issuerName: String(issueForm.value.issuerName).trim(),
+    allowedVenueIds: issueForm.value.allowedVenueIds || []
   })
 }
 
@@ -1092,11 +1623,16 @@ async function submitIssue() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (route.query.q) keyword.value = String(route.query.q)
   loadVenues()
-  loadData()
   loadTemplates()
+  await loadData()
+  if (route.query.open === '1' && list.value.length) {
+    const phone = String(route.query.q || '')
+    const hit = list.value.find((u) => String(u.phone || '') === phone) || list.value[0]
+    openDetail(hit)
+  }
 })
 </script>
 
@@ -1129,5 +1665,12 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .block-title { font-weight: 600; margin-bottom: 8px; color: #333; }
 .color-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; }
 .batch-names { font-size: 13px; line-height: 1.5; color: #333; }
+.batch-user-head { font-weight: 600; color: #1a5c3a; margin: 8px 0; }
+.batch-card-form { background: #f7faf8; border-radius: 8px; padding: 8px 12px 0; margin-bottom: 12px; }
+.rules-box { padding: 0 0 8px 110px; }
+.rule-card { background: #f7faf8; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.rule-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.slots { display: flex; flex-direction: column; gap: 6px; }
+.slot-row { display: flex; align-items: center; gap: 8px; }
 .new-tag-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 </style>
