@@ -60,6 +60,7 @@
         <el-button type="primary" :loading="batchSaving" @click="saveBatchRules">保存</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="visible" :title="form._id ? '编辑卡模板' : '新增卡模板'" width="720px" destroy-on-close top="5vh">
       <el-form label-width="110px">
         <el-form-item label="卡名称" required>
           <el-input v-model="form.name" placeholder="如：闲时次卡 / 全时段月卡" />
