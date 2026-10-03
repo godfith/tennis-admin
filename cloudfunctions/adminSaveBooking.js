@@ -534,7 +534,7 @@ exports.main = async (event) => {
           userIdVal,
           data.memberOpenid || '',
           data.userName || '',
-          data.phone || '',
+          await resolvePhone(conn, data.phone, userIdVal, ''),
           cardIdVal,
           cardName,
           cardType,

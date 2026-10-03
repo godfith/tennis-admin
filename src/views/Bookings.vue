@@ -87,10 +87,6 @@
         <el-form-item label="场地"><el-input v-model="bookForm.court" disabled /></el-form-item>
         <el-form-item label="日期"><el-input v-model="bookForm.date" disabled /></el-form-item>
         <el-form-item label="时段"><el-input v-model="bookForm.time" disabled /></el-form-item>
-        <el-form-item label="场地价">
-          <span class="price-tag">¥{{ getPrice(bookForm.court, bookForm.time) }}</span>
-          <span class="price-hint">（到店支付参考价，用卡则按卡扣）</span>
-        </el-form-item>
         <el-form-item label="客户" required>
           <div style="display:flex;gap:8px;width:100%">
             <el-select
@@ -109,11 +105,11 @@
         </el-form-item>
         <el-form-item label="收款金额">
           <el-input-number v-model="bookForm.payAmount" :min="0" :precision="2" :step="10" />
-          <span class="price-hint">美团核销 / 体验课到店收款，记流水用</span>
+          <span class="price-hint">实收现金，记入本场金额和流水</span>
         </el-form-item>
         <el-form-item label="同时发卡">
-          <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不发卡，只订场" style="width:100%" :loading="tplLoading">
-            <el-option v-for="t in templates" :key="t._id" :label="t.name" :value="t._id" />
+          <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不发卡，只订场" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
+            <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
         </el-form-item>
         <el-form-item label="使用会员卡">
@@ -135,7 +131,7 @@
           </el-select>
           <div class="card-tip">团课请点日程上的「团课」格子报名</div>
         </el-form-item>
-        <el-form-item v-if="isCoachCard" label="选择教练" required>
+        <el-form-item v-if="needCoachOnBook" label="选择教练" required>
           <el-select v-model="bookForm.coachId" placeholder="请选择教练" style="width: 100%" :loading="coachLoading">
             <el-option
               v-for="c in availableCoaches"
@@ -238,14 +234,14 @@
               <el-option v-for="c in courts" :key="c._id" :label="c.name" :value="c.name" />
             </el-select>
             <span v-else>{{ editForm.court }}</span>
-            <el-button link type="primary" @click="editField = editField==='court' ? '' : 'court'">{{ editField==='court' ? '完成' : '更改场地' }}</el-button>
+            <el-button v-if="!isBookingDone(current)" link type="primary" @click="editField = editField==='court' ? '' : 'court'">{{ editField==='court' ? '完成' : '更改场地' }}</el-button>
           </div>
         </el-form-item>
         <el-form-item label="日期">
           <div class="row-edit">
             <el-date-picker v-if="editField==='datetime'" v-model="editForm.date" type="date" value-format="YYYY-MM-DD" />
             <span v-else>{{ shortDate(editForm.date) }}</span>
-            <el-button link type="primary" @click="editField = editField==='datetime' ? '' : 'datetime'">{{ editField==='datetime' ? '完成' : '更改日期/时段' }}</el-button>
+            <el-button v-if="!isBookingDone(current)" link type="primary" @click="editField = editField==='datetime' ? '' : 'datetime'">{{ editField==='datetime' ? '完成' : '更改日期/时段' }}</el-button>
           </div>
         </el-form-item>
         <el-form-item label="时段">
@@ -265,35 +261,86 @@
         </el-form-item>
         <el-form-item label="使用卡">
           <div class="row-edit">
-            <el-select v-if="editField==='card'" v-model="editForm.cardId" clearable placeholder="不使用卡" style="flex:1" :loading="cardLoading">
+            <el-select v-if="editField==='card' && !isBookingDone(current)" v-model="editForm.cardId" clearable placeholder="不使用卡" style="flex:1" :loading="cardLoading" @change="onEditCardChange">
               <el-option label="不使用卡" value="" />
               <el-option v-for="c in memberCards" :key="c._id" :label="cardOptionLabel(c)" :value="c._id" />
             </el-select>
             <span v-else>{{ editForm.cardName || '未使用卡' }}</span>
-            <el-button link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
+            <el-button v-if="!isBookingDone(current)" link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
           </div>
+        </el-form-item>
+        <el-form-item v-if="editNeedCoach && !isBookingDone(current)" label="教练">
+          <el-select v-model="editForm.coachId" placeholder="请选择教练" style="width:100%" :loading="coachLoading">
+            <el-option v-for="c in coachList" :key="c._id" :label="c.name" :value="c._id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-else-if="current && (current.coachName || current.coachId)" label="教练">
+          <span>{{ current.coachName || current.coachId }}</span>
         </el-form-item>
         <el-form-item label="本次实收">
           <div class="row-edit">
             <el-input-number v-if="editField==='amount'" v-model="editForm.amount" :min="0" :precision="2" :step="10" />
             <span v-else>¥{{ Number(editForm.amount || 0).toFixed(2) }}</span>
-            <el-button link type="primary" @click="editField = editField==='amount' ? '' : 'amount'">{{ editField==='amount' ? '完成' : '修改金额' }}</el-button>
+            <el-button v-if="!isBookingDone(current)" link type="primary" @click="editField = editField==='amount' ? '' : 'amount'">{{ editField==='amount' ? '完成' : '修改金额' }}</el-button>
           </div>
         </el-form-item>
         <el-form-item label="备注">
           <div class="row-edit">
             <el-input v-if="editField==='remark'" v-model="editForm.remark" type="textarea" :rows="2" />
             <span v-else>{{ editForm.remark || '-' }}</span>
-            <el-button link type="primary" @click="editField = editField==='remark' ? '' : 'remark'">{{ editField==='remark' ? '完成' : '修改备注' }}</el-button>
+            <el-button v-if="!isBookingDone(current)" link type="primary" @click="editField = editField==='remark' ? '' : 'remark'">{{ editField==='remark' ? '完成' : '修改备注' }}</el-button>
           </div>
+        </el-form-item>
+        <el-form-item v-if="current && !isLockBooking(current) && !isBookingDone(current)" label="同时发卡">
+          <el-select v-model="editForm.issueTpl" clearable filterable placeholder="不另发卡" style="width:100%" :loading="tplLoading" @change="onEditIssueTplChange">
+            <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button v-if="current && isLockBooking(current)" type="primary" @click="lockToBook">转为预约</el-button>
         <el-button v-if="canCancelBook && current && isLockBooking(current)" type="warning" @click="cancelBook">解锁</el-button>
+        <el-button v-if="canRefundCashOnly" type="danger" plain :loading="saving" @click="refundCashKeepCard">只退款</el-button>
+        <el-button v-if="canRefundCardOnly" type="warning" plain :loading="saving" @click="refundCardKeepCash">只退卡</el-button>
         <el-button v-if="canCancelBook && current && !isLockBooking(current)" type="warning" @click="cancelBook">取消预约</el-button>
-        <el-button type="primary" :loading="saving" @click="saveDetail">保存修改</el-button>
+        <el-button v-if="current && !isLockBooking(current) && !isBookingDone(current)" type="primary" :loading="saving" @click="saveDetail">保存修改</el-button>
+        <span v-if="current && isBookingDone(current)" class="hint">已开始/已结束，不能改预约</span>
         <el-button @click="detailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="convertVisible" :title="convertMode === 'cash' ? '只退款 · 改发卡' : '只退卡 · 改收款'" width="440px">
+      <el-form label-width="96px" v-if="current">
+        <el-form-item label="客户">{{ current.userName || '-' }}</el-form-item>
+        <template v-if="convertMode === 'cash'">
+          <el-form-item label="原收款">¥{{ Number(current.amount || 0).toFixed(2) }}（将退回）</el-form-item>
+          <el-form-item label="发放卡券" required>
+            <el-select v-model="convertForm.issueTpl" filterable placeholder="选择要发的卡" style="width:100%" :loading="tplLoading" @change="onConvertTplChange">
+              <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="发卡金额" required>
+            <el-input-number v-model="convertForm.issuePrice" :min="0" :precision="2" :step="10" />
+          </el-form-item>
+          <el-form-item v-if="convertNeedCoach" label="教练" required>
+            <el-select v-model="convertForm.coachId" placeholder="教练卡请选教练" style="width:100%" :loading="coachLoading">
+              <el-option v-for="c in coachList" :key="c._id" :label="c.name" :value="c._id" />
+            </el-select>
+          </el-form-item>
+          <div class="card-tip">发卡后这张卡次数 −1 挂到本场，原现金记退款。</div>
+        </template>
+        <template v-else>
+          <el-form-item label="原用卡">{{ current.cardName || current.card_name || '-' }}</el-form-item>
+          <el-form-item label="收款金额" required>
+            <el-input-number v-model="convertForm.cashAmount" :min="0" :precision="2" :step="10" style="width:180px" />
+            <span class="price-hint">元</span>
+          </el-form-item>
+          <div class="card-tip">填好金额再点确定：卡次数退回，本场改记这笔现金。</div>
+        </template>
+      </el-form>
+      <template #footer>
+        <el-button @click="convertVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitConvert">确认</el-button>
       </template>
     </el-dialog>
   </div>
@@ -337,7 +384,8 @@ const bookVisible = ref(false)
 const groupVisible = ref(false)
 const detailVisible = ref(false)
 const editField = ref('')
-const editForm = ref({ court: '', date: '', time: '', cardId: '', cardName: '', amount: 0, remark: '' })
+const editForm = ref({ court: '', date: '', time: '', cardId: '', cardName: '', amount: 0, remark: '', coachId: '', issueTpl: '' })
+const editNeedCoach = ref(false)
 const current = ref(null)
 const detailPhone = ref('')
 const currentGroup = ref(null)
@@ -370,6 +418,34 @@ const weekLabel = computed(() => {
 
 const selectedCard = computed(() => memberCards.value.find((c) => c._id === bookForm.value.cardId))
 const isCoachCard = computed(() => selectedCard.value?.type === 'coach')
+const selectedIssueTpl = computed(() => templates.value.find((t) => String(t._id) === String(bookForm.value.issueTpl)))
+const needCoachOnBook = computed(() => isCoachCard.value || selectedIssueTpl.value?.type === 'coach')
+function bookingAmount(b) {
+  const n = Number(b && b.amount)
+  return Number.isFinite(n) ? n : 0
+}
+function bookingHasCard(b) {
+  if (!b) return false
+  return !!(b.cardId || b.card_id || b.cardName || b.card_name)
+}
+const canRefundCashOnly = computed(() => {
+  const b = current.value
+  if (!b || isLockBooking(b) || isBookingDone(b)) return false
+  return bookingAmount(b) > 0
+})
+const canRefundCardOnly = computed(() => {
+  const b = current.value
+  if (!b || isLockBooking(b) || isBookingDone(b)) return false
+  return bookingHasCard(b)
+})
+const convertVisible = ref(false)
+const convertMode = ref('cash')
+const convertNeedCoach = ref(false)
+const convertForm = ref({ issueTpl: '', issuePrice: 0, coachId: '', cashAmount: 0 })
+function tplLabel(t) {
+  const tag = t.type === 'coach' ? '教练卡' : t.type === 'times' ? '次卡' : t.type === 'time' ? '时间卡' : t.type === 'group' ? '团课卡' : ''
+  return tag ? `${t.name}（${tag}）` : (t.name || '')
+}
 
 // 普通订场不用团课卡
 const usableCardsNormal = computed(() =>
@@ -425,7 +501,11 @@ function cardOptionLabel(c) {
 function formatCardStatus(b) {
   if (!b || !b.cardName) return '已预约'
   let text = '卡:' + b.cardName
-  if (b.cardRemaining != null) text += ` 剩${b.cardRemaining}次`
+  const left = b.cardRemaining != null ? b.cardRemaining : b.remainingTimes
+  const total = b.cardTotal != null ? b.cardTotal : b.totalTimes
+  if (left != null && left !== '') {
+    text += total != null && total !== '' ? ` 剩${left}/${total}次` : ` 剩${left}次`
+  }
   if (b.coachName) text += ` ·${b.coachName}`
   return text
 }
@@ -441,7 +521,15 @@ function isCardUsable(card, dateStr, timeStr) {
     try { card.timeRule = JSON.parse(rule) } catch (e) {}
   }
   const ruleObj = card.timeRule || (rule && typeof rule === 'object' ? rule : null)
-  if (ruleObj && ruleObj.mode !== 'unlimited' && ruleObj.mode !== 'all') {
+  if (ruleObj && Array.isArray(ruleObj.venueIds) && ruleObj.venueIds.length) {
+    const vid = localStorage.getItem('venue_id') || ''
+    if (vid && !ruleObj.venueIds.includes(vid)) return false
+  }
+  if (ruleObj && (ruleObj.mode === 'dates' || (ruleObj.dateRanges && ruleObj.dateRanges.length))) {
+    const hit = (ruleObj.dateRanges || []).some((rg) => rg.start && rg.end && dateStr >= rg.start && dateStr <= rg.end)
+    if (!hit) return false
+  }
+  if (ruleObj && ruleObj.mode !== 'unlimited' && ruleObj.mode !== 'all' && ruleObj.mode !== 'dates') {
     const d = new Date(dateStr.replace(/-/g, '/'))
     let weekday = d.getDay()
     if (weekday === 0) weekday = 7
@@ -546,8 +634,13 @@ function onCellClick(courtName, time) {
       cardId: b.cardId || b.card_id || '',
       cardName: b.cardName || '',
       amount: Number(b.amount || 0),
-      remark: b.remark || ''
+      remark: b.remark || '',
+      coachId: b.coachId || b.coach_id || '',
+      issueTpl: ''
     }
+    editNeedCoach.value = (b.cardType || b.card_type) === 'coach'
+    if (editNeedCoach.value) loadCoaches()
+    loadTemplates()
     detailVisible.value = true
     return
   }
@@ -565,7 +658,7 @@ function onCellClick(courtName, time) {
     cardId: '',
     coachId: '',
     remark: '',
-    payAmount: 0,
+    payAmount: getPrice(courtName, time) || 0,
     issueTpl: ''
   }
   bookMode.value = 'book'
@@ -696,9 +789,36 @@ async function onGroupMemberChange(id) {
   }
 }
 
+function isBookingDone(b) {
+  if (!b) return false
+  if (b.status === 'cancelled' || b.status === 'done' || b.status === 'completed') return true
+  const day = shortDate(b.date)
+  const t = String(b.time || '').split('-')[0] || '00:00'
+  if (!day) return false
+  const ts = new Date(day.replace(/-/g, '/') + ' ' + t).getTime()
+  return !Number.isNaN(ts) && ts <= Date.now()
+}
+function onEditCardChange(id) {
+  const card = memberCards.value.find((c) => String(c._id) === String(id))
+  editForm.value.cardName = card ? (card.cardName || card.name || '') : ''
+  editNeedCoach.value = !!(card && card.type === 'coach')
+  if (editNeedCoach.value) loadCoaches()
+  else editForm.value.coachId = ''
+}
 function onCardChange() {
   bookForm.value.coachId = ''
-  if (isCoachCard.value) loadCoaches()
+  if (needCoachOnBook.value) loadCoaches()
+}
+function onIssueTplChange() {
+  if (needCoachOnBook.value) loadCoaches()
+  loadTemplates()
+}
+function onEditIssueTplChange(id) {
+  const tpl = templates.value.find((t) => String(t._id) === String(id))
+  if (tpl && tpl.type === 'coach') {
+    editNeedCoach.value = true
+    loadCoaches()
+  }
 }
 
 function isLockBooking(b) {
@@ -783,6 +903,16 @@ async function toggleEditCard() {
 }
 async function saveDetail() {
   if (!current.value || !(current.value._id || current.value.id)) return
+  if (isBookingDone(current.value)) {
+    ElMessage.warning('已开始或已结束的预约不能改')
+    return
+  }
+  const issueTpl = templates.value.find((t) => String(t._id) === String(editForm.value.issueTpl))
+  if ((editNeedCoach.value || (issueTpl && issueTpl.type === 'coach')) && !editForm.value.coachId) {
+    ElMessage.warning('教练卡请选择教练')
+    return
+  }
+  const coach = coachList.value.find((c) => String(c._id) === String(editForm.value.coachId))
   saving.value = true
   try {
     const result = await post('/adminSaveBooking', {
@@ -795,6 +925,10 @@ async function saveDetail() {
         remark: editForm.value.remark,
         amount: editForm.value.amount,
         cardId: editForm.value.cardId,
+        coachId: editForm.value.coachId || '',
+        coachName: coach ? coach.name : '',
+        issueTemplateId: editForm.value.issueTpl || '',
+        issuePrice: Number(editForm.value.amount) || 0,
         operatorName: localStorage.getItem('admin_name') || '管理员'
       }
     })
@@ -806,27 +940,101 @@ async function saveDetail() {
     ElMessage.error(e.message || '保存失败，请覆盖部署 adminSaveBooking')
   } finally { saving.value = false }
 }
+function openConvert(mode) {
+  if (!current.value) return
+  convertMode.value = mode
+  convertNeedCoach.value = false
+  convertForm.value = {
+    issueTpl: '',
+    issuePrice: 0,
+    coachId: current.value.coachId || '',
+    cashAmount: Number(current.value.amount || 0) || getPrice(current.value.court, current.value.time) || 0
+  }
+  loadTemplates()
+  convertVisible.value = true
+}
+function refundCashKeepCard() { openConvert('cash') }
+function refundCardKeepCash() { openConvert('card') }
+function onConvertTplChange(id) {
+  const tpl = templates.value.find((t) => String(t._id) === String(id))
+  convertNeedCoach.value = !!(tpl && tpl.type === 'coach')
+  if (convertNeedCoach.value) loadCoaches()
+  if (tpl && tpl.price != null) convertForm.value.issuePrice = Number(tpl.price) || convertForm.value.issuePrice
+}
+async function submitConvert() {
+  if (!current.value) return
+  const op = localStorage.getItem('admin_name') || '管理员'
+  if (convertMode.value === 'cash') {
+    if (!convertForm.value.issueTpl) { ElMessage.warning('请选择要发的卡'); return }
+    const tpl = templates.value.find((t) => String(t._id) === String(convertForm.value.issueTpl))
+    if (tpl && tpl.type === 'coach' && !convertForm.value.coachId) { ElMessage.warning('教练卡请选择教练'); return }
+    const coach = coachList.value.find((c) => String(c._id) === String(convertForm.value.coachId))
+    saving.value = true
+    try {
+      const result = await post('/adminSaveBooking', {
+        action: 'refund_cash_keep_card',
+        id: current.value._id || current.value.id,
+        data: {
+          issueTemplateId: convertForm.value.issueTpl,
+          issuePrice: convertForm.value.issuePrice,
+          coachId: convertForm.value.coachId || '',
+          coachName: coach ? coach.name : '',
+          operatorName: op
+        }
+      })
+      if (!result.ok) { ElMessage.error(result.msg || '操作失败'); return }
+      ElMessage.success('已退原款并发卡扣次')
+      convertVisible.value = false
+      detailVisible.value = false
+      loadAll()
+    } catch (e) { ElMessage.error(e.message || '失败') }
+    finally { saving.value = false }
+    return
+  }
+  if (convertForm.value.cashAmount == null || Number(convertForm.value.cashAmount) < 0) {
+    ElMessage.warning('请填写收款金额')
+    return
+  }
+  saving.value = true
+  try {
+    const result = await post('/adminSaveBooking', {
+      action: 'refund_card_keep_cash',
+      id: current.value._id || current.value.id,
+      data: {
+        amount: convertForm.value.cashAmount,
+        operatorName: op
+      }
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '操作失败'); return }
+    ElMessage.success('已退卡并记现金')
+    convertVisible.value = false
+    detailVisible.value = false
+    loadAll()
+  } catch (e) { ElMessage.error(e.message || '失败') }
+  finally { saving.value = false }
+}
 async function fillBookingPhone(b) {
   if (!b) return
-  if (b.phone) { detailPhone.value = b.phone; return }
   const uid = b.memberId || b.userId || b.user_id
-  const name = b.userName || ''
+  if (!uid) {
+    detailPhone.value = b.phone || ''
+    return
+  }
   try {
-    const q = b.phone || name || uid
-    if (!q) return
-    const result = await post('/adminGetUsers', { keyword: String(q) })
-    const list = result.list || []
-    const hit = list.find((u) => String(u._id) === String(uid) || u.phone === b.phone || (name && (u.nickName === name || u.nickname === name))) || list[0]
-    if (hit && hit.phone) {
-      detailPhone.value = hit.phone
-      current.value = { ...b, phone: hit.phone }
+    const result = await post('/adminGetUsers', { action: 'detail', userId: uid })
+    const phone = result && result.user && result.user.phone
+    if (phone) {
+      detailPhone.value = phone
+      current.value = { ...b, phone }
+      return
     }
   } catch (e) {}
+  detailPhone.value = b.phone || ''
 }
 function goUser(b) {
-  const q = b.phone || b.userName || b.memberId || b.userId || ''
+  const q = b.memberId || b.userId || b.phone || b.userName || ''
   if (!q) { ElMessage.warning('没有客户信息'); return }
-  router.push({ path: '/users', query: { q: String(q) } })
+  router.push({ path: '/users', query: { q: String(q), open: '1', from: 'bookings' } })
 }
 async function submitBook() {
   if (!bookForm.value.memberKey || !bookForm.value.userName) {
@@ -853,7 +1061,8 @@ async function submitBook() {
   }
 
   let coachName = ''
-  if (selCard && selCard.type === 'coach') {
+  const issueTpl = templates.value.find((t) => String(t._id) === String(bookForm.value.issueTpl))
+  if ((selCard && selCard.type === 'coach') || (issueTpl && issueTpl.type === 'coach')) {
     if (!bookForm.value.coachId) {
       ElMessage.warning('教练卡必须选择教练')
       return
@@ -886,7 +1095,7 @@ async function submitBook() {
         date: bookForm.value.date,
         time: bookForm.value.time,
         userName: bookForm.value.userName,
-        remark: (bookForm.value.remark || '') + (bookForm.value.payAmount ? ' 收款' + bookForm.value.payAmount : ''),
+        remark: bookForm.value.remark || '',
         status: 'booked',
         venueId: venueId(),
         venueName: venueName.value,
@@ -1099,6 +1308,7 @@ h2 { margin: 0; font-size: 20px; }
 .mode-switch { margin-bottom: 12px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
 .phone-link { color: #1a5c3a; cursor: pointer; font-size: 13px; }
+.hint { color: #e6a23c; font-size: 13px; margin-right: 8px; }
 .slot.group { background: #fce4ec; color: #c2185b; }
 .slot.group:hover { background: #f8bbd0; }
 .booked-user {
