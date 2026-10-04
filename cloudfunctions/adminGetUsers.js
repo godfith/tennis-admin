@@ -297,7 +297,7 @@ exports.main = async (event) => {
       return { ok: true, balance: nextBal, points: nextPts, fnVer: FN_VER }
     }
 
-    if (action === 'saveMemberCard' || action === 'disableCard' || action === 'enableCard') {
+    if (action === 'saveMemberCard' || action === 'disableCard' || action === 'enableCard' || action === 'pauseCard') {
       const cardId = body.cardId || (body.data && body.data.cardId)
       const data = body.data || body
       const op = body.operatorName || data.operatorName || '管理员'
@@ -310,8 +310,41 @@ exports.main = async (event) => {
         return { ok: true, status: 'disabled', fnVer: FN_VER }
       }
       if (action === 'enableCard') {
-        await pool.query(`UPDATE member_cards SET status='active', updated_at=NOW() WHERE id=?`, [cardId])
+        let rule = card.time_rule
+        if (typeof rule === 'string') { try { rule = JSON.parse(rule) } catch (e) { rule = {} } }
+        if (rule && typeof rule === 'object') delete rule.pause
+        await pool.query(`UPDATE member_cards SET status='active', time_rule=?, updated_at=NOW() WHERE id=?`, [rule ? JSON.stringify(rule) : card.time_rule, cardId])
         return { ok: true, status: 'active', fnVer: FN_VER }
+      }
+      if (action === 'pauseCard') {
+        const from = String(data.pauseFrom || '').slice(0, 10)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return { ok: false, msg: '请选择停卡日期', fnVer: FN_VER }
+        const autoResume = !!data.autoResume
+        const resumeDate = autoResume ? String(data.resumeDate || '').slice(0, 10) : ''
+        if (autoResume && !/^\d{4}-\d{2}-\d{2}$/.test(resumeDate)) return { ok: false, msg: '请选择自动复卡日期', fnVer: FN_VER }
+        if (autoResume && resumeDate <= from) return { ok: false, msg: '复卡日期要晚于停卡日期', fnVer: FN_VER }
+        let rule = card.time_rule
+        if (typeof rule === 'string') { try { rule = JSON.parse(rule) } catch (e) { rule = {} } }
+        if (!rule || typeof rule !== 'object') rule = { mode: 'unlimited' }
+        rule.pause = { from, autoResume, resumeDate, extendValidity: !!data.extendValidity }
+        let validTo = card.valid_to
+        if (data.extendValidity && autoResume && card.valid_to) {
+          const days = Math.round((new Date(resumeDate) - new Date(from)) / 86400000)
+          if (days > 0) {
+            const end = new Date(String(card.valid_to).slice(0, 10) + 'T00:00:00')
+            end.setDate(end.getDate() + days)
+            const p = (n) => (n < 10 ? '0' + n : '' + n)
+            validTo = end.getFullYear() + '-' + p(end.getMonth() + 1) + '-' + p(end.getDate())
+          }
+        }
+        await pool.query(`UPDATE member_cards SET status='disabled', valid_to=?, time_rule=?, updated_at=NOW() WHERE id=?`, [validTo, JSON.stringify(rule), cardId])
+        const until = autoResume ? resumeDate : '2099-12-31'
+        await pool.query(
+          `UPDATE bookings SET status='cancelled', remark=CONCAT(IFNULL(remark,''),' 停卡取消'), updated_at=NOW()
+            WHERE card_id=? AND status='booked' AND date>=? AND date<?`,
+          [cardId, from, until]
+        )
+        return { ok: true, status: 'disabled', validTo, fnVer: FN_VER }
       }
       const fmt = (v) => {
         if (!v) return null

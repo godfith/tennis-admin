@@ -230,8 +230,8 @@
             <el-table-column label="" width="260">
               <template #default="{ row }">
                 <el-button link type="primary" @click="openCardDetail(row)">详情</el-button>
-                <el-button v-if="row.status === 'active'" link type="warning" @click="toggleListCard(row, 'disable')">停用</el-button>
-                <el-button v-if="row.status === 'disabled'" link type="success" @click="toggleListCard(row, 'enable')">启用</el-button>
+                <el-button v-if="row.status === 'active'" link type="warning" @click="openPause(row)">停卡</el-button>
+                <el-button v-if="row.status === 'disabled'" link type="success" @click="toggleListCard(row, 'enable')">复卡</el-button>
                 <el-button v-if="canExtendCards && row.status !== 'refunded' && row.status !== 'deleted'" link type="primary" @click="openExtend(row)">延期</el-button>
                 <el-button v-if="canRefundCard && row.status !== 'deleted'" link type="danger" @click="onDeleteCard(row)">删除</el-button>
               </template>
@@ -518,7 +518,30 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="extendVisible" title="会员卡延期" width="420px" destroy-on-close>
+    <el-dialog v-model="pauseVisible" title="停卡" width="520px">
+      <el-form label-width="100px">
+        <el-form-item label="停卡日期" required>
+          <el-date-picker v-model="pauseForm.pauseFrom" type="date" value-format="YYYY-MM-DD" />
+        </el-form-item>
+        <el-form-item label="复卡设置">
+          <el-radio-group v-model="pauseForm.autoResume">
+            <el-radio :label="false">不自动复卡</el-radio>
+            <el-radio :label="true">自动复卡</el-radio>
+          </el-radio-group>
+          <el-date-picker v-if="pauseForm.autoResume" v-model="pauseForm.resumeDate" type="date" value-format="YYYY-MM-DD" style="margin-left:8px" />
+        </el-form-item>
+        <el-form-item label="顺延有效期">
+          <el-radio-group v-model="pauseForm.extendValidity">
+            <el-radio :label="false">不顺延有效期</el-radio>
+            <el-radio :label="true">复卡后自动顺延有效期</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pauseVisible = false">取消</el-button>
+        <el-button type="primary" :loading="pauseSaving" @click="submitPause">确定</el-button>
+      </template>
+    </el-dialog>
       <el-form label-width="100px">
         <el-form-item label="卡名称">
           <el-input :model-value="extendCard.cardName" disabled />
@@ -716,7 +739,36 @@ const memberCards = ref([])
 const issueVisible = ref(false)
 const issuing = ref(false)
 const templates = ref([])
+const pauseVisible = ref(false)
+const pauseSaving = ref(false)
+const pauseCard = ref(null)
+const pauseForm = ref({ pauseFrom: '', autoResume: true, resumeDate: '', extendValidity: true })
 const extendVisible = ref(false)
+function openPause(row) {
+  pauseCard.value = row
+  const today = new Date()
+  const p = (n) => (n < 10 ? '0' + n : '' + n)
+  const ymdNow = today.getFullYear() + '-' + p(today.getMonth() + 1) + '-' + p(today.getDate())
+  pauseForm.value = { pauseFrom: ymdNow, autoResume: true, resumeDate: '', extendValidity: true }
+  pauseVisible.value = true
+}
+async function submitPause() {
+  if (!pauseCard.value) return
+  pauseSaving.value = true
+  try {
+    const result = await post('/adminGetUsers', {
+      action: 'pauseCard',
+      cardId: pauseCard.value._id,
+      operatorName: localStorage.getItem('admin_name') || '管理员',
+      data: pauseForm.value
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '停卡失败'); return }
+    ElMessage.success('已停卡，停卡期间未开始的预约已取消')
+    pauseVisible.value = false
+    if (detailUser.value && detailUser.value._id) openDetail(detailUser.value)
+  } catch (e) { ElMessage.error(e.message || '停卡失败') }
+  finally { pauseSaving.value = false }
+}
 const extending = ref(false)
 const extendCard = ref({})
 const extendDays = ref(30)
