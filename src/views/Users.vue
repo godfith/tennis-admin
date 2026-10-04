@@ -408,9 +408,18 @@
           <el-input-number v-model="issueForm.totalTimes" :min="1" />
         </el-form-item>
         <el-form-item label="有效期">
-          <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" />
-          <span style="margin:0 8px">至</span>
-          <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="可留空" />
+          <el-radio-group v-model="issueForm.activateMode" @change="applyIssueDates">
+            <el-radio label="now">立即激活</el-radio>
+            <el-radio label="first_use">首次使用激活</el-radio>
+          </el-radio-group>
+          <el-input-number v-model="issueForm.durationDays" :min="0" style="margin-left:8px" @change="applyIssueDates" />
+          <span class="hint">天，0 = 不限</span>
+          <div v-if="issueForm.activateMode === 'now'" style="margin-top:8px">
+            <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" />
+            <span style="margin:0 8px">至</span>
+            <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="不限" />
+          </div>
+          <div v-else class="hint" style="margin-left:0">发卡时不写日期，第一次订场使用后按 {{ issueForm.durationDays || 0 }} 天开始计算</div>
         </el-form-item>
         <el-form-item label="可用门店">
           <el-select v-model="issueForm.allowedVenueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 360px">
@@ -1508,6 +1517,8 @@ function blankIssue(extra) {
     totalTimes: 10,
     validFrom: new Date().toISOString().slice(0, 10),
     validTo: '',
+    activateMode: 'now',
+    durationDays: 30,
     remark: '',
     venueId: extra.venueId || localStorage.getItem('venue_id') || '',
     venueName: extra.venueName || localStorage.getItem('venue_name') || '',
@@ -1612,26 +1623,43 @@ async function submitBatchIssue() {
   }
 }
 
+function applyIssueDates() {
+  const days = Number(issueForm.value.durationDays) || 0
+  if (issueForm.value.activateMode === 'first_use') {
+    issueForm.value.validFrom = ''
+    issueForm.value.validTo = ''
+    return
+  }
+  const now = new Date()
+  const p = (n) => (n < 10 ? '0' + n : '' + n)
+  const ymd = (d) => d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+  issueForm.value.validFrom = ymd(now)
+  if (days > 0) {
+    const end = new Date(now)
+    end.setDate(end.getDate() + days)
+    issueForm.value.validTo = ymd(end)
+  } else {
+    issueForm.value.validTo = ''
+  }
+}
 function onTemplateChange(id) {
   const t = templates.value.find((x) => x._id === id)
-  if (t) {
-    issueForm.value.totalTimes = t.totalTimes || 10
-    issueForm.value.price = 0
-    const rule = parseCardRule(t.timeRule || t.time_rule)
-    issueForm.value.allowedVenueIds = (rule.venueIds || []).slice()
-    if (rule.mode === 'dates' && rule.dateRanges && rule.dateRanges.length) {
-      const starts = rule.dateRanges.map((x) => x.start).filter(Boolean).sort()
-      const ends = rule.dateRanges.map((x) => x.end).filter(Boolean).sort()
-      if (starts[0]) issueForm.value.validFrom = starts[0]
-      if (ends.length) issueForm.value.validTo = ends[ends.length - 1]
-    } else if (t.durationDays && t.durationDays > 0) {
-      const d = new Date()
-      d.setDate(d.getDate() + t.durationDays)
-      issueForm.value.validTo = d.toISOString().slice(0, 10)
-    } else {
-      issueForm.value.validTo = ''
-    }
+  if (!t) return
+  issueForm.value.totalTimes = t.totalTimes || 10
+  issueForm.value.price = 0
+  const rule = parseCardRule(t.timeRule || t.time_rule)
+  issueForm.value.allowedVenueIds = (rule.venueIds || []).slice()
+  issueForm.value.activateMode = rule.activateMode || 'now'
+  issueForm.value.durationDays = Number(t.durationDays) || Number(rule.durationDays) || 0
+  if (rule.mode === 'dates' && rule.dateRanges && rule.dateRanges.length) {
+    const starts = rule.dateRanges.map((x) => x.start).filter(Boolean).sort()
+    const ends = rule.dateRanges.map((x) => x.end).filter(Boolean).sort()
+    issueForm.value.activateMode = 'now'
+    if (starts[0]) issueForm.value.validFrom = starts[0]
+    if (ends.length) issueForm.value.validTo = ends[ends.length - 1]
+    return
   }
+  applyIssueDates()
 }
 
 async function issueOne(user) {
@@ -1642,8 +1670,10 @@ async function issueOne(user) {
     templateId: issueForm.value.templateId,
     totalTimes: issueForm.value.totalTimes,
     price: Number(issueForm.value.price) || 0,
-    validFrom: issueForm.value.validFrom,
-    validTo: issueForm.value.validTo || null,
+    validFrom: issueForm.value.activateMode === 'first_use' ? null : issueForm.value.validFrom,
+    validTo: issueForm.value.activateMode === 'first_use' ? null : (issueForm.value.validTo || null),
+    activateMode: issueForm.value.activateMode || 'now',
+    durationDays: Number(issueForm.value.durationDays) || 0,
     remark: issueForm.value.remark,
     venueId: issueForm.value.venueId,
     venueName: issueForm.value.venueName,

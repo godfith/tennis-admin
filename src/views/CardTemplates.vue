@@ -82,6 +82,12 @@
             <el-input-number v-model="form.durationDays" :min="0" />
             <span class="hint">0 = 不限</span>
           </el-form-item>
+          <el-form-item label="激活方式">
+            <el-radio-group v-model="form.activateMode">
+              <el-radio label="now" value="now">立即激活</el-radio>
+              <el-radio label="first_use" value="first_use">首次使用激活</el-radio>
+            </el-radio-group>
+          </el-form-item>
         </template>
         <template v-if="form.type === 'time'">
           <el-form-item label="有效天数" required>
@@ -223,7 +229,7 @@ function parseRule(raw) {
 const emptyForm = () => ({
   _id: '', name: '', type: 'times', totalTimes: 10, durationDays: 30,
   timeRule: { mode: 'unlimited', rules: [emptyRule()], maxHoursPerDay: 0, dateRanges: [{ start: '', end: '', range: [] }], holidayKey: '', venueIds: [] },
-  active: true, description: ''
+  activateMode: 'now', active: true, description: ''
 })
 const venueList = ref([])
 const holidayPresets = [
@@ -338,7 +344,8 @@ function openEdit(row) {
     durationDays: row.durationDays || 30,
     timeRule: parseRule(row.timeRule),
     active: row.status === 'active',
-    description: row.description || ''
+    description: row.description || '',
+    activateMode: (row.timeRule && row.timeRule.activateMode) || 'now'
   }
   visible.value = true
 }
@@ -362,7 +369,9 @@ async function save() {
             .filter((x) => x.start && x.end)
             .map((x) => ({ start: x.start, end: x.end })),
           holidayKey: form.value.timeRule.holidayKey || '',
-          venueIds: form.value.timeRule.venueIds || []
+          venueIds: form.value.timeRule.venueIds || [],
+          activateMode: form.value.activateMode || 'now',
+          durationDays: Number(form.value.durationDays) || 0
         }
     if (form.value.timeRule.mode === 'dates') {
       const segs = payloadRule.dateRanges
