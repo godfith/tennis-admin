@@ -421,13 +421,20 @@
           <el-input v-model="issueForm.remark" style="width: 360px" />
         </el-form-item>
       </el-form>
-      <div class="batch-user-head">选择发放对象 · 已选 {{ batchSelected.length }} 人</div>
+      <div class="batch-user-head">选择发放对象 · 已选 {{ batchSelected.length }} 人（换号搜索不会清掉已选）</div>
+      <div v-if="batchSelected.length" class="batch-picked">
+        <el-tag v-for="u in batchSelected" :key="u._id" closable size="small" @close="removePick(u)">
+          {{ displayName(u) }} {{ u.phone || '' }}
+        </el-tag>
+        <el-button link type="danger" @click="batchSelected = []">清空已选</el-button>
+      </div>
       <div class="filters" style="padding:0;margin-bottom:8px;background:transparent;border:none">
         <el-input v-model="batchKeyword" placeholder="昵称 / 手机 / 会员号" clearable style="width: 220px" @keyup.enter="loadBatchUsers" />
         <el-select v-model="batchTagId" clearable placeholder="按标签筛选" style="width: 160px" @change="loadBatchUsers">
           <el-option v-for="t in tagList" :key="t._id" :label="t.name" :value="t._id" />
         </el-select>
         <el-button type="primary" :loading="batchLoading" @click="loadBatchUsers">搜索用户</el-button>
+        <el-button @click="addAllSearch">当前结果全选</el-button>
       </div>
       <el-table
         :data="batchList"
@@ -435,9 +442,12 @@
         size="small"
         max-height="360"
         v-loading="batchLoading"
-        @selection-change="onBatchSelect"
       >
-        <el-table-column type="selection" width="42" />
+        <el-table-column width="70" label="加入">
+          <template #default="{ row }">
+            <el-checkbox :model-value="isPicked(row)" @change="(v) => togglePick(row, v)" />
+          </template>
+        </el-table-column>
         <el-table-column label="会员" min-width="140">
           <template #default="{ row }">{{ displayName(row) }}</template>
         </el-table-column>
@@ -1526,8 +1536,24 @@ function openBatchIssue() {
   loadTemplates()
   loadBatchUsers()
 }
-function onBatchSelect(rows) {
-  batchSelected.value = rows || []
+function isPicked(row) {
+  return batchSelected.value.some((u) => String(u._id) === String(row._id))
+}
+function togglePick(row, on) {
+  if (on) {
+    if (!isPicked(row)) batchSelected.value = batchSelected.value.concat([row])
+  } else {
+    batchSelected.value = batchSelected.value.filter((u) => String(u._id) !== String(row._id))
+  }
+}
+function removePick(row) {
+  batchSelected.value = batchSelected.value.filter((u) => String(u._id) !== String(row._id))
+}
+function addAllSearch() {
+  const map = {}
+  batchSelected.value.forEach((u) => { map[String(u._id)] = u })
+  batchList.value.forEach((u) => { map[String(u._id)] = u })
+  batchSelected.value = Object.values(map)
 }
 async function loadBatchUsers() {
   batchLoading.value = true
@@ -1575,8 +1601,9 @@ async function submitBatchIssue() {
       else fail++
     }
     if (fail && !ok) { ElMessage.error('发卡失败'); return }
-    ElMessage.success(fail ? `成功 ${ok} 人，失败 ${fail} 人` : `已发给 ${ok} 人`)
-    batchVisible.value = false
+    ElMessage.success(fail ? `成功 ${ok} 人，失败 ${fail} 人` : `已发给 ${ok} 人，可继续搜下一批`)
+    batchSelected.value = []
+    batchKeyword.value = ''
     loadData()
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
@@ -1717,7 +1744,7 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .block { margin-bottom: 18px; }
 .block-title { font-weight: 600; margin-bottom: 8px; color: #333; }
 .color-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; }
-.batch-names { font-size: 13px; line-height: 1.5; color: #333; }
+.batch-picked { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; align-items: center; }
 .batch-user-head { font-weight: 600; color: #1a5c3a; margin: 8px 0; }
 .batch-card-form { background: #f7faf8; border-radius: 8px; padding: 8px 12px 0; margin-bottom: 12px; }
 .rules-box { padding: 0 0 8px 110px; }
