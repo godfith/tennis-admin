@@ -542,6 +542,7 @@
         <el-button type="primary" :loading="pauseSaving" @click="submitPause">确定</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="extendVisible" title="会员卡延期" width="420px" destroy-on-close>
       <el-form label-width="100px">
         <el-form-item label="卡名称">
           <el-input :model-value="extendCard.cardName" disabled />
