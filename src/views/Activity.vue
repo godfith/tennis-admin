@@ -228,7 +228,14 @@ async function fetchAll() {
       list.value = []
       return
     }
-    list.value = result.list || []
+    const raw = result.list || []
+    const seen = new Set()
+    list.value = raw.filter((r) => {
+      const key = r.id ? 'id:' + r.id : [r.timeText, r.type, r.phone, r.userName, r.detail, r.amount].join('|')
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
   } catch (e) {
     ElMessage.error(e.message || '请部署 adminGetActivityLogs')
     list.value = []

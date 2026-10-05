@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'activity-20261002a'
+const FN_VER = 'activity-20261005a'
 
 const LABELS = {
   register: '用户注册',
@@ -111,10 +111,7 @@ exports.main = async (event) => {
 
     let sql = `SELECT ${selectBits.join(', ')}
                  FROM activity_logs l
-                 LEFT JOIN users u ON (
-                   (l.phone <> '' AND u.phone = l.phone)
-                   OR (IFNULL(l.user_name,'') <> '' AND u.nick_name = l.user_name)
-                 )
+                 LEFT JOIN users u ON ${has('user_id') ? 'u.id = l.user_id' : '1=0'}
                 WHERE 1=1`
     const params = []
     if (venueId) {
@@ -153,11 +150,15 @@ exports.main = async (event) => {
     sql += ' ORDER BY l.id DESC LIMIT ' + limit
 
     const [rows] = await pool.query(sql, params)
-    let list = (rows || []).map((r) => {
+    const seenId = new Set()
+    let list = []
+    ;(rows || []).forEach((r) => {
+      if (seenId.has(String(r.id))) return
+      seenId.add(String(r.id))
       const detail = r.detail || ''
       const parsedCard = r.card_name || parseCardName(detail)
       const parsedAmt = r.amount != null && r.amount !== '' ? money(r.amount) : parseAmount(detail)
-      return {
+      list.push({
         id: String(r.id),
         type: r.type,
         typeLabel: LABELS[r.type] || r.type,
@@ -171,58 +172,11 @@ exports.main = async (event) => {
         venueId: r.venue_id || '',
         venueName: r.venue_name || '',
         timeText: r.created_at || ''
-      }
+      })
     })
     if (cardName) {
       const q = cardName.toLowerCase()
       list = list.filter((r) => String(r.cardName || '').toLowerCase().indexOf(q) >= 0)
-    }
-
-    if (!type || type === 'issue_card' || type === 'refund_card' || type === 'import_card') {
-      try {
-        const where = ['1=1']
-        const p = []
-        if (venueId) { where.push('c.venue_id=?'); p.push(venueId) }
-        if (startDate) { where.push('c.created_at>=?'); p.push(startDate + ' 00:00:00') }
-        if (endDate) { where.push('c.created_at < DATE_ADD(?, INTERVAL 1 DAY)'); p.push(endDate) }
-        const [cards] = await pool.query(
-          `SELECT c.id, c.card_name, c.user_name, c.issuer_name, c.price, c.venue_id, c.venue_name,
-                  c.remark, c.status, DATE_FORMAT(c.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-                  IFNULL(u.phone,'') AS phone, c.user_id
-             FROM member_cards c
-             LEFT JOIN users u ON u.id=c.user_id
-            WHERE ${where.join(' AND ')}
-            ORDER BY c.id DESC
-            LIMIT 800`,
-          p
-        )
-        const seen = new Set(list.map((r) => String(r.cardName || '') + '|' + String(r.timeText || '').slice(0, 16) + '|' + String(r.phone || '')))
-        ;(cards || []).forEach((c) => {
-          const imported = String(c.issuer_name || '') === '数据迁入'
-          const key = String(c.card_name || '') + '|' + String(c.created_at || '').slice(0, 16) + '|' + String(c.phone || '')
-          if (seen.has(key)) return
-          if (type === 'issue_card' && imported) return
-          if (type === 'import_card' && !imported) return
-          if (!type || type === 'issue_card' || type === 'import_card') {
-            list.push({
-              id: 'card-' + c.id,
-              type: imported ? 'import_card' : 'issue_card',
-              typeLabel: imported ? '迁入' : '发卡',
-              userName: c.user_name || '',
-              userAccount: c.user_name || '',
-              operatorName: c.issuer_name || '',
-              phone: c.phone || '',
-              cardName: c.card_name || '',
-              amount: imported ? 0 : money(c.price),
-              detail: imported ? '数据迁入，不计入营业额' : ('发卡 ' + (c.card_name || '')),
-              venueId: c.venue_id || '',
-              venueName: c.venue_name || '',
-              timeText: c.created_at || ''
-            })
-          }
-        })
-        list.sort((a, b) => String(b.timeText || '').localeCompare(String(a.timeText || '')))
-      } catch (e) {}
     }
 
     return { ok: true, fnVer: FN_VER, list }
