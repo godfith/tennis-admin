@@ -95,7 +95,12 @@
             <el-option label="店长" value="manager" />
           </el-select>
         </el-form-item>
-        <el-form-item label="新密码"><el-input v-model="adminForm.password" type="password" show-password placeholder="不改请留空" /></el-form-item>
+        <el-form-item label="权限">
+          <el-checkbox-group v-model="adminForm.perms">
+            <el-checkbox v-for="p in permOptions" :key="p.key" :label="p.key">{{ p.label }}</el-checkbox>
+          </el-checkbox-group>
+          <div class="hint">不勾选则按角色默认。勾选后只开放勾了的菜单和操作。超管不受限制。</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="adminVisible = false">取消</el-button>
@@ -106,6 +111,7 @@
 </template>
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { PERM_OPTIONS, ALLOWED } from '../utils/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 const list = ref([])
 const admins = ref([])
@@ -115,7 +121,8 @@ const saving = ref(false)
 const visible = ref(false)
 const adminVisible = ref(false)
 const adminSaving = ref(false)
-const adminForm = ref({ _id: '', username: '', name: '', role: 'front', password: '' })
+const adminForm = ref({ _id: '', username: '', name: '', role: 'front', password: '', perms: [] })
+const permOptions = PERM_OPTIONS
 const filterRole = ref('')
 const venueName = ref(localStorage.getItem('venue_name') || '')
 const form = ref({ _id: '', name: '', phone: '', role: 'front', specialty: '', sort: 0, active: true, remark: '', openLogin: true, username: '', password: '' })
@@ -133,7 +140,7 @@ async function loadAdmins() {
   try {
     const result = await post('/adminSaveAdmin', { action: 'list', venueId: venueId() })
     if (result.ok) admins.value = result.list || []
-  } catch (e) {}
+  } catch (e) { /* 云函数未部署时不挡员工列表 */ }
   finally { adminLoading.value = false }
 }
 async function loadData() {
@@ -214,7 +221,7 @@ function openEditAdmin(row) {
     ElMessage.warning('超级管理员请在库里改，这里只改店员账号')
     return
   }
-  adminForm.value = { _id: row._id, username: row.username, name: row.name || '', role: row.role || 'front', password: '' }
+  adminForm.value = { _id: row._id, username: row.username, name: row.name || '', role: row.role || 'front', password: '', perms: row.perms && row.perms.length ? row.perms.slice() : (ALLOWED[row.role] || []).slice() }
   adminVisible.value = true
 }
 async function saveAdmin() {
@@ -226,6 +233,7 @@ async function saveAdmin() {
       name: adminForm.value.name,
       role: adminForm.value.role,
       password: adminForm.value.password || '',
+      perms: adminForm.value.perms || [],
       venueId: venueId(),
       venueName: venueName.value
     })

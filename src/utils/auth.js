@@ -39,25 +39,67 @@ export const ALLOWED = {
     '/dashboard',
     '/activity',
     '/finance',
+    '/occupancy',
     '/coach-attendance',
     '/bookings',
+    '/coach-schedule',
     '/group-classes',
     '/courts',
+    '/hours',
     '/prices',
     '/coaches',
     '/users'
   ],
-  front: ['/bookings', '/users'],
+  front: ['/bookings', '/coach-schedule', '/users'],
   service: ['/bookings', '/users']
+}
+
+export const PERM_OPTIONS = [
+  { key: '/dashboard', label: '数据看板' },
+  { key: '/activity', label: '业务动态' },
+  { key: '/finance', label: '财务报表' },
+  { key: '/occupancy', label: '订场率' },
+  { key: '/coach-attendance', label: '教练出勤' },
+  { key: '/bookings', label: '预约管理' },
+  { key: '/coach-schedule', label: '教练排课' },
+  { key: '/group-classes', label: '团课排期' },
+  { key: '/courts', label: '场地管理' },
+  { key: '/hours', label: '场地时间' },
+  { key: '/prices', label: '场地价格' },
+  { key: '/coaches', label: '教练管理' },
+  { key: '/staff', label: '员工管理' },
+  { key: '/users', label: '用户管理' },
+  { key: '/cards', label: '卡模板管理' },
+  { key: '/gift', label: '体验发放' },
+  { key: 'issueCard', label: '发卡' },
+  { key: 'refundCard', label: '退卡/删除卡' },
+  { key: 'extendCard', label: '延期' },
+  { key: 'cancelBook', label: '取消预约' },
+  { key: 'editTemplate', label: '改卡模板' },
+  { key: 'editStaff', label: '改员工权限' }
+]
+
+export function getPerms() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('admin_perms') || '[]')
+    return Array.isArray(raw) ? raw : []
+  } catch (e) {
+    return []
+  }
 }
 
 export function canAccess(path) {
   if (roleKind() === 'admin') return true
+  const custom = getPerms()
+  if (custom.length) return custom.includes(path)
   const list = ALLOWED[roleKind()] || []
   return list.includes(path)
 }
 
 export function can(action) {
+  if (roleKind() === 'admin') return true
+  const custom = getPerms()
+  if (custom.length) return custom.includes(action)
   const k = roleKind()
   const map = {
     switchVenue: k === 'admin',
@@ -73,8 +115,7 @@ export function can(action) {
     editPrice: k === 'admin' || k === 'manager',
     editCoach: k === 'admin' || k === 'manager',
     editStaff: k === 'admin',
-    editTemplate: k === 'admin',
-    gift: k === 'admin'
+    editTemplate: k === 'admin'
   }
   return !!map[action]
 }

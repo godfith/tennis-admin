@@ -54,6 +54,7 @@ async function onLogin() {
     localStorage.setItem('admin_token', admin._id || admin.id || '')
     localStorage.setItem('admin_name', admin.name || admin.username || '')
     localStorage.setItem('admin_role', admin.role || 'admin')
+    localStorage.setItem('admin_perms', JSON.stringify(admin.permissions || []))
     const vid = admin.venueId || admin.venue_id || ''
     const vname = admin.venueName || admin.venue_name || ''
     if (vid) {
