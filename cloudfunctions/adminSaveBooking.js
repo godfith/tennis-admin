@@ -478,12 +478,22 @@ exports.main = async (event) => {
           }
           const dayCap = Number(tr.maxHoursPerDay) || 0
           if (dayCap > 0) {
+            const slotHours = (time) => {
+              const parts = String(time || '').split('-')
+              if (parts.length < 2) return 1
+              const toMin = (s) => {
+                const hm = String(s).split(':')
+                return Number(hm[0]) * 60 + Number(hm[1] || 0)
+              }
+              const diff = (toMin(parts[1]) - toMin(parts[0])) / 60
+              return diff > 0 ? diff : 1
+            }
             const [usedRows] = await conn.query(
-              `SELECT COUNT(*) AS cnt FROM bookings WHERE card_id=? AND date=? AND status='booked'`,
+              `SELECT time FROM bookings WHERE card_id=? AND date=? AND status='booked'`,
               [card.id, dateYmd]
             )
-            const used = Number(usedRows[0] && usedRows[0].cnt) || 0
-            if (used + 1 > dayCap) {
+            const used = (usedRows || []).reduce((s, r) => s + slotHours(r.time), 0)
+            if (used + slotHours(data.time) > dayCap + 0.001) {
               await conn.rollback()
               return { ok: false, msg: `该卡每天最多可约 ${dayCap} 小时，今日已约 ${used} 小时` }
             }
