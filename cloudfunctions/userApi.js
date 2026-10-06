@@ -208,7 +208,7 @@ exports.main = async (rawEvent) => {
       const venueId = event.venueId || ''
       if (!venueId) return { ok: false, msg: '缺少场馆' }
       const [rows] = await pool.query(
-        `SELECT * FROM courts WHERE venue_id=? AND status='open' ORDER BY sort ASC, id ASC`,
+        `SELECT * FROM courts WHERE venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用') ORDER BY sort ASC, id ASC`,
         [venueId]
       )
       const list = (rows || []).map((r) => ({
