@@ -42,11 +42,6 @@ const VENUE_MCH = {
     serial: process.env.WX_SERIAL_HUADIWAN || '52FAA65CB9BEB6EEC25B8C984547FBD9A7BF3FC3',
     keyPem: process.env.WX_KEY_HUADIWAN || '',
     apiV3Key: process.env.WX_APIV3_HUADIWAN || ''
-  },
-    mchid: process.env.WX_MCHID_ZHONGDA || '',
-    serial: process.env.WX_SERIAL_ZHONGDA || '',
-    keyPem: process.env.WX_KEY_ZHONGDA || '',
-    apiV3Key: process.env.WX_APIV3_ZHONGDA || ''
   }
 }
 
