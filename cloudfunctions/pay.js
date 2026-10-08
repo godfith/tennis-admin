@@ -42,6 +42,12 @@ const VENUE_MCH = {
     serial: process.env.WX_SERIAL_HUADIWAN || '52FAA65CB9BEB6EEC25B8C984547FBD9A7BF3FC3',
     keyPem: process.env.WX_KEY_HUADIWAN || '',
     apiV3Key: process.env.WX_APIV3_HUADIWAN || ''
+  },
+  venue_zhongda: {
+    mchid: process.env.WX_MCHID_ZHONGDA || '1684193652',
+    serial: process.env.WX_SERIAL_ZHONGDA || '12B8D17E8E1D9210EC7A0F70DF2DC5B5FB853413',
+    keyPem: process.env.WX_KEY_ZHONGDA || '',
+    apiV3Key: process.env.WX_APIV3_ZHONGDA || ''
   }
 }
 
