@@ -106,8 +106,19 @@
       <el-table-column label="积分" width="70">
         <template #default="{ row }">{{ row.points || 0 }}</template>
       </el-table-column>
-      <el-table-column label="持卡" width="70">
-        <template #default="{ row }">{{ row.cardCount ?? 0 }}</template>
+      <el-table-column label="卡券" min-width="220">
+        <template #default="{ row }">
+          <div v-if="row.cards && row.cards.length" class="card-pills">
+            <el-tag
+              v-for="(c, i) in row.cards"
+              :key="i"
+              size="small"
+              :type="statusTag(c.status)"
+              class="tag"
+            >{{ c.cardName }}{{ isTimesLike(c.type) ? ' ' + (c.remainingTimes || 0) + '次' : '' }}</el-tag>
+          </div>
+          <span v-else class="muted">无卡</span>
+        </template>
       </el-table-column>
       <el-table-column label="最近到店" width="110">
         <template #default="{ row }">{{ ymd(row.lastVisit) || '-' }}</template>

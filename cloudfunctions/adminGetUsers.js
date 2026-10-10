@@ -178,6 +178,34 @@ async function listTags() {
   return (rows || []).map((t) => ({ _id: String(t.id), name: t.name, color: t.color }))
 }
 
+async function loadCardsForUsers(ids) {
+  const map = {}
+  if (!ids.length) return map
+  const [rows] = await pool.query(
+    `SELECT user_id, card_name, type, status, remaining_times, total_times,
+            DATE_FORMAT(valid_to,'%Y-%m-%d') AS valid_to
+       FROM member_cards
+      WHERE user_id IN (${ids.map(() => '?').join(',')})
+        AND IFNULL(status,'') NOT IN ('deleted','refunded')
+      ORDER BY id DESC`,
+    ids
+  )
+  for (const r of rows || []) {
+    const k = String(r.user_id)
+    if (!map[k]) map[k] = []
+    if (map[k].length >= 4) continue
+    map[k].push({
+      cardName: r.card_name || '',
+      type: r.type,
+      status: r.status,
+      remainingTimes: r.remaining_times,
+      totalTimes: r.total_times,
+      validTo: r.valid_to
+    })
+  }
+  return map
+}
+
 function cardStatusSql(cardStatus) {
   if (cardStatus === 'active') {
     return ` AND c.status='active' AND (c.valid_to IS NULL OR c.valid_to>=CURDATE())`
@@ -659,7 +687,12 @@ exports.main = async (event) => {
 
     const ids = (rows || []).map((u) => u.id)
     const tagsMap = await loadTagsForUsers(ids)
-    const list = attachSpend((rows || []).map((u) => mapUser(u, tagsMap)), await loadSpendByUsers(ids))
+    const cardsMap = await loadCardsForUsers(ids)
+    const list = attachSpend((rows || []).map((u) => {
+      const item = mapUser(u, tagsMap)
+      item.cards = cardsMap[String(u.id)] || []
+      return item
+    }), await loadSpendByUsers(ids))
     return {
       ok: true,
       list,
