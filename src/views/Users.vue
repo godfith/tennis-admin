@@ -426,6 +426,8 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="batchVisible" title="批量发卡" width="860px" top="4vh" destroy-on-close>
       <el-form label-width="96px" class="batch-card-form">
         <el-form-item label="发卡场馆" required>
           <el-select v-model="issueForm.venueId" placeholder="请选择场馆" style="width: 280px" @change="onVenuePick">
