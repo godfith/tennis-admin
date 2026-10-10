@@ -476,6 +476,16 @@ exports.main = async (event) => {
               return { ok: false, msg: '当天不在这张节假日卡的可用日期内' }
             }
           }
+          const from = fmtDate(card.valid_from)
+          const to = fmtDate(card.valid_to)
+          if (from && dateYmd < from) {
+            await conn.rollback()
+            return { ok: false, msg: '这张卡还没到生效日期' }
+          }
+          if (to && dateYmd > to) {
+            await conn.rollback()
+            return { ok: false, msg: '这张卡已过期' }
+          }
           const dayCap = Number(tr.maxHoursPerDay) || 0
           if (dayCap > 0) {
             const slotHours = (time) => {

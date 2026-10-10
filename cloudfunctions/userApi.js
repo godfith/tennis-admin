@@ -163,7 +163,7 @@ async function writeLedger(conn, row) {
     console.warn('finance_ledger write skip:', e.message)
   }
 }
-const FN_VER = 'userApi-20260916b'
+const FN_VER = 'userApi-20261010a'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -364,6 +364,23 @@ exports.main = async (rawEvent) => {
           }
           if (card.type === 'time') {
             const timeRule = parseTimeRule(card.time_rule)
+            const from = fmtDate(card.valid_from)
+            const to = fmtDate(card.valid_to)
+            if (from && dateYmd < from) {
+              await conn.rollback()
+              return { ok: false, msg: '这张卡还没到生效日期' }
+            }
+            if (to && dateYmd > to) {
+              await conn.rollback()
+              return { ok: false, msg: '这张卡已过期' }
+            }
+            if (timeRule && (timeRule.mode === 'dates' || (Array.isArray(timeRule.dateRanges) && timeRule.dateRanges.length))) {
+              const okDate = (timeRule.dateRanges || []).some((rg) => rg.start && rg.end && dateYmd >= rg.start && dateYmd <= rg.end)
+              if (!okDate) {
+                await conn.rollback()
+                return { ok: false, msg: '当天不在这张节假日卡的可用日期内' }
+              }
+            }
             if (timeRule && timeRule.mode === 'rules' && Array.isArray(timeRule.rules)) {
               const d = new Date(String(dateYmd).replace(/-/g, '/'))
               let weekday = d.getDay()
