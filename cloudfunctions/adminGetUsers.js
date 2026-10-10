@@ -178,11 +178,79 @@ async function listTags() {
   return (rows || []).map((t) => ({ _id: String(t.id), name: t.name, color: t.color }))
 }
 
+function cardStatusSql(cardStatus) {
+  if (cardStatus === 'active') {
+    return ` AND c.status='active' AND (c.valid_to IS NULL OR c.valid_to>=CURDATE())`
+  }
+  if (cardStatus === 'disabled') return ` AND c.status='disabled'`
+  if (cardStatus === 'expired') {
+    return ` AND (c.status='expired' OR (c.valid_to IS NOT NULL AND c.valid_to<CURDATE() AND IFNULL(c.status,'') NOT IN ('deleted','refunded','used_up')))`
+  }
+  if (cardStatus === 'done') return ` AND c.status='used_up'`
+  return ''
+}
+
 exports.main = async (event) => {
   const body = parseEvent(event)
   const action = body.action || 'list'
   try {
     await ensureExtras()
+
+    if (action === 'listCards') {
+      const cardName = String(body.cardName || '').trim()
+      const cardStatus = String(body.cardStatus || '').trim()
+      const keyword = String(body.keyword || '').trim()
+      let sql = `SELECT c.id, c.card_name, c.type, c.status, c.remaining_times, c.total_times,
+                        DATE_FORMAT(c.valid_from,'%Y-%m-%d') AS valid_from,
+                        DATE_FORMAT(c.valid_to,'%Y-%m-%d') AS valid_to,
+                        u.id AS user_id, u.nick_name, u.phone
+                   FROM member_cards c
+                   LEFT JOIN users u ON u.id=c.user_id
+                  WHERE IFNULL(c.status,'') NOT IN ('deleted','refunded')`
+      const params = []
+      if (cardName) {
+        sql += ` AND CONVERT(IFNULL(c.card_name,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci`
+        params.push('%' + cardName + '%')
+      }
+      if (keyword) {
+        sql += ` AND (
+          CONVERT(IFNULL(u.nick_name,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+          OR CONVERT(IFNULL(u.phone,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+        )`
+        params.push('%' + keyword + '%', '%' + keyword + '%')
+      }
+      sql += cardStatusSql(cardStatus)
+      sql += ' ORDER BY c.id DESC LIMIT 300'
+      const [rows] = await pool.query(sql, params)
+      return {
+        ok: true,
+        list: (rows || []).map((r) => ({
+          _id: String(r.id),
+          cardName: r.card_name,
+          type: r.type,
+          status: r.status,
+          remainingTimes: r.remaining_times,
+          totalTimes: r.total_times,
+          validFrom: r.valid_from,
+          validTo: r.valid_to,
+          userId: r.user_id ? String(r.user_id) : '',
+          nickName: r.nick_name || '',
+          phone: r.phone || ''
+        })),
+        fnVer: FN_VER
+      }
+    }
+
+    if (action === 'batchDisableCards') {
+      const ids = (Array.isArray(body.cardIds) ? body.cardIds : []).map(Number).filter(Boolean)
+      if (!ids.length) return { ok: false, msg: '请先勾选要停用的卡', fnVer: FN_VER }
+      await pool.query(
+        `UPDATE member_cards SET status='disabled', updated_at=NOW()
+          WHERE id IN (${ids.map(() => '?').join(',')}) AND IFNULL(status,'') NOT IN ('deleted','refunded')`,
+        ids
+      )
+      return { ok: true, count: ids.length, fnVer: FN_VER }
+    }
 
     if (action === 'listTags') {
       return { ok: true, list: await listTags(), fnVer: FN_VER }
@@ -490,6 +558,7 @@ exports.main = async (event) => {
     const tagId = body.tagId ? Number(body.tagId) : 0
     const cardType = String(body.cardType || '').trim()
     const cardName = String(body.cardName || '').trim()
+    const cardStatus = String(body.cardStatus || '').trim()
     const createdFrom = String(body.createdFrom || '').slice(0, 10)
     const createdTo = String(body.createdTo || '').slice(0, 10)
     const sort = String(body.sort || 'id_desc')
@@ -526,7 +595,7 @@ exports.main = async (event) => {
       sql += ' AND EXISTS (SELECT 1 FROM user_tag_map m WHERE m.user_id=u.id AND m.tag_id=?)'
       params.push(tagId)
     }
-    if (cardType || cardName) {
+    if (cardType || cardName || cardStatus) {
       sql += ` AND EXISTS (
         SELECT 1 FROM member_cards c
         WHERE c.user_id=u.id AND IFNULL(c.status,'') NOT IN ('deleted','refunded')`
@@ -538,6 +607,7 @@ exports.main = async (event) => {
         sql += ` AND CONVERT(IFNULL(c.card_name,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci`
         params.push('%' + cardName + '%')
       }
+      sql += cardStatusSql(cardStatus)
       sql += ')'
     }
     if (createdFrom) {

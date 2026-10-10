@@ -32,6 +32,12 @@
       <el-select v-model="filterCardName" filterable allow-create default-first-option clearable placeholder="卡券名称" style="width: 180px" @change="loadData">
         <el-option v-for="t in activeTemplates" :key="t._id" :label="t.name" :value="t.name" />
       </el-select>
+      <el-select v-model="filterCardStatus" clearable placeholder="卡券状态" style="width: 130px" @change="loadData">
+        <el-option label="使用中" value="active" />
+        <el-option label="停用" value="disabled" />
+        <el-option label="过期" value="expired" />
+        <el-option label="已完成" value="done" />
+      </el-select>
       <el-date-picker v-model="createdFrom" type="date" value-format="YYYY-MM-DD" placeholder="注册起" style="width: 140px" @change="loadData" />
       <el-date-picker v-model="createdTo" type="date" value-format="YYYY-MM-DD" placeholder="注册止" style="width: 140px" @change="loadData" />
       <el-select v-model="sort" style="width: 150px" @change="loadData">
@@ -46,6 +52,7 @@
       <el-button type="primary" :loading="loading" @click="loadData">搜索</el-button>
       <el-button @click="resetAndLoad">重置</el-button>
       <el-button v-if="canIssueCard" type="success" @click="openBatchIssue">批量发卡</el-button>
+      <el-button v-if="canIssueCard" type="warning" @click="openBatchDisable">批量停用</el-button>
       <el-button link type="primary" @click="tagManageVisible = true">管理标签</el-button>
       <el-button :loading="exporting" @click="exportExcel">导出 Excel</el-button>
     </div>
@@ -384,7 +391,41 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="batchVisible" title="批量发卡" width="860px" top="4vh" destroy-on-close>
+    <el-dialog v-model="disableVisible" title="批量停用卡券" width="920px" top="4vh">
+      <div class="toolbar" style="margin-bottom:12px">
+        <el-select v-model="disableForm.cardName" filterable allow-create default-first-option clearable placeholder="卡券名称" style="width: 220px">
+          <el-option v-for="t in activeTemplates" :key="t._id" :label="t.name" :value="t.name" />
+        </el-select>
+        <el-select v-model="disableForm.status" clearable placeholder="卡券状态" style="width: 140px">
+          <el-option label="使用中" value="active" />
+          <el-option label="停用" value="disabled" />
+          <el-option label="过期" value="expired" />
+          <el-option label="已完成" value="done" />
+        </el-select>
+        <el-input v-model="disableForm.keyword" placeholder="昵称 / 手机" clearable style="width: 180px" @keyup.enter="loadDisableCards" />
+        <el-button type="primary" :loading="disableLoading" @click="loadDisableCards">搜索卡券</el-button>
+      </div>
+      <el-table :data="disableList" border size="small" v-loading="disableLoading" @selection-change="onDisableSelect">
+        <el-table-column type="selection" width="42" />
+        <el-table-column label="卡名称" min-width="180" prop="cardName" />
+        <el-table-column label="用户" width="120" prop="nickName" />
+        <el-table-column label="手机" width="130" prop="phone" />
+        <el-table-column label="有效期" min-width="170">
+          <template #default="{ row }">{{ row.validFrom || '-' }} ~ {{ row.validTo || '不限' }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="disableVisible = false">取消</el-button>
+        <el-button type="warning" :loading="disableSaving" :disabled="!disableSelected.length" @click="submitBatchDisable">
+          停用已选 {{ disableSelected.length }} 张
+        </el-button>
+      </template>
+    </el-dialog>
       <el-form label-width="96px" class="batch-card-form">
         <el-form-item label="发卡场馆" required>
           <el-select v-model="issueForm.venueId" placeholder="请选择场馆" style="width: 280px" @change="onVenuePick">
@@ -712,6 +753,7 @@ const keyword = ref('')
 const filterTagId = ref('')
 const filterCardType = ref('')
 const filterCardName = ref('')
+const filterCardStatus = ref('')
 const createdFrom = ref('')
 const createdTo = ref('')
 const sort = ref('id_desc')
@@ -724,7 +766,12 @@ const regSaving = ref(false)
 const regForm = ref({ phone: '', nickName: '' })
 const currentUser = ref(null)
 const venueList = ref([])
-const batchMode = ref(false)
+const disableVisible = ref(false)
+const disableLoading = ref(false)
+const disableSaving = ref(false)
+const disableList = ref([])
+const disableSelected = ref([])
+const disableForm = ref({ cardName: '', status: 'active', keyword: '' })
 const batchVisible = ref(false)
 const batchKeyword = ref('')
 const batchTagId = ref('')
@@ -1049,6 +1096,7 @@ async function loadData() {
       tagId: filterTagId.value || '',
       cardType: filterCardType.value || '',
       cardName: filterCardName.value || '',
+      cardStatus: filterCardStatus.value || '',
       createdFrom: createdFrom.value || '',
       createdTo: createdTo.value || '',
       sort: sort.value
@@ -1072,6 +1120,7 @@ function resetAndLoad() {
   filterTagId.value = ''
   filterCardType.value = ''
   filterCardName.value = ''
+  filterCardStatus.value = ''
   createdFrom.value = ''
   createdTo.value = ''
   sort.value = 'id_desc'
@@ -1087,6 +1136,7 @@ async function exportExcel() {
       tagId: filterTagId.value || '',
       cardType: filterCardType.value || '',
       cardName: filterCardName.value || '',
+      cardStatus: filterCardStatus.value || '',
       createdFrom: createdFrom.value || '',
       createdTo: createdTo.value || '',
       sort: sort.value,
@@ -1534,6 +1584,49 @@ function openIssue(row) {
   issueVisible.value = true
 }
 
+function openBatchDisable() {
+  disableForm.value = { cardName: filterCardName.value || '', status: filterCardStatus.value || 'active', keyword: '' }
+  disableList.value = []
+  disableSelected.value = []
+  disableVisible.value = true
+  loadDisableCards()
+}
+function onDisableSelect(rows) { disableSelected.value = rows || [] }
+async function loadDisableCards() {
+  disableLoading.value = true
+  try {
+    const result = await post('/adminGetUsers', {
+      action: 'listCards',
+      cardName: disableForm.value.cardName || '',
+      cardStatus: disableForm.value.status || '',
+      keyword: disableForm.value.keyword || ''
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '加载失败'); return }
+    disableList.value = result.list || []
+  } catch (e) {
+    ElMessage.error(e.message || '失败')
+  } finally { disableLoading.value = false }
+}
+async function submitBatchDisable() {
+  if (!disableSelected.value.length) return
+  try {
+    await ElMessageBox.confirm(`确认停用已选 ${disableSelected.value.length} 张卡？停用后预约不能再选。`, '批量停用', { type: 'warning' })
+  } catch (e) { return }
+  disableSaving.value = true
+  try {
+    const result = await post('/adminGetUsers', {
+      action: 'batchDisableCards',
+      cardIds: disableSelected.value.map((r) => r._id),
+      operatorName: localStorage.getItem('admin_name') || '管理员'
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '停用失败'); return }
+    ElMessage.success('已停用 ' + disableSelected.value.length + ' 张')
+    loadDisableCards()
+    loadData()
+  } catch (e) {
+    ElMessage.error(e.message || '失败')
+  } finally { disableSaving.value = false }
+}
 function openBatchIssue() {
   batchMode.value = true
   batchKeyword.value = keyword.value
