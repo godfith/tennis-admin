@@ -89,6 +89,22 @@
           <span v-if="!(row.tags && row.tags.length)" class="muted">-</span>
         </template>
       </el-table-column>
+      <el-table-column label="卡券" min-width="180">
+        <template #default="{ row }">
+          <div v-if="row.cards && row.cards.length" class="card-pills">
+            <div v-for="(c, i) in row.cards" :key="i">{{ c.cardName }}{{ isTimesLike(c.type) ? ' ' + (c.remainingTimes || 0) + '次' : '' }}</div>
+          </div>
+          <span v-else class="muted">无卡</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="卡券状态" width="100">
+        <template #default="{ row }">
+          <div v-if="row.cards && row.cards.length">
+            <el-tag v-for="(c, i) in row.cards" :key="i" size="small" :type="statusTag(c.status)" class="tag">{{ statusLabel(c.status) }}</el-tag>
+          </div>
+          <span v-else class="muted">-</span>
+        </template>
+      </el-table-column>
       <el-table-column label="累计消费" min-width="200">
         <template #default="{ row }">
           <div class="spend">¥{{ money(row.totalSpend) }}</div>
@@ -105,20 +121,6 @@
       </el-table-column>
       <el-table-column label="积分" width="70">
         <template #default="{ row }">{{ row.points || 0 }}</template>
-      </el-table-column>
-      <el-table-column label="卡券" min-width="220">
-        <template #default="{ row }">
-          <div v-if="row.cards && row.cards.length" class="card-pills">
-            <el-tag
-              v-for="(c, i) in row.cards"
-              :key="i"
-              size="small"
-              :type="statusTag(c.status)"
-              class="tag"
-            >{{ c.cardName }}{{ isTimesLike(c.type) ? ' ' + (c.remainingTimes || 0) + '次' : '' }}</el-tag>
-          </div>
-          <span v-else class="muted">无卡</span>
-        </template>
       </el-table-column>
       <el-table-column label="最近到店" width="110">
         <template #default="{ row }">{{ ymd(row.lastVisit) || '-' }}</template>
