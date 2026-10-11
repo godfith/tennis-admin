@@ -75,6 +75,7 @@
             <el-radio label="coach" value="coach">教练卡</el-radio>
             <el-radio label="group" value="group">团课</el-radio>
             <el-radio label="time" value="time">时间卡</el-radio>
+            <el-radio label="stored" value="stored">储值卡</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="form.type === 'group'" label="说明">
@@ -282,7 +283,7 @@ const base = import.meta.env.DEV
   : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 function normalizeType(t) {
   const s = String(t || '').trim().toLowerCase()
-  if (s === 'times' || s === 'coach' || s === 'group' || s === 'time') return s
+  if (s === 'times' || s === 'coach' || s === 'group' || s === 'time' || s === 'stored') return s
   if (t === '次卡') return 'times'
   if (t === '教练卡') return 'coach'
   if (t === '团课' || t === '团课卡') return 'group'

@@ -162,6 +162,10 @@ exports.main = async (event) => {
       )
     } catch (e) {}
 
+    if (tpl.type === 'stored' || String(tpl.name || '').indexOf('储值') >= 0) {
+      await pool.query('UPDATE users SET balance=IFNULL(balance,0)+?, updated_at=NOW() WHERE id=?', [payPrice, userId])
+    }
+
     return { ok: true, id: String(res.insertId) }
   } catch (e) {
     console.error(e)

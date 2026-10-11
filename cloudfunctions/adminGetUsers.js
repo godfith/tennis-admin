@@ -206,6 +206,31 @@ async function loadCardsForUsers(ids) {
   return map
 }
 
+async function deductStoredCards(userId, amount) {
+  let left = Number(amount) || 0
+  if (!userId || left <= 0) return
+  const [rows] = await pool.query(
+    `SELECT id, IFNULL(price,0) AS price, IFNULL(remaining_times,0) AS remaining_times
+       FROM member_cards
+      WHERE user_id=? AND IFNULL(status,'')='active'
+        AND (type='stored' OR card_name LIKE '%储值%')
+      ORDER BY id`,
+    [userId]
+  )
+  for (const c of rows || []) {
+    if (left <= 0) break
+    const have = Number(c.price) || Number(c.remaining_times) || 0
+    if (have <= 0) continue
+    const use = Math.min(have, left)
+    const next = +(have - use).toFixed(2)
+    await pool.query(
+      `UPDATE member_cards SET price=?, remaining_times=?, status=?, updated_at=NOW() WHERE id=?`,
+      [next, Math.round(next), next <= 0 ? 'used_up' : 'active', c.id]
+    )
+    left = +(left - use).toFixed(2)
+  }
+}
+
 function cardStatusSql(cardStatus) {
   if (cardStatus === 'active') {
     return ` AND c.status='active' AND (c.valid_to IS NULL OR c.valid_to>=CURDATE())`
@@ -357,6 +382,7 @@ exports.main = async (event) => {
       if (!Number.isNaN(addPts) && addPts) nextPts = Math.max(0, nextPts + Math.trunc(addPts))
       await pool.query('UPDATE users SET balance=?, points=?, updated_at=NOW() WHERE id=?', [nextBal, nextPts, userId])
       const delta = +(nextBal - Number(u.balance)).toFixed(2)
+      if (delta < 0) await deductStoredCards(userId, -delta)
       if (delta !== 0) {
         try {
           await pool.query(
@@ -541,7 +567,7 @@ exports.main = async (event) => {
             _id: String(c.id),
             cardName: c.card_name,
             type: c.type,
-            status: c.status,
+            status: (fmtYmd(c.valid_to) && fmtYmd(c.valid_to) < new Date().toISOString().slice(0, 10) && c.status === 'active') ? 'expired' : c.status,
             remainingTimes: c.remaining_times,
             totalTimes: c.total_times,
             validFrom: fmtYmd(c.valid_from),

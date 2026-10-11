@@ -28,6 +28,7 @@
         <el-option label="教练卡" value="coach" />
         <el-option label="团课" value="group" />
         <el-option label="时间卡" value="time" />
+        <el-option label="储值卡" value="stored" />
       </el-select>
       <el-select v-model="filterCardName" filterable allow-create default-first-option clearable placeholder="卡券名称" style="width: 180px" @change="loadData">
         <el-option v-for="t in activeTemplates" :key="t._id" :label="t.name" :value="t.name" />
@@ -921,7 +922,7 @@ function isTimesLike(t) {
   return t === 'times' || t === 'coach' || t === 'group'
 }
 function typeLabel(t) {
-  return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }[t] || t
+  return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡', stored: '储值卡' }[t] || t
 }
 function typeTag(t) {
   return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[t] || 'info'

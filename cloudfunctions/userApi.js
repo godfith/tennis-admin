@@ -14,6 +14,31 @@ const pool = mysql.createPool({
   connectionLimit: 5,
   connectTimeout: 10000
 })
+async function deductStoredCards(conn, userId, amount) {
+  let left = Number(amount) || 0
+  if (!userId || left <= 0) return
+  const [rows] = await conn.query(
+    `SELECT id, IFNULL(price,0) AS price, IFNULL(remaining_times,0) AS remaining_times
+       FROM member_cards
+      WHERE user_id=? AND IFNULL(status,'')='active'
+        AND (type='stored' OR card_name LIKE '%储值%')
+      ORDER BY id`,
+    [userId]
+  )
+  for (const c of rows || []) {
+    if (left <= 0) break
+    const have = Number(c.price) || Number(c.remaining_times) || 0
+    if (have <= 0) continue
+    const use = Math.min(have, left)
+    const next = +(have - use).toFixed(2)
+    await conn.query(
+      `UPDATE member_cards SET price=?, remaining_times=?, status=?, updated_at=NOW() WHERE id=?`,
+      [next, Math.round(next), next <= 0 ? 'used_up' : 'active', c.id]
+    )
+    left = +(left - use).toFixed(2)
+  }
+}
+
 function fmtDate(v) {
   if (!v) return null
   if (typeof v === 'string') return v.slice(0, 10)
@@ -338,6 +363,17 @@ exports.main = async (rawEvent) => {
             await conn.rollback()
             return { ok: false, msg: '不能使用他人会员卡' }
           }
+          const validFrom = fmtDate(card.valid_from)
+          const validTo = fmtDate(card.valid_to)
+          if (validFrom && dateYmd < validFrom) {
+            await conn.rollback()
+            return { ok: false, msg: '这张卡还没到生效日期' }
+          }
+          if (validTo && dateYmd > validTo) {
+            await conn.query(`UPDATE member_cards SET status='expired', updated_at=NOW() WHERE id=?`, [card.id])
+            await conn.rollback()
+            return { ok: false, msg: '这张卡已过期' }
+          }
           const timeRule = parseTimeRule(card.time_rule)
           const dayCap = Number(timeRule && timeRule.maxHoursPerDay) || 0
           if (dayCap > 0) {
@@ -364,16 +400,6 @@ exports.main = async (rawEvent) => {
           }
           if (card.type === 'time') {
             const timeRule = parseTimeRule(card.time_rule)
-            const from = fmtDate(card.valid_from)
-            const to = fmtDate(card.valid_to)
-            if (from && dateYmd < from) {
-              await conn.rollback()
-              return { ok: false, msg: '这张卡还没到生效日期' }
-            }
-            if (to && dateYmd > to) {
-              await conn.rollback()
-              return { ok: false, msg: '这张卡已过期' }
-            }
             if (timeRule && (timeRule.mode === 'dates' || (Array.isArray(timeRule.dateRanges) && timeRule.dateRanges.length))) {
               const okDate = (timeRule.dateRanges || []).some((rg) => rg.start && rg.end && dateYmd >= rg.start && dateYmd <= rg.end)
               if (!okDate) {
@@ -485,6 +511,7 @@ exports.main = async (rawEvent) => {
             money(bal - need),
             userIdVal
           ])
+          await deductStoredCards(conn, userIdVal, need)
           ledgerType = 'wallet_pay'
           ledgerAmt = need
           bookAmount = need
@@ -833,6 +860,7 @@ exports.main = async (rawEvent) => {
         remainingTimes: r.remaining_times || 0,
         validFrom: fmtDate(r.valid_from),
         validTo: fmtDate(r.valid_to),
+        status: (fmtDate(r.valid_to) && fmtDate(r.valid_to) < new Date().toISOString().slice(0, 10) && r.status === 'active') ? 'expired' : r.status,
         timeRule: parseTimeRule(r.time_rule),
         status: r.status || 'active'
       }))
