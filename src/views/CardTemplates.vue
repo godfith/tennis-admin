@@ -65,6 +65,10 @@
         <el-form-item label="卡名称" required>
           <el-input v-model="form.name" placeholder="如：闲时次卡 / 全时段月卡" />
         </el-form-item>
+        <el-form-item label="默认金额">
+          <el-input-number v-model="form.price" :min="0" :precision="2" :step="1" />
+          <span class="hint">元，发卡时自动带出，可再改</span>
+        </el-form-item>
         <el-form-item label="类型" required>
           <el-radio-group v-model="form.type" :disabled="!!form._id">
             <el-radio label="times" value="times">次卡</el-radio>
@@ -92,6 +96,13 @@
         <template v-if="form.type === 'time'">
           <el-form-item label="有效天数" required>
             <el-input-number v-model="form.durationDays" :min="1" />
+            <span class="hint">月卡填 30，季卡填 90</span>
+          </el-form-item>
+          <el-form-item label="生效方式">
+            <el-radio-group v-model="form.activateMode">
+              <el-radio label="now" value="now">购买后生效</el-radio>
+              <el-radio label="first_use" value="first_use">第一次使用后生效</el-radio>
+            </el-radio-group>
           </el-form-item>
         </template>
 
@@ -172,6 +183,10 @@
         <el-form-item label="备注">
           <el-input v-model="form.description" type="textarea" :rows="2" />
         </el-form-item>
+        <el-form-item v-if="form._id" label="同步已发卡">
+          <el-checkbox v-model="form.syncIssued">把这次改动同步到已发给用户的卡</el-checkbox>
+          <div class="hint" style="margin-left:0">不勾选只改模板。单独改过规则的卡不会被覆盖。</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="visible = false">取消</el-button>
@@ -229,7 +244,7 @@ function parseRule(raw) {
 const emptyForm = () => ({
   _id: '', name: '', type: 'times', totalTimes: 10, durationDays: 30,
   timeRule: { mode: 'unlimited', rules: [emptyRule()], maxHoursPerDay: 0, dateRanges: [{ start: '', end: '', range: [] }], holidayKey: '', venueIds: [] },
-  activateMode: 'now', active: true, description: ''
+  price: 0, activateMode: 'now', active: true, description: '', syncIssued: false
 })
 const venueList = ref([])
 const holidayPresets = [
@@ -345,7 +360,9 @@ function openEdit(row) {
     timeRule: parseRule(row.timeRule),
     active: row.status === 'active',
     description: row.description || '',
-    activateMode: (row.timeRule && row.timeRule.activateMode) || 'now'
+    activateMode: (row.timeRule && row.timeRule.activateMode) || 'now',
+    price: Number(row.price) || 0,
+    syncIssued: false
   }
   visible.value = true
 }
@@ -380,7 +397,7 @@ async function save() {
     const data = {
       name: form.value.name,
       type: normalizeType(form.value.type),
-      price: 0,
+      price: Number(form.value.price) || 0,
       totalTimes: form.value.totalTimes,
       durationDays: form.value.durationDays,
       maxHoursPerDay: Number(form.value.timeRule.maxHoursPerDay) || 0,
@@ -389,7 +406,7 @@ async function save() {
       description: form.value.description
     }
     const result = form.value._id
-      ? await post('/adminSaveCardTemplate', { action: 'update', id: form.value._id, data })
+      ? await post('/adminSaveCardTemplate', { action: 'update', id: form.value._id, syncIssued: !!form.value.syncIssued, data })
       : await post('/adminSaveCardTemplate', { action: 'add', data })
     if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
     ElMessage.success('保存成功')
@@ -407,13 +424,27 @@ async function toggleStatus(row) {
 }
 async function onDelete(row) {
   try {
-    await ElMessageBox.confirm('确定删除「' + row.name + '」？', '警告', { type: 'warning' })
-    const result = await post('/adminSaveCardTemplate', { action: 'delete', id: row._id })
+    const action = await ElMessageBox.confirm(
+      '删除「' + row.name + '」。请选择是否影响已经发给用户的卡。',
+      '删除卡模板',
+      {
+        type: 'warning',
+        distinguishCancelAndClose: true,
+        confirmButtonText: '只删模板，已发卡保留',
+        cancelButtonText: '删模板并停用已发卡'
+      }
+    ).then(() => 'template').catch((e) => (e === 'cancel' ? 'issued' : 'close'))
+    if (action === 'close') return
+    const result = await post('/adminSaveCardTemplate', {
+      action: 'delete',
+      id: row._id,
+      affectIssued: action === 'issued'
+    })
     if (!result.ok) { ElMessage.error(result.msg || '删除失败'); return }
-    ElMessage.success('已删除')
+    ElMessage.success(action === 'issued' ? '已删除模板并停用已发卡' : '已删除模板，已发卡保留')
     loadData()
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error(e.message || '失败')
+    if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || '失败')
   }
 }
 async function loadVenues() {

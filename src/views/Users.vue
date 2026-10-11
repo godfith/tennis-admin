@@ -1754,7 +1754,7 @@ function onTemplateChange(id) {
   const t = templates.value.find((x) => x._id === id)
   if (!t) return
   issueForm.value.totalTimes = t.totalTimes || 10
-  issueForm.value.price = 0
+  issueForm.value.price = Number(t.price) || 0
   const rule = parseCardRule(t.timeRule || t.time_rule)
   issueForm.value.allowedVenueIds = (rule.venueIds || []).slice()
   issueForm.value.activateMode = rule.activateMode || 'now'

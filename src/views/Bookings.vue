@@ -55,6 +55,7 @@
                 {{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
               </div>
               <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
+              <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).phone" class="booked-phone">{{ getBooking(c.name, t).phone }}</div>
             </template>
             <template v-else>
               <div class="free-text">可约</div>
@@ -501,9 +502,11 @@ function cardOptionLabel(c) {
 function formatCardStatus(b) {
   if (!b || !b.cardName) return '已预约'
   let text = '卡:' + b.cardName
+  const type = b.cardType || b.card_type || ''
+  const isTimes = type === 'times' || type === 'coach' || type === 'group'
   const left = b.cardRemaining != null ? b.cardRemaining : b.remainingTimes
   const total = b.cardTotal != null ? b.cardTotal : b.totalTimes
-  if (left != null && left !== '') {
+  if (isTimes && left != null && left !== '') {
     text += total != null && total !== '' ? ` 剩${left}/${total}次` : ` 剩${left}次`
   }
   if (b.coachName) text += ` ·${b.coachName}`
@@ -1307,7 +1310,7 @@ h2 { margin: 0; font-size: 20px; }
 .slot.locked:hover { background: #cfd8dc; }
 .mode-switch { margin-bottom: 12px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
-.phone-link { color: #1a5c3a; cursor: pointer; font-size: 13px; }
+.booked-phone { font-size: 11px; color: #1a5c3a; margin-top: 2px; }
 .hint { color: #e6a23c; font-size: 13px; margin-right: 8px; }
 .slot.group { background: #fce4ec; color: #c2185b; }
 .slot.group:hover { background: #f8bbd0; }

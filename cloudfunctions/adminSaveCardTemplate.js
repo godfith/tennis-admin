@@ -148,22 +148,32 @@ exports.main = async (event) => {
       fields.push('updated_at=NOW()')
       params.push(id)
       await pool.query(`UPDATE card_templates SET ${fields.join(', ')} WHERE id=?`, params)
-      return { ok: true, fnVer: FN_VER }
+      let synced = 0
+      if (body.syncIssued && data.timeRule) {
+        const [issued] = await pool.query(
+          `SELECT id, time_rule FROM member_cards WHERE template_id=? AND IFNULL(status,'') NOT IN ('deleted','refunded')`,
+          [id]
+        )
+        const next = packRule(data.timeRule, data.maxHoursPerDay)
+        for (const c of issued || []) {
+          let cr = c.time_rule
+          if (typeof cr === 'string') { try { cr = JSON.parse(cr) } catch (e) { cr = {} } }
+          if (cr && cr.customized) continue
+          await pool.query('UPDATE member_cards SET time_rule=?, updated_at=NOW() WHERE id=?', [next, c.id])
+          synced++
+        }
+      }
+      return { ok: true, synced, fnVer: FN_VER }
     }
 
     if (action === 'delete') {
       if (!id) return { ok: false, msg: '缺少模板ID', fnVer: FN_VER }
-      let used = 0
-      try {
-        const [rows] = await pool.query(
-          `SELECT COUNT(*) AS n FROM member_cards WHERE template_id=? AND status IN ('active','used_up')`,
+      if (body.affectIssued) {
+        await pool.query(
+          `UPDATE member_cards SET status='disabled', updated_at=NOW()
+            WHERE template_id=? AND IFNULL(status,'') NOT IN ('deleted','refunded')`,
           [id]
         )
-        used = Number(rows[0] && rows[0].n) || 0
-      } catch (e) {}
-      if (used > 0) {
-        await pool.query(`UPDATE card_templates SET status='disabled', updated_at=NOW() WHERE id=?`, [id])
-        return { ok: false, msg: '已有会员持有这张模板卡，不能硬删，已改为停用', fnVer: FN_VER }
       }
       await pool.query('DELETE FROM card_templates WHERE id=?', [id])
       return { ok: true, fnVer: FN_VER }

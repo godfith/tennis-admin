@@ -520,7 +520,7 @@ exports.main = async (event) => {
           const activateParams = []
           let tr = card.time_rule
           if (typeof tr === 'string') { try { tr = JSON.parse(tr) } catch (e) { tr = {} } }
-          if (tr && tr.activateMode === 'first_use' && !card.valid_from && Number(tr.durationDays) > 0) {
+          if (tr && tr.activateMode === 'first_use' && !card.valid_from && Number(tr.durationDays || card.duration_days) > 0) {
             const end = new Date(dateYmd + 'T00:00:00')
             end.setDate(end.getDate() + Number(tr.durationDays))
             const p = (n) => (n < 10 ? '0' + n : '' + n)
@@ -532,6 +532,18 @@ exports.main = async (event) => {
             `UPDATE member_cards SET remaining_times=?, status=?${activateSql}, updated_at=NOW() WHERE id=?`,
             [left, left <= 0 ? 'used_up' : 'active'].concat(activateParams, [card.id])
           )
+        }
+        if (card.type === 'time') {
+          let tr = card.time_rule
+          if (typeof tr === 'string') { try { tr = JSON.parse(tr) } catch (e) { tr = {} } }
+          const days = Number(tr && tr.durationDays) || 0
+          if (tr && tr.activateMode === 'first_use' && !card.valid_from && days > 0) {
+            const end = new Date(dateYmd + 'T00:00:00')
+            end.setDate(end.getDate() + days)
+            const p = (n) => (n < 10 ? '0' + n : '' + n)
+            const to = end.getFullYear() + '-' + p(end.getMonth() + 1) + '-' + p(end.getDate())
+            await conn.query('UPDATE member_cards SET valid_from=?, valid_to=?, updated_at=NOW() WHERE id=?', [dateYmd, to, card.id])
+          }
         }
         cardIdVal = card.id
         cardName = card.card_name || cardName
