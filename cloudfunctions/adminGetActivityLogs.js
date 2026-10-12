@@ -13,7 +13,12 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'activity-20261005a'
+function isImportedIssuer(name) {
+  const s = String(name || '')
+  return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
+}
+
+const FN_VER = 'activity-20261012a'
 
 const LABELS = {
   register: '用户注册',
@@ -150,6 +155,64 @@ exports.main = async (event) => {
     sql += ' ORDER BY l.id DESC LIMIT ' + limit
 
     const [rows] = await pool.query(sql, params)
+
+    const phones = Array.from(new Set((rows || []).map((r) => String(r.phone || '').replace(/\D/g, '').slice(-11)).filter((p) => p.length >= 8)))
+    const bookAmt = {}
+    const cardAmt = {}
+    if (phones.length && startDate && endDate) {
+      try {
+        const [bs] = await pool.query(
+          `SELECT phone, date, time, court, amount, card_id
+             FROM bookings
+            WHERE date BETWEEN ? AND ? AND phone IN (${phones.map(() => '?').join(',')})
+              AND status <> 'cancelled'`,
+          [startDate, endDate].concat(phones)
+        )
+        ;(bs || []).forEach((b) => {
+          const key = String(b.phone || '') + '|' + String(b.date || '').slice(0, 10) + '|' + (b.time || '') + '|' + (b.court || '')
+          bookAmt[key] = b.card_id ? 0 : money(b.amount)
+        })
+      } catch (e) {}
+      try {
+        const [cs] = await pool.query(
+          `SELECT c.user_name, u.phone, c.card_name, c.price, c.issuer_name,
+                  DATE_FORMAT(c.created_at, '%Y-%m-%d') AS d
+             FROM member_cards c LEFT JOIN users u ON u.id = c.user_id
+            WHERE c.created_at >= ? AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+              AND u.phone IN (${phones.map(() => '?').join(',')})`,
+          [startDate + ' 00:00:00', endDate].concat(phones)
+        )
+        ;(cs || []).forEach((c) => {
+          const key = String(c.phone || '') + '|' + c.d + '|' + (c.card_name || '')
+          if (!isImportedIssuer(c.issuer_name)) cardAmt[key] = money(c.price)
+        })
+      } catch (e) {}
+    }
+
+    function realAmount(r) {
+      const t = r.type
+      const phone = String(r.phone || '').replace(/\D/g, '').slice(-11)
+      const day = String(r.created_at || '').slice(0, 10)
+      if (t === 'issue_card' || t === 'gift_card') {
+        const name = r.card_name || parseCardName(r.detail)
+        const hit = cardAmt[phone + '|' + day + '|' + name]
+        if (hit != null) return hit
+        return parseAmount(r.detail)
+      }
+      if (t === 'booking_add' || t === 'pay') {
+        const m = String(r.detail || '').match(/(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{2}:\d{2}-\d{2}:\d{2})/)
+        const court = (String(r.detail || '').match(/预约\s+(\S+)/) || [])[1] || ''
+        if (m) {
+          const d = m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0')
+          const hit = bookAmt[phone + '|' + d + '|' + m[4] + '|' + court]
+          if (hit != null) return hit
+        }
+        return null
+      }
+      if (t === 'refund_card' || t === 'booking_cancel') return parseAmount(r.detail)
+      return null
+    }
+
     const seenId = new Set()
     let list = []
     ;(rows || []).forEach((r) => {
@@ -157,7 +220,7 @@ exports.main = async (event) => {
       seenId.add(String(r.id))
       const detail = r.detail || ''
       const parsedCard = r.card_name || parseCardName(detail)
-      const parsedAmt = r.amount != null && r.amount !== '' ? money(r.amount) : parseAmount(detail)
+      const parsedAmt = realAmount(r)
       list.push({
         id: String(r.id),
         type: r.type,
