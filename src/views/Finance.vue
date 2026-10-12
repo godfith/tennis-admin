@@ -327,6 +327,7 @@ async function loadData() {
       ElMessage.error(result.msg || '加载失败')
       return
     }
+    if (result.debug) ElMessage.warning('查询异常：' + result.debug)
     turnover.value = result.turnover || { card: 0, court: 0, total: 0 }
     income.value = result.income || { card: 0, court: 0, total: 0 }
     imported.value = result.imported || { count: 0, amount: 0 }

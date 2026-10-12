@@ -174,24 +174,26 @@ exports.main = async (raw) => {
     const bookParams = [startDate, endDate]
     if (venueId) bookParams.push(venueId)
 
+    const errors = []
     const [cards, refundRows, ledRows, payRows, books, prices] = await Promise.all([
-      pool.query(cardSql, cardParams).then(([r]) => r || []).catch(() =>
-        pool.query(
+      pool.query(cardSql, cardParams).then(([r]) => r || []).catch((e) => {
+        errors.push('cards:' + e.message)
+        return pool.query(
           `SELECT id, card_name, type, total_times, remaining_times, price,
                   valid_from, valid_to, status, created_at, updated_at, user_name, issuer_name
              FROM member_cards
             WHERE created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)`,
           [startDate + ' 00:00:00', endDate]
-        ).then(([r]) => r || []).catch(() => [])
-      ),
-      pool.query(refundSql, refundParams).then(([r]) => r || []).catch(() => []),
-      pool.query(ledSql, ledParams).then(([r]) => r || []).catch(() => []),
-      pool.query(paySql, payParams).then(([r]) => r || []).catch(() => []),
-      pool.query(bookSql, bookParams).then(([r]) => r || []).catch(() => []),
+        ).then(([r]) => r || []).catch((e2) => { errors.push('cards2:' + e2.message); return [] })
+      }),
+      pool.query(refundSql, refundParams).then(([r]) => r || []).catch((e) => { errors.push('refund:' + e.message); return [] }),
+      pool.query(ledSql, ledParams).then(([r]) => r || []).catch((e) => { errors.push('ledger:' + e.message); return [] }),
+      pool.query(paySql, payParams).then(([r]) => r || []).catch((e) => { errors.push('pay:' + e.message); return [] }),
+      pool.query(bookSql, bookParams).then(([r]) => r || []).catch((e) => { errors.push('books:' + e.message); return [] }),
       (venueId
         ? pool.query('SELECT court, time_slot, weekday, price FROM court_prices WHERE venue_id = ?', [venueId])
         : pool.query('SELECT venue_id, court, time_slot, weekday, price FROM court_prices')
-      ).then(([r]) => r || []).catch(() => [])
+      ).then(([r]) => r || []).catch((e) => { errors.push('prices:' + e.message); return [] })
     ])
 
     function unusedRefund(c) {
@@ -462,7 +464,8 @@ exports.main = async (raw) => {
       daily,
       issueList: cardIssueList,
       payList: courtPayList,
-      consumeList
+      consumeList,
+      debug: errors.length ? errors.join(' | ') : ''
     }
   } catch (e) {
     console.error(e)
