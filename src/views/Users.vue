@@ -209,6 +209,8 @@
             <el-input-number v-model="wallet.addBalance" :step="10" :precision="2" placeholder="改余额" />
             <span class="muted">正数充值，负数扣减</span>
           </div>
+          <el-checkbox v-model="wallet.migrated" style="margin-top:6px">旧系统迁入余额，不计营业额</el-checkbox>
+          </div>
           <div class="wallet-row">
             <el-input-number v-model="wallet.addPoints" :step="10" :precision="0" />
             <span class="muted">积分增减</span>
@@ -808,7 +810,7 @@ const cardUses = computed(() => (detailLedger.value || []).filter((r) => ['card_
 const detailLedger = ref([])
 const detailTagIds = ref([])
 const detailRemark = ref('')
-const wallet = ref({ addBalance: 0, addPoints: 0, remark: '' })
+const wallet = ref({ addBalance: 0, addPoints: 0, remark: '', migrated: false })
 const walletSaving = ref(false)
 
 const tagManageVisible = ref(false)
@@ -1052,7 +1054,7 @@ function refreshCards() {
   if (cardsVisible.value && currentUser.value) openCards(currentUser.value)
 }
 function ledgerLabel(t) {
-  return { court_pay: '订场支付', card_issue: '发卡', card_refund: '退卡', card_use: '用卡', enroll: '团课' }[t] || t
+  return { court_pay: '订场支付', card_issue: '发卡', card_refund: '退卡', card_use: '用卡', enroll: '团课', balance_in: '实充余额', balance_out: '扣减余额', balance_migrate: '迁入余额（不计营业额）', court_cancel: '取消订场' }[t] || t
 }
 function formatTime(t) {
   if (!t) return '-'
@@ -1400,6 +1402,7 @@ async function saveWallet() {
       addBalance: wallet.value.addBalance || 0,
       addPoints: wallet.value.addPoints || 0,
       remark: wallet.value.remark || '',
+      migrated: !!wallet.value.migrated,
       operatorName: localStorage.getItem('admin_name') || '管理员'
     })
     if (!result.ok) {
@@ -1408,7 +1411,7 @@ async function saveWallet() {
     }
     detailUser.value.balance = result.balance
     detailUser.value.points = result.points
-    wallet.value = { addBalance: 0, addPoints: 0, remark: '' }
+    wallet.value = { addBalance: 0, addPoints: 0, remark: '', migrated: false }
     ElMessage.success('已更新 余额¥' + money(result.balance) + ' 积分' + result.points)
     loadData()
   } catch (e) {

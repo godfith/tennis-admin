@@ -390,14 +390,14 @@ exports.main = async (event) => {
               (biz_date, type, amount, venue_id, venue_name, user_id, user_name, operator_name, remark)
              VALUES (CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-              delta > 0 ? 'balance_in' : 'balance_out',
+              delta > 0 ? (body.migrated ? 'balance_migrate' : 'balance_in') : 'balance_out',
               delta,
               u.venue_id || '',
               u.venue_name || '',
               userId,
               u.nick_name || '',
               body.operatorName || '管理员',
-              String(body.remark || (delta > 0 ? '充值余额' : '扣减余额')).slice(0, 200)
+              String(body.remark || (body.migrated ? '旧系统迁入余额' : (delta > 0 ? '充值余额' : '扣减余额'))).slice(0, 200)
             ]
           )
         } catch (e) {}
