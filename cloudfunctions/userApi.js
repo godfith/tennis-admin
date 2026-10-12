@@ -862,9 +862,7 @@ exports.main = async (rawEvent) => {
         remainingTimes: r.remaining_times || 0,
         validFrom: fmtDate(r.valid_from),
         validTo: fmtDate(r.valid_to),
-        status: (fmtDate(r.valid_to) && fmtDate(r.valid_to) < new Date().toISOString().slice(0, 10) && r.status === 'active') ? 'expired' : r.status,
-        timeRule: parseTimeRule(r.time_rule),
-        status: r.status || 'active'
+        status: r.status || 'active',
       }))
       return { ok: true, list }
     }
