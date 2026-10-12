@@ -315,6 +315,10 @@ async function exportWeekly() {
     ElMessage.error(result.msg || '导出失败，请部署 adminGetActivityLogs')
     return
   }
+  if (!result.sections) {
+    ElMessage.error('云函数还是旧版，请重新部署 adminGetActivityLogs')
+    return
+  }
   const lines = []
   let grandAmt = 0
   let grandCnt = 0
