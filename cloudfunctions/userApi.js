@@ -401,7 +401,7 @@ exports.main = async (rawEvent) => {
           }
           if (card.type === 'time') {
             const timeRule = parseTimeRule(card.time_rule)
-            if (timeRule && (timeRule.mode === 'dates' || (Array.isArray(timeRule.dateRanges) && timeRule.dateRanges.length))) {
+            if (timeRule && timeRule.mode === 'dates') {
               const okDate = (timeRule.dateRanges || []).some((rg) => rg.start && rg.end && dateYmd >= rg.start && dateYmd <= rg.end)
               if (!okDate) {
                 await conn.rollback()
@@ -415,7 +415,8 @@ exports.main = async (rawEvent) => {
               const slotStart = String(data.time || '').split('-')[0]
               let matched = null
               for (const r of timeRule.rules) {
-                if (!(r.weekdays || []).includes(weekday)) continue
+                const days = (r.weekdays || []).map((n) => Number(n))
+                if (days.indexOf(weekday) < 0) continue
                 const slots = r.timeSlots || []
                 if (!slots.length) {
                   if (r.unlimited) {
