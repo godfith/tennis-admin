@@ -500,7 +500,7 @@ function cardOptionLabel(c) {
   return `${c.cardName}（${type}）`
 }
 function formatCardStatus(b) {
-  if (!b || !b.cardName) return '已预约'
+  if (!b || !b.cardName) return String(b && b.remark || '').indexOf('匹克') >= 0 ? '匹克球' : '已预约'
   let text = '卡:' + b.cardName
   const type = b.cardType || b.card_type || ''
   const isTimes = type === 'times' || type === 'coach' || type === 'group'
@@ -509,6 +509,7 @@ function formatCardStatus(b) {
   if (isTimes && left != null && left !== '') {
     text += total != null && total !== '' ? ` 剩${left}/${total}次` : ` 剩${left}次`
   }
+  if (String(b.remark || '').indexOf('匹克') >= 0) text = '匹克球 ' + text
   if (b.coachName) text += ` ·${b.coachName}`
   return text
 }

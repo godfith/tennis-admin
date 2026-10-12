@@ -261,6 +261,7 @@ exports.main = async (rawEvent) => {
         court: r.court,
         time: r.time,
         status: r.status,
+        remark: r.remark || '',
         coachId: r.coach_id ? String(r.coach_id) : '',
         groupClassId: r.group_class_id ? String(r.group_class_id) : ''
       }))
@@ -558,6 +559,7 @@ exports.main = async (rawEvent) => {
             coachIdVal,
             data.coachName || '',
             data.orderNo || data.outTradeNo || data.payOrderNo || 'GT' + Date.now(),
+            (data.sport === 'pickleball' ? '匹克球 ' : '') + (data.remark || ''),
             bookAmount,
             payOrderId
           ]

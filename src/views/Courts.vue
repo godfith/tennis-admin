@@ -24,7 +24,14 @@
     <el-dialog v-model="visible" :title="form._id ? '编辑场地' : '新增场地'" width="420px">
       <el-form label-width="80px">
         <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
-        <el-form-item label="类型"><el-input v-model="form.type" /></el-form-item>
+        <el-form-item label="项目">
+          <el-select v-model="form.type" style="width: 100%">
+            <el-option label="网球" value="网球" />
+            <el-option label="匹克球" value="匹克球" />
+            <el-option label="共用（发球机/匹克球）" value="共用" />
+          </el-select>
+          <div class="hint">中大店发球机场地选「共用」。海心沙独立匹克球场选「匹克球」。</div>
+        </el-form-item>
         <el-form-item label="排序"><el-input-number v-model="form.sort" :min="0" /></el-form-item>
         <el-form-item label="状态"><el-switch v-model="form.open" active-text="开放" inactive-text="关闭" /></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" /></el-form-item>
