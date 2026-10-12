@@ -558,7 +558,7 @@
           <el-input v-model="issueForm.issuerName" placeholder="前台 / 管理员姓名" />
         </el-form-item>
         <el-form-item label="选择卡模板" required>
-          <el-select v-model="issueForm.templateId" filterable placeholder="输入名称搜索卡模板" style="width: 100%" @change="onTemplateChange">
+          <el-select v-model="issueForm.templateId" filterable teleported placeholder="输入名称搜索卡模板" style="width: 100%" @change="onTemplateChange">
             <el-option v-for="t in activeTemplates" :key="t._id" :label="`${t.name}（${typeLabel(t.type)}）`" :value="t._id" />
           </el-select>
         </el-form-item>
@@ -861,7 +861,7 @@ const cardForm = ref({ _id: '', cardName: '', type: '', status: '', remainingTim
 const isStoreManager = roleKind() === 'manager'
 const canExtendCards = can('extendCard')
 const canRefundCard = can('refundCard')
-const canIssueCard = can('issueCard')
+const canIssueCard = computed(() => can('issueCard') || roleKind() === 'admin')
 const extendMin = isStoreManager ? -120 : -36500
 const extendMax = isStoreManager ? 120 : 36500
 const issueForm = ref({
@@ -1446,8 +1446,17 @@ async function removeTag(row) {
 
 async function loadTemplates() {
   try {
-    templates.value = (await post('/adminGetCardTemplates', {})).list || []
-  } catch (e) {}
+    const result = await post('/adminGetCardTemplates', {})
+    if (!result.ok) {
+      ElMessage.error(result.msg || '卡模板加载失败')
+      templates.value = []
+      return
+    }
+    templates.value = result.list || []
+    if (!templates.value.length) ElMessage.warning('没有可发的卡模板')
+  } catch (e) {
+    ElMessage.error(e.message || '卡模板加载失败，请部署 adminGetCardTemplates')
+  }
 }
 
 async function openCards(row) {
@@ -1598,6 +1607,7 @@ function openIssue(row) {
   currentUser.value = row
   issueForm.value = blankIssue({ venueId: row.venueId, venueName: row.venueName })
   issueVisible.value = true
+  loadTemplates()
 }
 
 function openBatchDisable() {

@@ -99,7 +99,10 @@ export function canAccess(path) {
 export function can(action) {
   if (roleKind() === 'admin') return true
   const custom = getPerms()
-  if (custom.length) return custom.includes(action)
+  if (custom.length) {
+    if (action === 'issueCard' && (custom.includes('issueCard') || custom.includes('/users'))) return true
+    return custom.includes(action)
+  }
   const k = roleKind()
   const map = {
     switchVenue: k === 'admin',
