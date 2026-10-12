@@ -112,9 +112,11 @@
         <el-table-column prop="typeLabel" label="类型" width="80" />
         <el-table-column prop="cardName" label="卡券名称" min-width="200" show-overflow-tooltip />
         <el-table-column prop="userName" label="会员账号" width="130" show-overflow-tooltip />
-        <el-table-column label="手机号" width="130">
+        <el-table-column label="手机号" width="180">
           <template #default="{ row }">
-            <el-button v-if="row.phone" link type="primary" @click="openUser(row.phone)">{{ row.phone }}</el-button>
+            <span v-if="row.phone" class="phone-text">{{ row.phone }}</span>
+            <el-button v-if="row.phone" link type="primary" @click="copyPhone(row.phone)">复制</el-button>
+            <el-button v-if="row.phone" link @click="openUser(row.phone)">查看</el-button>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -159,9 +161,11 @@
         <el-table-column prop="cardName" label="卡券名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="name" label="场地/时段" min-width="150" show-overflow-tooltip />
         <el-table-column prop="userName" label="会员账号" width="130" show-overflow-tooltip />
-        <el-table-column label="手机号" width="130">
+        <el-table-column label="手机号" width="180">
           <template #default="{ row }">
-            <el-button v-if="row.phone" link type="primary" @click="openUser(row.phone)">{{ row.phone }}</el-button>
+            <span v-if="row.phone" class="phone-text">{{ row.phone }}</span>
+            <el-button v-if="row.phone" link type="primary" @click="copyPhone(row.phone)">复制</el-button>
+            <el-button v-if="row.phone" link @click="openUser(row.phone)">查看</el-button>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -291,6 +295,11 @@ function openUser(phone) {
   if (!phone) return
   router.push({ path: '/users', query: { q: phone, open: '1', from: 'finance' } })
 }
+function copyPhone(phone) {
+  const text = String(phone || '').trim()
+  if (!text) return
+  navigator.clipboard.writeText(text).then(() => ElMessage.success('已复制 ' + text)).catch(() => ElMessage.warning('复制失败'))
+}
 
 async function post(path, body) {
   const res = await fetch(base + path, {
@@ -397,5 +406,5 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
   margin-bottom: 10px;
 }
 .col-filters .el-input { width: 140px; }
-.table-foot { color: #909399; font-size: 12px; margin-top: 8px; }
+.phone-text { user-select: text; margin-right: 4px; }
 </style>

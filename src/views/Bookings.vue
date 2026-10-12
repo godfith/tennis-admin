@@ -258,7 +258,8 @@
           <span v-else>锁场</span>
         </el-form-item>
         <el-form-item v-if="current && !isLockBooking(current)" label="手机号">
-          <span class="phone-link" @click="goUser(current)">{{ current.phone || detailPhone || '暂无号码' }}</span>
+          <span class="phone-text">{{ current.phone || detailPhone || '暂无号码' }}</span>
+          <el-button v-if="current.phone || detailPhone" link type="primary" @click="copyPhone(current.phone || detailPhone)">复制</el-button>
         </el-form-item>
         <el-form-item label="使用卡">
           <div class="row-edit">
@@ -1035,6 +1036,11 @@ async function fillBookingPhone(b) {
   } catch (e) {}
   detailPhone.value = b.phone || ''
 }
+function copyPhone(phone) {
+  const text = String(phone || '').trim()
+  if (!text) return
+  navigator.clipboard.writeText(text).then(() => ElMessage.success('已复制 ' + text)).catch(() => ElMessage.warning('复制失败，请手动选中'))
+}
 function goUser(b) {
   const q = b.memberId || b.userId || b.phone || b.userName || ''
   if (!q) { ElMessage.warning('没有客户信息'); return }
@@ -1311,7 +1317,7 @@ h2 { margin: 0; font-size: 20px; }
 .slot.locked:hover { background: #cfd8dc; }
 .mode-switch { margin-bottom: 12px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
-.booked-phone { font-size: 11px; color: #1a5c3a; margin-top: 2px; }
+.phone-text { user-select: text; margin-right: 8px; }
 .hint { color: #e6a23c; font-size: 13px; margin-right: 8px; }
 .slot.group { background: #fce4ec; color: #c2185b; }
 .slot.group:hover { background: #f8bbd0; }

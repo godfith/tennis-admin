@@ -64,9 +64,11 @@
       </el-table-column>
       <el-table-column prop="operatorName" label="操作人账号" width="130" show-overflow-tooltip />
       <el-table-column prop="userName" label="用户账号" min-width="130" show-overflow-tooltip />
-      <el-table-column label="电话号码" width="130">
+      <el-table-column label="电话号码" width="180">
         <template #default="{ row }">
-          <el-button v-if="row.phone" link type="primary" @click="openUser(row.phone)">{{ row.phone }}</el-button>
+          <span v-if="row.phone" class="phone-text">{{ row.phone }}</span>
+          <el-button v-if="row.phone" link type="primary" @click="copyPhone(row.phone)">复制</el-button>
+          <el-button v-if="row.phone" link @click="openUser(row.phone)">查看</el-button>
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
@@ -248,6 +250,11 @@ function openUser(phone) {
   if (!phone) return
   router.push({ path: '/users', query: { q: phone, open: '1', from: 'activity' } })
 }
+function copyPhone(phone) {
+  const text = String(phone || '').trim()
+  if (!text) return
+  navigator.clipboard.writeText(text).then(() => ElMessage.success('已复制 ' + text)).catch(() => ElMessage.warning('复制失败'))
+}
 function ymd(d) {
   const p = (n) => (n < 10 ? '0' + n : '' + n)
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
@@ -330,7 +337,7 @@ h2 { margin: 0 0 4px; font-size: 20px; color: #1a5c3a; }
 .filters, .col-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .col-filters :deep(.el-select) { min-width: 120px; }
 .empty { text-align: center; color: #999; padding: 40px; }
-.muted { color: #c0c4cc; }
+.phone-text { user-select: text; margin-right: 4px; }
 .sum-bar {
   display: flex;
   gap: 24px;
