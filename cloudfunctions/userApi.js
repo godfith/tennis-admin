@@ -561,7 +561,7 @@ exports.main = async (rawEvent) => {
             data.coachName || '',
             data.orderNo || data.outTradeNo || data.payOrderNo || 'GT' + Date.now(),
             (data.sport === 'pickleball' ? '匹克球 ' : '') + (data.remark || ''),
-            bookAmount,
+            money(bookAmount),
             payOrderId
           ]
         )
@@ -576,7 +576,7 @@ exports.main = async (rawEvent) => {
         await writeLedger(conn, {
           bizDate: dateYmd,
           type: ledgerType,
-          amount: ledgerAmt,
+          amount: money(ledgerAmt),
           venueId: data.venueId,
           venueName,
           userId: userIdVal,
