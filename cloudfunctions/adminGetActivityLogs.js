@@ -18,7 +18,7 @@ function isImportedIssuer(name) {
   return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
 }
 
-const FN_VER = 'activity-20261012c'
+const FN_VER = 'activity-20261012e'
 
 const LABELS = {
   register: '用户注册',
@@ -93,13 +93,30 @@ exports.main = async (event) => {
 
     if (body.action === 'weekly') {
       if (!startDate || !endDate) return { ok: false, msg: '请选择日期', fnVer: FN_VER }
-      const groups = { 卡券: {}, 课程: {}, 体验课: {}, 订场: {} }
-      function bucket(name, type) {
-        const n = String(name || '')
-        if (n.indexOf('体验') >= 0) return '体验课'
-        if (n.indexOf('私教') >= 0 || type === 'coach') return '课程'
-        if ((n.indexOf('发球机') >= 0 && (n.indexOf('1小时') >= 0 || n.indexOf('1 小时') >= 0 || n.indexOf('闲时') >= 0))) return '订场'
-        return '卡券'
+      const customCats = Array.isArray(body.categories) ? body.categories.filter((c) => c && c.name) : []
+      const groups = {}
+      const catOrder = []
+      if (customCats.length) {
+        customCats.forEach((c) => {
+          groups[c.name] = {}
+          catOrder.push({ name: c.name, keywords: (c.keywords || []).map((k) => String(k).toLowerCase()), byUse: String(c.name).indexOf('体验') >= 0 })
+        })
+      } else {
+        ;['卡券', '课程', '体验课', '订场'].forEach((n) => { groups[n] = {} })
+        catOrder.push(
+          { name: '体验课', keywords: ['体验'], byUse: true },
+          { name: '课程', keywords: ['私教'], byUse: false },
+          { name: '订场', keywords: ['发球机1小时', '1小时发球机', '闲时'], byUse: false },
+          { name: '卡券', keywords: [], byUse: false }
+        )
+      }
+      function matchCat(name, type) {
+        const n = String(name || '').toLowerCase()
+        for (const c of catOrder) {
+          if (!c.keywords.length) continue
+          if (c.keywords.some((k) => n.indexOf(k) >= 0)) return c
+        }
+        return catOrder[catOrder.length - 1]
       }
       function addRow(g, key, amt, cnt) {
         if (!groups[g][key]) groups[g][key] = { name: key, amount: 0, count: 0 }
@@ -115,9 +132,9 @@ exports.main = async (event) => {
       const [ws] = await pool.query(wq, wp)
       ;(ws || []).forEach((c) => {
         if (isImportedIssuer(c.issuer_name)) return
-        const g = bucket(c.card_name, c.type)
-        if (g === '体验课') return
-        addRow(g, c.card_name || '未命名', c.price, 1)
+        const cat = matchCat(c.card_name, c.type)
+        if (!cat || cat.byUse) return
+        addRow(cat.name, c.card_name || '未命名', c.price, 1)
       })
       let uq = `SELECT c.card_name, c.type, c.price, c.total_times, b.date
                   FROM bookings b
@@ -128,13 +145,15 @@ exports.main = async (event) => {
       if (venueId) { uq += ' AND b.venue_id=?'; up.push(venueId) }
       const [us] = await pool.query(uq, up)
       ;(us || []).forEach((r) => {
+        const cat = matchCat(r.card_name, r.type)
+        if (!cat || !cat.byUse) return
         const unit = (Number(r.total_times) > 0) ? money(money(r.price) / Number(r.total_times)) : money(r.price)
-        addRow('体验课', r.card_name || '体验课', unit, 1)
+        addRow(cat.name, r.card_name || cat.name, unit, 1)
       })
-      const sections = ['卡券', '课程', '体验课', '订场'].map((title) => {
-        const rows = Object.values(groups[title]).sort((a, b) => b.amount - a.amount)
+      const sections = catOrder.map((c) => {
+        const rows = Object.values(groups[c.name] || {}).sort((a, b) => b.amount - a.amount)
         return {
-          title,
+          title: c.name,
           rows,
           amount: money(rows.reduce((s, r) => s + r.amount, 0)),
           count: rows.reduce((s, r) => s + r.count, 0)

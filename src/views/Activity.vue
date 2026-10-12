@@ -6,7 +6,7 @@
         <p class="tip">订场、取消、发卡、体验、团课等 · 当前筛选 {{ filtered.length }} 条 / 共 {{ list.length }} 条 · 发卡金额 ¥{{ fmt(cardIssueTotal) }} · 订场实收 ¥{{ fmt(bookingCashTotal) }}</p>
       </div>
       <div class="header-actions">
-        <el-button type="success" plain :disabled="!startDate || !endDate" @click="exportWeekly">导出周报</el-button>
+        <el-button type="success" plain :disabled="!startDate || !endDate" @click="openWeekly">导出周报</el-button>
         <el-button type="success" plain :disabled="!filtered.length" @click="exportCsv">导出当前列表</el-button>
         <el-button :loading="loading" type="primary" plain @click="fetchAll">刷新</el-button>
       </div>
@@ -83,7 +83,19 @@
       <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip />
       <el-table-column prop="venueName" label="场馆" width="160" show-overflow-tooltip />
     </el-table>
-    <div v-if="!loading && !filtered.length" class="empty">暂无符合条件的数据</div>
+    <el-dialog v-model="weeklyVisible" title="周报分类设置" width="560px">
+      <p class="muted" style="margin:0 0 12px">每行一个分类。关键词用逗号隔开，卡名包含任一关键词就归入该分类。从上往下匹配，先匹配到的优先。体验课按实际上课计，其余按发卡计。</p>
+      <div v-for="(cat, i) in weeklyCats" :key="i" style="display:flex;gap:8px;margin-bottom:8px">
+        <el-input v-model="cat.name" placeholder="分类名" style="width:120px" />
+        <el-input v-model="cat.keywords" placeholder="关键词，逗号隔开" style="flex:1" />
+        <el-button link type="danger" @click="weeklyCats.splice(i, 1)">删除</el-button>
+      </div>
+      <el-button size="small" @click="weeklyCats.push({ name: '', keywords: '' })">加分类</el-button>
+      <template #footer>
+        <el-button @click="weeklyVisible = false">取消</el-button>
+        <el-button type="primary" @click="exportWeekly">导出</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -300,16 +312,31 @@ function csvCell(v) {
   return s
 }
 
-async function exportWeekly() {
+const weeklyVisible = ref(false)
+const weeklyCats = ref([
+  { name: '体验课', keywords: '体验' },
+  { name: '课程', keywords: '私教' },
+  { name: '订场', keywords: '发球机1小时,1小时发球机,闲时' },
+  { name: '卡券', keywords: '' }
+])
+function openWeekly() {
   if (!startDate.value || !endDate.value) {
     ElMessage.warning('请先选择日期')
     return
   }
+  weeklyVisible.value = true
+}
+  if (!startDate.value || !endDate.value) {
+    ElMessage.warning('请先选择日期')
+    return
+  }
+  const cats = weeklyCats.value.filter((c) => c.name.trim())
   const result = await post('/adminGetActivityLogs', {
     action: 'weekly',
     venueId: localStorage.getItem('venue_id') || '',
     startDate: startDate.value,
-    endDate: endDate.value
+    endDate: endDate.value,
+    categories: cats.map((c) => ({ name: c.name.trim(), keywords: c.keywords.split(/[,，]/).map((s) => s.trim()).filter(Boolean) }))
   })
   if (!result.ok) {
     ElMessage.error(result.msg || '导出失败，请部署 adminGetActivityLogs')
@@ -344,6 +371,7 @@ async function exportWeekly() {
   a.download = `周报_${startDate.value}_${endDate.value}.xls`
   a.click()
   URL.revokeObjectURL(url)
+  weeklyVisible.value = false
 }
 
 function exportCsv() {
