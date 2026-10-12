@@ -18,7 +18,7 @@ function isImportedIssuer(name) {
   return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
 }
 
-const FN_VER = 'activity-20261012b'
+const FN_VER = 'activity-20261012c'
 
 const LABELS = {
   register: '用户注册',
@@ -156,12 +156,13 @@ exports.main = async (event) => {
 
     const [rows] = await pool.query(sql, params)
 
-    const issueByKey = {}
-    const bookByKey = {}
+    let cardIssueTotal = 0
+    let bookingCashTotal = 0
+    const issueRows = []
     if (startDate && endDate) {
       try {
-        let cq = `SELECT u.phone, c.card_name, c.price, c.issuer_name,
-                         DATE_FORMAT(c.created_at, '%Y-%m-%d') AS d
+        let cq = `SELECT c.id, u.phone, c.card_name, c.price, c.issuer_name, c.user_name,
+                         DATE_FORMAT(c.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
                     FROM member_cards c LEFT JOIN users u ON u.id = c.user_id
                    WHERE c.created_at >= ? AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)
                      AND IFNULL(c.status,'') <> 'deleted'`
@@ -170,22 +171,35 @@ exports.main = async (event) => {
         const [cs] = await pool.query(cq, cp)
         ;(cs || []).forEach((c) => {
           if (isImportedIssuer(c.issuer_name)) return
-          const key = String(c.phone || '') + '|' + c.d + '|' + (c.card_name || '')
-          issueByKey[key] = (issueByKey[key] || 0) + money(c.price)
+          const amt = money(c.price)
+          cardIssueTotal += amt
+          issueRows.push(c)
         })
       } catch (e) {}
       try {
-        let bq = `SELECT phone, DATE_FORMAT(date, '%Y-%m-%d') AS d, time, court, amount, card_id
-                    FROM bookings
-                   WHERE date BETWEEN ? AND ? AND status <> 'cancelled'`
+        let bq = `SELECT IFNULL(SUM(amount),0) AS s FROM bookings
+                   WHERE date BETWEEN ? AND ? AND status <> 'cancelled'
+                     AND (card_id IS NULL OR card_id=0) AND IFNULL(amount,0) > 0`
         const bp = [startDate, endDate]
         if (venueId) { bq += ' AND venue_id=?'; bp.push(venueId) }
         const [bs] = await pool.query(bq, bp)
-        ;(bs || []).forEach((b) => {
-          const key = String(b.phone || '') + '|' + b.d + '|' + (b.time || '') + '|' + (b.court || '')
-          bookByKey[key] = b.card_id ? 0 : money(b.amount)
-        })
+        bookingCashTotal = money(bs[0] && bs[0].s)
       } catch (e) {}
+    }
+
+    const usedIssue = new Set()
+    function takeIssueAmount(phone, day, name) {
+      for (const c of issueRows) {
+        if (usedIssue.has(c.id)) continue
+        const cphone = String(c.phone || '').replace(/\D/g, '').slice(-11)
+        const cday = String(c.created_at || '').slice(0, 10)
+        if (cday !== day) continue
+        if (name && c.card_name !== name) continue
+        if (phone && cphone && phone !== cphone) continue
+        usedIssue.add(c.id)
+        return money(c.price)
+      }
+      return null
     }
 
     function realAmount(r) {
@@ -194,21 +208,7 @@ exports.main = async (event) => {
       const day = String(r.created_at || '').slice(0, 10)
       if (t === 'issue_card') {
         const name = r.card_name || parseCardName(r.detail)
-        const key = phone + '|' + day + '|' + name
-        if (issueByKey[key] != null) {
-          const amt = issueByKey[key]
-          issueByKey[key] = 0
-          return amt
-        }
-        return null
-      }
-      if (t === 'booking_add') {
-        const m = String(r.detail || '').match(/(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{2}:\d{2}-\d{2}:\d{2})/)
-        const court = (String(r.detail || '').match(/预约\s+(\S+)/) || [])[1] || ''
-        if (!m) return null
-        const d = m[1] + '-' + String(m[2]).padStart(2, '0') + '-' + String(m[3]).padStart(2, '0')
-        const hit = bookByKey[phone + '|' + d + '|' + m[4] + '|' + court]
-        return hit == null ? null : hit
+        return takeIssueAmount(phone, day, name)
       }
       return null
     }
@@ -242,7 +242,13 @@ exports.main = async (event) => {
       list = list.filter((r) => String(r.cardName || '').toLowerCase().indexOf(q) >= 0)
     }
 
-    return { ok: true, fnVer: FN_VER, list }
+    return {
+      ok: true,
+      fnVer: FN_VER,
+      list,
+      cardIssueTotal: money(cardIssueTotal),
+      bookingCashTotal: money(bookingCashTotal)
+    }
   } catch (e) {
     console.error(e)
     return { ok: false, msg: e.message || '加载动态失败', fnVer: FN_VER }

@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>业务动态</h2>
-        <p class="tip">订场、取消、发卡、体验、团课等 · 当前筛选 {{ filtered.length }} 条 / 共 {{ list.length }} 条 · 总金额 ¥{{ fmt(totalAmount) }}</p>
+        <p class="tip">订场、取消、发卡、体验、团课等 · 当前筛选 {{ filtered.length }} 条 / 共 {{ list.length }} 条 · 发卡金额 ¥{{ fmt(cardIssueTotal) }} · 订场实收 ¥{{ fmt(bookingCashTotal) }}</p>
       </div>
       <div class="header-actions">
         <el-button type="success" plain :disabled="!filtered.length" @click="exportCsv">导出当前列表</el-button>
@@ -51,8 +51,8 @@
 
     <div class="sum-bar">
       <span>总数量 <b>{{ filtered.length }}</b> 条</span>
-      <span>有金额 <b>{{ amountCount }}</b> 条</span>
-      <span>总金额 <b>¥{{ fmt(totalAmount) }}</b></span>
+      <span>发卡金额（按发卡表） <b>¥{{ fmt(cardIssueTotal) }}</b></span>
+      <span>订场实收 <b>¥{{ fmt(bookingCashTotal) }}</b></span>
     </div>
 
     <el-table :data="filtered" stripe border v-loading="loading" max-height="640" show-summary :summary-method="tableSummary">
@@ -95,6 +95,8 @@ const router = useRouter()
 
 const loading = ref(false)
 const list = ref([])
+const cardIssueTotal = ref(0)
+const bookingCashTotal = ref(0)
 const filterType = ref('')
 const startDate = ref('')
 const endDate = ref('')
@@ -238,6 +240,8 @@ async function fetchAll() {
       seen.add(key)
       return true
     })
+    cardIssueTotal.value = Number(result.cardIssueTotal) || 0
+    bookingCashTotal.value = Number(result.bookingCashTotal) || 0
   } catch (e) {
     ElMessage.error(e.message || '请部署 adminGetActivityLogs')
     list.value = []
