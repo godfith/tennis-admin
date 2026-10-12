@@ -210,7 +210,6 @@
             <span class="muted">正数充值，负数扣减</span>
           </div>
           <el-checkbox v-model="wallet.migrated" style="margin-top:6px">旧系统迁入余额，不计营业额</el-checkbox>
-          </div>
           <div class="wallet-row">
             <el-input-number v-model="wallet.addPoints" :step="10" :precision="0" />
             <span class="muted">积分增减</span>
