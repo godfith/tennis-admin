@@ -188,7 +188,7 @@ async function writeLedger(conn, row) {
     console.warn('finance_ledger write skip:', e.message)
   }
 }
-const FN_VER = 'userApi-20261010a'
+const FN_VER = 'userApi-20261012b'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -543,7 +543,7 @@ exports.main = async (rawEvent) => {
             user_id, openid, user_name, phone, status,
             card_id, card_name, card_type,
             coach_id, coach_name, source, remark, amount, pay_order_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ?, ?, 'user', ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ?, ?, 'user', ?, IFNULL(NULLIF(?, ''), 0), ?)`,
           [
             data.venueId,
             venueName,
@@ -1063,7 +1063,7 @@ exports.main = async (rawEvent) => {
             gc.coach_id,
             gc.coach_name,
             groupClassId,
-            enrollAmt
+            Number(enrollAmt) || 0
           ]
         )
         const left = card.remaining_times - 1
