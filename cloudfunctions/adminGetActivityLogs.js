@@ -93,13 +93,6 @@ exports.main = async (event) => {
 
     if (body.action === 'weekly') {
       if (!startDate || !endDate) return { ok: false, msg: '请选择日期', fnVer: FN_VER }
-      let wq = `SELECT c.card_name, c.type, c.price, c.issuer_name
-                  FROM member_cards c
-                 WHERE c.created_at >= ? AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-                   AND IFNULL(c.status,'') <> 'deleted'`
-      const wp = [startDate + ' 00:00:00', endDate]
-      if (venueId) { wq += ' AND c.venue_id=?'; wp.push(venueId) }
-      const [ws] = await pool.query(wq, wp)
       const groups = { 卡券: {}, 课程: {}, 体验课: {}, 订场: {} }
       function bucket(name, type) {
         const n = String(name || '')
@@ -108,13 +101,35 @@ exports.main = async (event) => {
         if ((n.indexOf('发球机') >= 0 && (n.indexOf('1小时') >= 0 || n.indexOf('1 小时') >= 0 || n.indexOf('闲时') >= 0))) return '订场'
         return '卡券'
       }
+      function addRow(g, key, amt, cnt) {
+        if (!groups[g][key]) groups[g][key] = { name: key, amount: 0, count: 0 }
+        groups[g][key].amount = money(groups[g][key].amount + money(amt))
+        groups[g][key].count += cnt
+      }
+      let wq = `SELECT c.card_name, c.type, c.price, c.issuer_name
+                  FROM member_cards c
+                 WHERE c.created_at >= ? AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+                   AND IFNULL(c.status,'') <> 'deleted'`
+      const wp = [startDate + ' 00:00:00', endDate]
+      if (venueId) { wq += ' AND c.venue_id=?'; wp.push(venueId) }
+      const [ws] = await pool.query(wq, wp)
       ;(ws || []).forEach((c) => {
         if (isImportedIssuer(c.issuer_name)) return
         const g = bucket(c.card_name, c.type)
-        const key = c.card_name || '未命名'
-        if (!groups[g][key]) groups[g][key] = { name: key, amount: 0, count: 0 }
-        groups[g][key].amount = money(groups[g][key].amount + money(c.price))
-        groups[g][key].count += 1
+        if (g === '体验课') return
+        addRow(g, c.card_name || '未命名', c.price, 1)
+      })
+      let uq = `SELECT c.card_name, c.type, c.price, c.total_times, b.date
+                  FROM bookings b
+                  JOIN member_cards c ON c.id = b.card_id
+                 WHERE b.date BETWEEN ? AND ? AND b.status <> 'cancelled'
+                   AND c.card_name LIKE '%体验%'`
+      const up = [startDate, endDate]
+      if (venueId) { uq += ' AND b.venue_id=?'; up.push(venueId) }
+      const [us] = await pool.query(uq, up)
+      ;(us || []).forEach((r) => {
+        const unit = (Number(r.total_times) > 0) ? money(money(r.price) / Number(r.total_times)) : money(r.price)
+        addRow('体验课', r.card_name || '体验课', unit, 1)
       })
       const sections = ['卡券', '课程', '体验课', '订场'].map((title) => {
         const rows = Object.values(groups[title]).sort((a, b) => b.amount - a.amount)
