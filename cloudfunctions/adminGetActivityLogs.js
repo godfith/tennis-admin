@@ -91,6 +91,43 @@ exports.main = async (event) => {
     const endDate = body.endDate || ''
     const limit = Math.min(2000, Math.max(20, Number(body.limit) || 1000))
 
+    if (body.action === 'weekly') {
+      if (!startDate || !endDate) return { ok: false, msg: '请选择日期', fnVer: FN_VER }
+      let wq = `SELECT c.card_name, c.type, c.price, c.issuer_name
+                  FROM member_cards c
+                 WHERE c.created_at >= ? AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+                   AND IFNULL(c.status,'') <> 'deleted'`
+      const wp = [startDate + ' 00:00:00', endDate]
+      if (venueId) { wq += ' AND c.venue_id=?'; wp.push(venueId) }
+      const [ws] = await pool.query(wq, wp)
+      const groups = { 卡券: {}, 课程: {}, 体验课: {}, 订场: {} }
+      function bucket(name, type) {
+        const n = String(name || '')
+        if (n.indexOf('体验') >= 0) return '体验课'
+        if (n.indexOf('私教') >= 0 || type === 'coach') return '课程'
+        if ((n.indexOf('发球机') >= 0 && (n.indexOf('1小时') >= 0 || n.indexOf('1 小时') >= 0 || n.indexOf('闲时') >= 0))) return '订场'
+        return '卡券'
+      }
+      ;(ws || []).forEach((c) => {
+        if (isImportedIssuer(c.issuer_name)) return
+        const g = bucket(c.card_name, c.type)
+        const key = c.card_name || '未命名'
+        if (!groups[g][key]) groups[g][key] = { name: key, amount: 0, count: 0 }
+        groups[g][key].amount = money(groups[g][key].amount + money(c.price))
+        groups[g][key].count += 1
+      })
+      const sections = ['卡券', '课程', '体验课', '订场'].map((title) => {
+        const rows = Object.values(groups[title]).sort((a, b) => b.amount - a.amount)
+        return {
+          title,
+          rows,
+          amount: money(rows.reduce((s, r) => s + r.amount, 0)),
+          count: rows.reduce((s, r) => s + r.count, 0)
+        }
+      })
+      return { ok: true, fnVer: FN_VER, sections }
+    }
+
     let cols = []
     try {
       const [crows] = await pool.query('SHOW COLUMNS FROM activity_logs')

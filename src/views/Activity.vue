@@ -6,6 +6,7 @@
         <p class="tip">订场、取消、发卡、体验、团课等 · 当前筛选 {{ filtered.length }} 条 / 共 {{ list.length }} 条 · 发卡金额 ¥{{ fmt(cardIssueTotal) }} · 订场实收 ¥{{ fmt(bookingCashTotal) }}</p>
       </div>
       <div class="header-actions">
+        <el-button type="success" plain :disabled="!startDate || !endDate" @click="exportWeekly">导出周报</el-button>
         <el-button type="success" plain :disabled="!filtered.length" @click="exportCsv">导出当前列表</el-button>
         <el-button :loading="loading" type="primary" plain @click="fetchAll">刷新</el-button>
       </div>
@@ -297,6 +298,44 @@ function csvCell(v) {
   const s = v == null ? '' : String(v)
   if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
   return s
+}
+
+async function exportWeekly() {
+  if (!startDate.value || !endDate.value) {
+    ElMessage.warning('请先选择日期')
+    return
+  }
+  const result = await post('/adminGetActivityLogs', {
+    action: 'weekly',
+    venueId: localStorage.getItem('venue_id') || '',
+    startDate: startDate.value,
+    endDate: endDate.value
+  })
+  if (!result.ok) {
+    ElMessage.error(result.msg || '导出失败，请部署 adminGetActivityLogs')
+    return
+  }
+  const lines = []
+  let grandAmt = 0
+  let grandCnt = 0
+  ;(result.sections || []).forEach((sec) => {
+    lines.push([sec.title, '金额', '次数'].map(csvCell).join(','))
+    ;(sec.rows || []).forEach((r) => {
+      lines.push([r.name, fmt(r.amount), r.count].map(csvCell).join(','))
+    })
+    lines.push(['总计', fmt(sec.amount), sec.count].map(csvCell).join(','))
+    lines.push('')
+    grandAmt += Number(sec.amount) || 0
+    grandCnt += Number(sec.count) || 0
+  })
+  lines.push(['全部合计', fmt(grandAmt), grandCnt].map(csvCell).join(','))
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `周报_${startDate.value}_${endDate.value}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function exportCsv() {
