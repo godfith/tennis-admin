@@ -319,25 +319,29 @@ async function exportWeekly() {
     ElMessage.error('云函数还是旧版，请重新部署 adminGetActivityLogs')
     return
   }
-  const lines = []
+  const colors = { 卡券: '#1a5c3a', 课程: '#1e4870', 体验课: '#b26a00', 订场: '#7a1f1f' }
   let grandAmt = 0
   let grandCnt = 0
+  let body = ''
   ;(result.sections || []).forEach((sec) => {
-    lines.push([sec.title, '金额', '次数'].map(csvCell).join(','))
+    const c = colors[sec.title] || '#333'
+    body += `<tr><td colspan="3" style="background:${c};color:#fff;font-weight:bold;padding:8px">${sec.title}</td></tr>`
+    body += '<tr style="background:#f4f4f4"><td style="padding:6px;font-weight:bold">卡券</td><td style="padding:6px;font-weight:bold">金额</td><td style="padding:6px;font-weight:bold">次数</td></tr>'
     ;(sec.rows || []).forEach((r) => {
-      lines.push([r.name, fmt(r.amount), r.count].map(csvCell).join(','))
+      body += `<tr><td style="padding:6px;border:1px solid #ddd">${r.name}</td><td style="padding:6px;border:1px solid #ddd;text-align:right">${fmt(r.amount)}</td><td style="padding:6px;border:1px solid #ddd;text-align:center">${r.count}</td></tr>`
     })
-    lines.push(['总计', fmt(sec.amount), sec.count].map(csvCell).join(','))
-    lines.push('')
+    body += `<tr style="background:#eef6f0;font-weight:bold"><td style="padding:6px;border:1px solid #ddd">小计</td><td style="padding:6px;border:1px solid #ddd;text-align:right">${fmt(sec.amount)}</td><td style="padding:6px;border:1px solid #ddd;text-align:center">${sec.count}</td></tr>`
+    body += '<tr><td colspan="3" style="height:8px"></td></tr>'
     grandAmt += Number(sec.amount) || 0
     grandCnt += Number(sec.count) || 0
   })
-  lines.push(['全部合计', fmt(grandAmt), grandCnt].map(csvCell).join(','))
-  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  body += `<tr style="background:#1a5c3a;color:#fff;font-weight:bold"><td style="padding:8px">全部合计</td><td style="padding:8px;text-align:right">${fmt(grandAmt)}</td><td style="padding:8px;text-align:center">${grandCnt}</td></tr>`
+  const html = `<html><head><meta charset="utf-8"></head><body><table style="border-collapse:collapse;font-family:微软雅黑,sans-serif;font-size:13px"><tr><td colspan="3" style="font-size:16px;font-weight:bold;padding:10px 0">${startDate.value} 至 ${endDate.value} 发卡周报</td></tr>${body}</table></body></html>`
+  const blob = new Blob(['\uFEFF' + html], { type: 'application/vnd.ms-excel;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `周报_${startDate.value}_${endDate.value}.csv`
+  a.download = `周报_${startDate.value}_${endDate.value}.xls`
   a.click()
   URL.revokeObjectURL(url)
 }
