@@ -326,6 +326,7 @@ function openWeekly() {
   }
   weeklyVisible.value = true
 }
+async function exportWeekly() {
   if (!startDate.value || !endDate.value) {
     ElMessage.warning('请先选择日期')
     return
