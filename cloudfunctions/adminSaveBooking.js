@@ -186,7 +186,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20260928e'
+const FN_VER = 'saveBooking-20261014a'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -552,13 +552,16 @@ exports.main = async (event) => {
       }
 
       const rawAmt = data.amount != null ? data.amount : (data.payAmount != null ? data.payAmount : body.amount)
-      const typedCash = rawAmt != null && rawAmt !== '' ? money(rawAmt) : 0
+      const hasTyped = rawAmt != null && rawAmt !== ''
+      const typedCash = hasTyped ? money(rawAmt) : null
       const slotPrice = await getSlotPrice(conn, data.venueId, data.court, dateYmd, data.time)
       let bookAmount
-      if (cardIdVal) {
-        bookAmount = typedCash > 0 ? typedCash : 0
+      if (hasTyped) {
+        bookAmount = typedCash
+      } else if (cardIdVal) {
+        bookAmount = 0
       } else {
-        bookAmount = typedCash > 0 ? typedCash : slotPrice
+        bookAmount = slotPrice
       }
       const cash = bookAmount
 
