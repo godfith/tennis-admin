@@ -210,6 +210,21 @@ exports.main = async (rawEvent) => {
       }
     } catch (e) {}
 
+    if (action === 'getActivities') {
+      try {
+        const start = event.startDate || ''
+        const end = event.endDate || ''
+        let sql = "SELECT title, type, DATE_FORMAT(date, '%Y-%m-%d') AS date, time, venue_name AS venue FROM activities WHERE status='active'"
+        const params = []
+        if (start) { sql += ' AND date >= ?'; params.push(start) }
+        if (end) { sql += ' AND date <= ?'; params.push(end) }
+        sql += ' ORDER BY date, id'
+        const [rows] = await pool.query(sql, params)
+        return { ok: true, list: rows }
+      } catch (e) {
+        return { ok: true, list: [] }
+      }
+    }
     if (action === 'getBanners') {
       try {
         const [rows] = await pool.query("SELECT image, title, link FROM banners WHERE status='active' ORDER BY sort_order, id")
