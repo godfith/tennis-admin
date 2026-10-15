@@ -69,7 +69,8 @@ async function post(path, body = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   })
-  return res.json()
+  const data = await res.json()
+  return data.body ? (typeof data.body === 'string' ? JSON.parse(data.body) : data.body) : data
 }
 
 const list = ref([])
