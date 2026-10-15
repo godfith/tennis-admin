@@ -210,6 +210,14 @@ exports.main = async (rawEvent) => {
       }
     } catch (e) {}
 
+    if (action === 'getBanners') {
+      try {
+        const [rows] = await pool.query("SELECT image, title, link FROM banners WHERE status='active' ORDER BY sort_order, id")
+        return { ok: true, list: rows }
+      } catch (e) {
+        return { ok: true, list: [] }
+      }
+    }
     if (action === 'getVenues') {
       try {
         const [rows] = await pool.query(
