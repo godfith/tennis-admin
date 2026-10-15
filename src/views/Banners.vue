@@ -28,12 +28,9 @@
 
     <el-dialog v-model="visible" :title="form.id ? '编辑轮播' : '添加轮播'" width="480px">
       <el-form label-width="80px">
-        <el-form-item label="图片">
-          <el-upload :auto-upload="false" :show-file-list="false" accept="image/*" @change="onFile">
-            <el-button>选择图片</el-button>
-          </el-upload>
+        <el-form-item label="图片地址">
+          <el-input v-model="form.image" placeholder="https://...jpg" />
           <img v-if="form.image" :src="form.image" style="width:200px;height:100px;object-fit:cover;margin-top:8px;border-radius:4px" />
-          <el-input v-model="form.image" placeholder="或直接填图片地址" style="margin-top:8px" />
         </el-form-item>
         <el-form-item label="标题">
           <el-input v-model="form.title" placeholder="选填" />

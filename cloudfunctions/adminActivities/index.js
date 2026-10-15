@@ -1,6 +1,5 @@
-const cloud = require('wx-server-sdk')
 const mysql = require('mysql2/promise')
-cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
+
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
   port: Number(process.env.DB_PORT || 26462),
@@ -9,9 +8,12 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME || 'goat_prod',
   waitForConnections: true,
   connectionLimit: 5,
-  connectTimeout: 10000
+  connectTimeout: 10000,
+  dateStrings: true,
+  timezone: '+08:00'
 })
-const FN_VER = 'activities-20261015a'
+
+const FN_VER = 'activities-20261015b'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -25,9 +27,10 @@ function parseEvent(event) {
 }
 
 exports.main = async (event) => {
-  const body = parseEvent(event)
-  const action = body.action || 'list'
   try {
+    const body = parseEvent(event)
+    const action = body.action || 'list'
+
     if (action === 'list') {
       let sql = 'SELECT id, title, type, date, time, venue_id, venue_name, status FROM activities WHERE 1=1'
       const params = []
@@ -56,6 +59,6 @@ exports.main = async (event) => {
     }
     return { ok: false, msg: '未知操作', fnVer: FN_VER }
   } catch (e) {
-    return { ok: false, msg: e.message, fnVer: FN_VER }
+    return { ok: false, msg: e.message || '服务异常', fnVer: FN_VER }
   }
 }
