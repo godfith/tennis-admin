@@ -2,11 +2,11 @@ const cloud = require('wx-server-sdk')
 const mysql = require('mysql2/promise')
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 const pool = mysql.createPool({
-  host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
-  port: 26462,
-  user: 'root',
-  password: 'GoatTennis2026',
-  database: 'goat_prod',
+  host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
+  port: Number(process.env.DB_PORT || 26462),
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'goat_prod',
   waitForConnections: true,
   connectionLimit: 5,
   connectTimeout: 10000
