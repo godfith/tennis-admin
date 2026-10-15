@@ -33,6 +33,16 @@ exports.main = async (event) => {
       }
       return { ok: true, fnVer: FN_VER }
     }
+    if (action === 'upload') {
+      const { fileContent, fileName } = body
+      if (!fileContent || !fileName) return { ok: false, msg: '缺少文件', fnVer: FN_VER }
+      const buffer = Buffer.from(fileContent, 'base64')
+      const cloudPath = 'banners/' + Date.now() + '_' + fileName
+      const res = await cloud.uploadFile({ cloudPath, fileContent: buffer })
+      const url = await cloud.getTempFileURL({ fileList: [res.fileID] })
+      const tempUrl = (url.fileList && url.fileList[0] && url.fileList[0].tempFileURL) || ''
+      return { ok: true, fnVer: FN_VER, fileID: res.fileID, url: tempUrl }
+    }
     if (action === 'delete') {
       if (!body.id) return { ok: false, msg: '缺少ID', fnVer: FN_VER }
       await pool.query('DELETE FROM banners WHERE id=?', [body.id])
