@@ -13,8 +13,19 @@ const pool = mysql.createPool({
 })
 const FN_VER = 'banners-20261015a'
 
+function parseEvent(event) {
+  if (event && event.body) {
+    try {
+      return Object.assign({}, event, typeof event.body === 'string' ? JSON.parse(event.body) : event.body)
+    } catch (e) {
+      return event
+    }
+  }
+  return event || {}
+}
+
 exports.main = async (event) => {
-  const body = event.body ? JSON.parse(event.body) : event
+  const body = parseEvent(event)
   const action = body.action || 'list'
   try {
     if (action === 'list') {
