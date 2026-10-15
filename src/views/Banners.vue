@@ -28,9 +28,12 @@
 
     <el-dialog v-model="visible" :title="form.id ? '编辑轮播' : '添加轮播'" width="480px">
       <el-form label-width="80px">
-        <el-form-item label="图片地址">
-          <el-input v-model="form.image" placeholder="https://...jpg" />
+        <el-form-item label="图片">
+          <el-upload :auto-upload="false" :show-file-list="false" accept="image/*" @change="onFile">
+            <el-button>选择图片上传</el-button>
+          </el-upload>
           <img v-if="form.image" :src="form.image" style="width:200px;height:100px;object-fit:cover;margin-top:8px;border-radius:4px" />
+          <el-input v-model="form.image" placeholder="或直接填图片地址" style="margin-top:8px" />
         </el-form-item>
         <el-form-item label="标题">
           <el-input v-model="form.title" placeholder="选填" />
@@ -85,6 +88,21 @@ async function fetchList() {
 function openEdit(row) {
   form.value = row ? { id: row.id, image: row.image, title: row.title, link: row.link, sortOrder: row.sort_order, status: row.status } : { image: '', title: '', link: '', sortOrder: 0, status: 'active' }
   visible.value = true
+}
+async function onFile(file) {
+  const raw = file.raw
+  if (!raw) return
+  if (raw.size > 500 * 1024) { ElMessage.warning('图片超过500KB，请压缩'); return }
+  const reader = new FileReader()
+  reader.onload = async () => {
+    const base64 = reader.result.split(',')[1]
+    ElMessage.info('上传中...')
+    const r = await post('/adminBanners', { action: 'upload', fileContent: base64, fileName: raw.name })
+    if (!r.ok) { ElMessage.error(r.msg || '上传失败'); return }
+    form.value.image = r.url
+    ElMessage.success('已上传')
+  }
+  reader.readAsDataURL(raw)
 }
 async function save() {
   if (!form.value.image) { ElMessage.warning('请填图片地址'); return }
