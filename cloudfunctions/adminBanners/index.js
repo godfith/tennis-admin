@@ -1,6 +1,4 @@
 const mysql = require('mysql2/promise')
-const cloud = require('wx-server-sdk')
-cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -15,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'banners-20261015b'
+const FN_VER = 'banners-20261016a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -26,6 +24,16 @@ function parseEvent(event) {
     }
   }
   return event || {}
+}
+
+function getCloud() {
+  try {
+    const cloud = require('wx-server-sdk')
+    cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
+    return cloud
+  } catch (e) {
+    return null
+  }
 }
 
 exports.main = async (event) => {
@@ -48,6 +56,18 @@ exports.main = async (event) => {
           [image, title || '', link || '', sortOrder || 0, status || 'active'])
       }
       return { ok: true, fnVer: FN_VER }
+    }
+    if (action === 'upload') {
+      const cloud = getCloud()
+      if (!cloud) return { ok: false, msg: '云存储不可用', fnVer: FN_VER }
+      const { fileContent, fileName } = body
+      if (!fileContent || !fileName) return { ok: false, msg: '缺少文件', fnVer: FN_VER }
+      const buffer = Buffer.from(fileContent, 'base64')
+      const cloudPath = 'banners/' + Date.now() + '_' + fileName.replace(/[^a-zA-Z0-9.]/g, '')
+      const res = await cloud.uploadFile({ cloudPath, fileContent: buffer })
+      const urlRes = await cloud.getTempFileURL({ fileList: [res.fileID] })
+      const tempUrl = (urlRes.fileList && urlRes.fileList[0] && urlRes.fileList[0].tempFileURL) || ''
+      return { ok: true, fnVer: FN_VER, fileID: res.fileID, url: tempUrl }
     }
     if (action === 'delete') {
       if (!body.id) return { ok: false, msg: '缺少ID', fnVer: FN_VER }
