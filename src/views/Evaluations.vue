@@ -49,8 +49,8 @@
     <el-dialog v-model="visible" title="学员评分" width="520px">
       <el-form label-width="80px">
         <el-form-item label="学员">
-          <el-select v-model="form.userId" filterable placeholder="选择学员" style="width:100%">
-            <el-option v-for="u in allUsers.filter(x => x.id)" :key="u.id" :label="(u.nick_name || '未命名') + ' ' + (u.phone || '')" :value="u.id" />
+          <el-select v-model="form.userId" filterable remote :remote-method="searchUsers" :loading="userLoading" placeholder="输入姓名或手机号搜索" style="width:100%">
+            <el-option v-for="u in searchResults" :key="u.id" :label="(u.nick_name || u.nickName || '未命名') + ' ' + (u.phone || '')" :value="u.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="教练">
@@ -194,10 +194,14 @@ async function loadCoaches() {
   const r = await post('/adminGetCoaches', {})
   if (r.ok) coaches.value = (r.list || []).filter(c => c.id)
 }
-const allUsers = ref([])
-async function loadAllUsers() {
-  const r = await post('/adminGetUsers', { limit: 500 })
-  if (r.ok) allUsers.value = (r.list || []).filter(u => u.id)
+const searchResults = ref([])
+const userLoading = ref(false)
+async function searchUsers(q) {
+  if (!q || q.length < 1) { searchResults.value = []; return }
+  userLoading.value = true
+  const r = await post('/adminSearchUsers', { keyword: q })
+  userLoading.value = false
+  if (r.ok) searchResults.value = (r.list || []).filter(u => u.id)
 }
 function openScore() {
   form.value = { forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50, remark: '' }
@@ -205,7 +209,7 @@ function openScore() {
 }
 async function save() {
   if (!form.value.userId) { ElMessage.warning('请选择学员'); return }
-  const u = allUsers.value.find(x => x.id === form.value.userId)
+  const u = searchResults.value.find(x => x.id === form.value.userId)
   const c = coaches.value.find(x => x.id === form.value.coachId)
   saving.value = true
   const r = await post('/adminEvaluations', {
@@ -227,7 +231,7 @@ async function save() {
   fetchList()
   fetchAllRank()
 }
-onMounted(() => { fetchList(); fetchAllRank(); loadCoaches(); loadVenues(); loadAllUsers() })
+onMounted(() => { fetchList(); fetchAllRank(); loadCoaches(); loadVenues() })
 </script>
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
