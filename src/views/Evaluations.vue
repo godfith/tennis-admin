@@ -50,7 +50,7 @@
       <el-form label-width="80px">
         <el-form-item label="学员">
           <el-select v-model="form.userId" filterable remote :remote-method="searchUsers" :loading="userLoading" placeholder="输入姓名或手机号搜索" style="width:100%">
-            <el-option v-for="u in searchResults" :key="u.id" :label="(u.nick_name || u.nickName || '未命名') + ' ' + (u.phone || '')" :value="u.id" />
+            <el-option v-for="u in searchResults" :key="u._id || u.id" :label="(u.nickName || u.nick_name || '未命名') + ' ' + (u.phone || '')" :value="u._id || u.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="教练">
@@ -201,7 +201,7 @@ async function searchUsers(q) {
   userLoading.value = true
   const r = await post('/adminSearchUsers', { keyword: q })
   userLoading.value = false
-  if (r.ok) searchResults.value = (r.list || []).filter(u => u.id)
+  if (r.ok) searchResults.value = (r.list || []).filter(u => u._id || u.id)
 }
 function openScore() {
   form.value = { forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50, remark: '' }
@@ -209,13 +209,13 @@ function openScore() {
 }
 async function save() {
   if (!form.value.userId) { ElMessage.warning('请选择学员'); return }
-  const u = searchResults.value.find(x => x.id === form.value.userId)
+  const u = searchResults.value.find(x => (x._id || x.id) === form.value.userId)
   const c = coaches.value.find(x => x.id === form.value.coachId)
   saving.value = true
   const r = await post('/adminEvaluations', {
     action: 'save',
     userId: form.value.userId,
-    userName: u ? (u.nick_name || u.phone) : '',
+    userName: u ? (u.nickName || u.nick_name || u.phone) : '',
     avatar: u ? u.avatar_url : '',
     coachId: form.value.coachId,
     coachName: c ? c.name : '',
