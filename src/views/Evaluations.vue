@@ -114,7 +114,7 @@ const visible = ref(false)
 const saving = ref(false)
 const users = ref([])
 const coaches = ref([])
-const chartVisible = ref(false)
+const form = ref({ forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50, remark: '' })
 const chartTotal = ref(0)
 const radarCanvas = ref(null)
 

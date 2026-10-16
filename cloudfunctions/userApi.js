@@ -1181,6 +1181,15 @@ exports.main = async (rawEvent) => {
       }))
       return { ok: true, list }
     }
+    if (action === 'getMyEvaluations') {
+      const userId = event.userId || ''
+      if (!userId) return { ok: false, msg: '缺少用户' }
+      const [rows] = await pool.query(
+        'SELECT * FROM student_evaluations WHERE user_id=? ORDER BY created_at DESC LIMIT 20',
+        [userId]
+      )
+      return { ok: true, list: rows || [] }
+    }
     return { ok: false, msg: '未知 action' }
   } catch (e) {
     console.error(e)
