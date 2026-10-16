@@ -204,7 +204,7 @@ function openScore() {
 }
 async function save() {
   if (!form.value.userId) { ElMessage.warning('请选择学员'); return }
-  const u = users.value.find(x => x.id === form.value.userId)
+  const u = allUsers.value.find(x => x.id === form.value.userId)
   const c = coaches.value.find(x => x.id === form.value.coachId)
   saving.value = true
   const r = await post('/adminEvaluations', {
