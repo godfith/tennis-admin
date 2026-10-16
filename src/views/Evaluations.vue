@@ -225,7 +225,9 @@ function editScore(row) {
   searchResults.value = [{ _id: row.user_id, id: row.user_id, nickName: row.user_name }]
   visible.value = true
 }
+function openScore() {
   form.value = { forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50, remark: '' }
+  searchResults.value = []
   visible.value = true
 }
 async function save() {
