@@ -75,18 +75,19 @@ exports.main = async (event) => {
     }
 
     if (action === 'ranking') {
-      const [rows] = await pool.query(
-        `SELECT e.user_id, e.user_name, u.avatar_url, MAX(e.total) AS best_total,
-                MAX(e.forehand) AS best_forehand, MAX(e.backhand) AS best_backhand,
-                MAX(e.serve) AS best_serve, MAX(e.volley) AS best_volley,
-                MAX(e.slice) AS best_slice, MAX(e.smash) AS best_smash,
-                MAX(e.drop_shot) AS best_drop_shot
-           FROM student_evaluations e
-           LEFT JOIN users u ON u.id = e.user_id
-          GROUP BY e.user_id, e.user_name, u.avatar_url
-          ORDER BY best_total DESC
-          LIMIT 50`
-      )
+      const venueId = body.venueId || ''
+      let sql = `SELECT e.user_id, e.user_name, u.avatar_url, e.venue_id,
+                        MAX(e.total) AS best_total,
+                        MAX(e.forehand) AS best_forehand, MAX(e.backhand) AS best_backhand,
+                        MAX(e.serve) AS best_serve, MAX(e.volley) AS best_volley,
+                        MAX(e.slice) AS best_slice, MAX(e.smash) AS best_smash,
+                        MAX(e.drop_shot) AS best_drop_shot
+                   FROM student_evaluations e
+                   LEFT JOIN users u ON u.id = e.user_id`
+      const params = []
+      if (venueId) { sql += ' WHERE e.venue_id=?'; params.push(venueId) }
+      sql += ' GROUP BY e.user_id, e.user_name, u.avatar_url, e.venue_id ORDER BY best_total DESC LIMIT 100'
+      const [rows] = await pool.query(sql, params)
       const ranked = (rows || []).map((r, i) => ({ ...r, rank: i + 1 }))
       return { ok: true, fnVer: FN_VER, list: ranked }
     }

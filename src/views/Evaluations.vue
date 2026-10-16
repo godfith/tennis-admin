@@ -20,19 +20,32 @@
           <el-table-column prop="created_at" label="时间" width="160" />
         </el-table>
       </el-tab-pane>
-      <el-tab-pane label="排名" name="rank">
-        <el-table :data="ranking" stripe border>
+      <el-tab-pane label="店内排名" name="store">
+        <el-select v-model="rankVenue" placeholder="选择门店" @change="fetchStoreRank" style="margin-bottom:12px">
+          <el-option v-for="v in venues" :key="v.id" :label="v.name" :value="v.id" />
+        </el-select>
+        <el-table :data="storeRank" stripe border>
           <el-table-column prop="rank" label="排名" width="70" />
           <el-table-column prop="user_name" label="学员" width="150" />
           <el-table-column prop="best_total" label="最高总分" width="100" />
-          <el-table-column prop="best_forehand" label="正手" width="70" />
-          <el-table-column prop="best_backhand" label="反手" width="70" />
-          <el-table-column prop="best_serve" label="发球" width="70" />
+        </el-table>
+      </el-tab-pane>
+      <el-tab-pane label="总排名" name="all">
+        <el-table :data="allRank" stripe border>
+          <el-table-column prop="rank" label="排名" width="70" />
+          <el-table-column prop="user_name" label="学员" width="150" />
+          <el-table-column prop="venue_id" label="门店" width="150" />
+          <el-table-column prop="best_total" label="最高总分" width="100" />
         </el-table>
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="visible" title="学员评分" width="520px">
+    <el-dialog v-model="chartVisible" title="评测结果" width="480px">
+      <div style="text-align:center">
+        <canvas ref="radarCanvas" width="360" height="320"></canvas>
+        <div style="font-size:24px;font-weight:700;color:#1a5c3a;margin-top:8px">总分 {{ chartTotal }}</div>
+      </div>
+    </el-dialog>
       <el-form label-width="80px">
         <el-form-item label="学员">
           <el-select v-model="form.userId" filterable remote :remote-method="searchUser" placeholder="搜索学员">
@@ -77,13 +90,93 @@ async function post(path, body = {}) {
 
 const tab = ref('list')
 const list = ref([])
-const ranking = ref([])
+const rankVenue = ref('')
+const storeRank = ref([])
+const allRank = ref([])
+const venues = ref([])
+
+async function fetchStoreRank() {
+  if (!rankVenue.value) return
+  const r = await post('/adminEvaluations', { action: 'ranking', venueId: rankVenue.value })
+  if (r.ok) storeRank.value = r.list || []
+}
+async function fetchAllRank() {
+  const r = await post('/adminEvaluations', { action: 'ranking' })
+  if (r.ok) allRank.value = r.list || []
+}
+async function loadVenues() {
+  const r = await post('/adminGetVenues', {})
+  if (r.ok) venues.value = r.list || []
+}
 const loading = ref(false)
 const visible = ref(false)
 const saving = ref(false)
 const users = ref([])
 const coaches = ref([])
-const form = ref({ forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50 })
+const chartVisible = ref(false)
+const chartTotal = ref(0)
+const radarCanvas = ref(null)
+
+function drawRadar(scores) {
+  const canvas = radarCanvas.value
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  const w = canvas.width, h = canvas.height
+  const cx = w / 2, cy = h / 2 + 10
+  const r = 110
+  const labels = ['正手', '反手', '发球', '截击', '切削', '高压', '放小球']
+  const keys = ['forehand', 'backhand', 'serve', 'volley', 'slice', 'smash', 'dropShot']
+  const n = 7
+  ctx.clearRect(0, 0, w, h)
+  ctx.strokeStyle = '#ddd'
+  for (let i = 1; i <= 5; i++) {
+    ctx.beginPath()
+    for (let j = 0; j < n; j++) {
+      const angle = (Math.PI * 2 / n) * j - Math.PI / 2
+      const x = cx + Math.cos(angle) * r * i / 5
+      const y = cy + Math.sin(angle) * r * i / 5
+      j === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+    }
+    ctx.closePath()
+    ctx.stroke()
+  }
+  ctx.strokeStyle = '#aaa'
+  for (let j = 0; j < n; j++) {
+    const angle = (Math.PI * 2 / n) * j - Math.PI / 2
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r)
+    ctx.stroke()
+  }
+  ctx.beginPath()
+  ctx.fillStyle = 'rgba(26,92,58,0.3)'
+  ctx.strokeStyle = '#1a5c3a'
+  ctx.lineWidth = 2
+  for (let j = 0; j < n; j++) {
+    const angle = (Math.PI * 2 / n) * j - Math.PI / 2
+    const val = (scores[keys[j]] || 0) / 100
+    const x = cx + Math.cos(angle) * r * val
+    const y = cy + Math.sin(angle) * r * val
+    j === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+  }
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+  ctx.fillStyle = '#333'
+  ctx.font = '13px sans-serif'
+  ctx.textAlign = 'center'
+  for (let j = 0; j < n; j++) {
+    const angle = (Math.PI * 2 / n) * j - Math.PI / 2
+    const x = cx + Math.cos(angle) * (r + 22)
+    const y = cy + Math.sin(angle) * (r + 22)
+    ctx.fillText(labels[j], x, y + 4)
+    ctx.fillStyle = '#1a5c3a'
+    ctx.font = 'bold 12px sans-serif'
+    ctx.fillText(scores[keys[j]] || 0, x, y + 18)
+    ctx.fillStyle = '#333'
+    ctx.font = '13px sans-serif'
+  }
+}
 
 async function fetchList() {
   loading.value = true
@@ -124,12 +217,15 @@ async function save() {
   })
   saving.value = false
   if (!r.ok) { ElMessage.error(r.msg || '保存失败'); return }
-  ElMessage.success('已评分，总分 ' + r.total + (r.earned && r.earned.length ? '，获得成就：' + r.earned.join('、') : ''))
+  const total = (form.value.forehand || 0) + (form.value.backhand || 0) + (form.value.serve || 0) + (form.value.volley || 0) + (form.value.slice || 0) + (form.value.smash || 0) + (form.value.dropShot || 0)
+  chartTotal.value = total
   visible.value = false
+  chartVisible.value = true
+  setTimeout(() => drawRadar(form.value), 100)
   fetchList()
-  fetchRanking()
+  fetchAllRank()
 }
-onMounted(() => { fetchList(); fetchRanking(); loadCoaches() })
+onMounted(() => { fetchList(); fetchAllRank(); loadCoaches(); loadVenues() })
 </script>
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
