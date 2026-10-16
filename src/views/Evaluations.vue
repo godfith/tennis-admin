@@ -18,6 +18,11 @@
           <el-table-column prop="drop_shot" label="放小球" width="80" />
           <el-table-column prop="total" label="总分" width="80" />
           <el-table-column prop="created_at" label="时间" width="160" />
+          <el-table-column label="操作" width="80">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="editScore(row)">编辑</el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
       <el-tab-pane label="店内排名" name="store">
@@ -203,7 +208,23 @@ async function searchUsers(q) {
   userLoading.value = false
   if (r.ok) searchResults.value = (r.list || []).filter(u => u._id || u.id)
 }
-function openScore() {
+function editScore(row) {
+  form.value = {
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name,
+    forehand: row.forehand || 50,
+    backhand: row.backhand || 50,
+    serve: row.serve || 50,
+    volley: row.volley || 50,
+    slice: row.slice || 50,
+    smash: row.smash || 50,
+    dropShot: row.drop_shot || 50,
+    remark: row.remark || ''
+  }
+  searchResults.value = [{ _id: row.user_id, id: row.user_id, nickName: row.user_name }]
+  visible.value = true
+}
   form.value = { forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50, remark: '' }
   visible.value = true
 }

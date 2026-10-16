@@ -93,7 +93,7 @@ exports.main = async (event) => {
     }
 
     if (action === 'save') {
-      const { userId, userName, avatar, coachId, coachName, venueId,
+      const { id, userId, userName, avatar, coachId, coachName, venueId,
               forehand, backhand, serve, volley, slice, smash, dropShot, remark } = body
       if (!userId) return { ok: false, msg: '缺少学员', fnVer: FN_VER }
       const scores = {
@@ -106,6 +106,15 @@ exports.main = async (event) => {
         drop_shot: Math.min(100, Math.max(0, Number(dropShot) || 0))
       }
       const total = Object.values(scores).reduce((s, v) => s + v, 0)
+      if (id) {
+        await pool.query(
+          `UPDATE student_evaluations SET
+            forehand=?, backhand=?, serve=?, volley=?, slice=?, smash=?, drop_shot=?, total=?, remark=?, updated_at=NOW()
+           WHERE id=?`,
+          [scores.forehand, scores.backhand, scores.serve, scores.volley, scores.slice, scores.smash, scores.drop_shot, total, remark || '', id]
+        )
+        return { ok: true, fnVer: FN_VER, total }
+      }
       const conn = await pool.getConnection()
       try {
         await conn.query(
