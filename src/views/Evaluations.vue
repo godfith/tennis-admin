@@ -55,7 +55,7 @@
         </el-form-item>
         <el-form-item label="教练">
           <el-select v-model="form.coachId" placeholder="选择教练">
-            <el-option v-for="c in coaches" :key="c.id" :label="c.name" :value="c.id" />
+            <el-option v-for="c in coaches.filter(x => x.id)" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="正手"><el-slider v-model="form.forehand" :max="100" show-input /></el-form-item>
@@ -191,12 +191,12 @@ async function fetchRanking() {
 }
 async function loadCoaches() {
   const r = await post('/adminGetCoaches', {})
-  if (r.ok) coaches.value = r.list || []
+  if (r.ok) coaches.value = (r.list || []).filter(c => c.id)
 }
 const allUsers = ref([])
 async function loadAllUsers() {
   const r = await post('/adminGetUsers', { limit: 500 })
-  if (r.ok) allUsers.value = r.list || []
+  if (r.ok) allUsers.value = (r.list || []).filter(u => u.id)
 }
 function openScore() {
   form.value = { forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50, remark: '' }
