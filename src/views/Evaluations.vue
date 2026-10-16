@@ -46,6 +46,7 @@
         <div style="font-size:24px;font-weight:700;color:#1a5c3a;margin-top:8px">总分 {{ chartTotal }}</div>
       </div>
     </el-dialog>
+    <el-dialog v-model="visible" title="学员评分" width="520px">
       <el-form label-width="80px">
         <el-form-item label="学员">
           <el-select v-model="form.userId" filterable remote :remote-method="searchUser" placeholder="搜索学员">
