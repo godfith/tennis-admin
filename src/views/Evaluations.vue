@@ -49,8 +49,8 @@
     <el-dialog v-model="visible" title="学员评分" width="520px">
       <el-form label-width="80px">
         <el-form-item label="学员">
-          <el-select v-model="form.userId" filterable remote :remote-method="searchUser" placeholder="搜索学员">
-            <el-option v-for="u in users" :key="u.id" :label="u.nick_name || u.phone" :value="u.id" />
+          <el-select v-model="form.userId" filterable placeholder="选择学员" style="width:100%">
+            <el-option v-for="u in allUsers" :key="u.id" :label="(u.nick_name || '未命名') + ' ' + (u.phone || '')" :value="u.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="教练">
@@ -193,10 +193,10 @@ async function loadCoaches() {
   const r = await post('/adminGetCoaches', {})
   if (r.ok) coaches.value = r.list || []
 }
-async function searchUser(q) {
-  if (!q) return
-  const r = await post('/adminSearchUsers', { keyword: q })
-  if (r.ok) users.value = r.list || []
+const allUsers = ref([])
+async function loadAllUsers() {
+  const r = await post('/adminGetUsers', { limit: 500 })
+  if (r.ok) allUsers.value = r.list || []
 }
 function openScore() {
   form.value = { forehand: 50, backhand: 50, serve: 50, volley: 50, slice: 50, smash: 50, dropShot: 50, remark: '' }
@@ -226,7 +226,7 @@ async function save() {
   fetchList()
   fetchAllRank()
 }
-onMounted(() => { fetchList(); fetchAllRank(); loadCoaches(); loadVenues() })
+onMounted(() => { fetchList(); fetchAllRank(); loadCoaches(); loadVenues(); loadAllUsers() })
 </script>
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
