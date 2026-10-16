@@ -50,7 +50,7 @@
       <el-form label-width="80px">
         <el-form-item label="学员">
           <el-select v-model="form.userId" filterable placeholder="选择学员" style="width:100%">
-            <el-option v-for="u in allUsers" :key="u.id" :label="(u.nick_name || '未命名') + ' ' + (u.phone || '')" :value="u.id" />
+            <el-option v-for="u in allUsers.filter(x => x.id)" :key="u.id" :label="(u.nick_name || '未命名') + ' ' + (u.phone || '')" :value="u.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="教练">
