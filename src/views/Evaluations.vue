@@ -22,7 +22,7 @@
       </el-tab-pane>
       <el-tab-pane label="店内排名" name="store">
         <el-select v-model="rankVenue" placeholder="选择门店" @change="fetchStoreRank" style="margin-bottom:12px">
-          <el-option v-for="v in venues" :key="v.id" :label="v.name" :value="v.id" />
+          <el-option v-for="v in venues.filter(x => x.id)" :key="v.id" :label="v.name" :value="v.id" />
         </el-select>
         <el-table :data="storeRank" stripe border>
           <el-table-column prop="rank" label="排名" width="70" />
@@ -107,7 +107,7 @@ async function fetchAllRank() {
 }
 async function loadVenues() {
   const r = await post('/adminGetVenues', {})
-  if (r.ok) venues.value = r.list || []
+  if (r.ok) venues.value = (r.list || []).filter(v => v.id)
 }
 const loading = ref(false)
 const visible = ref(false)
