@@ -330,7 +330,7 @@ exports.main = async (rawEvent) => {
         }
         const [busy] = await conn.query(
           `SELECT id FROM bookings
-           WHERE venue_id=? AND date=? AND time=? AND court=? AND status='booked' LIMIT 1`,
+           WHERE venue_id=? AND date=? AND time=? AND court=? AND status IN ('booked','locked') LIMIT 1`,
           [data.venueId, dateYmd, data.time, data.court]
         )
         if (busy.length) {
@@ -340,7 +340,7 @@ exports.main = async (rawEvent) => {
         if (coachIdVal) {
           const [coachBusy] = await conn.query(
             `SELECT id FROM bookings
-             WHERE venue_id=? AND date=? AND time=? AND coach_id=? AND status='booked' LIMIT 1`,
+             WHERE venue_id=? AND date=? AND time=? AND coach_id=? AND status IN ('booked','locked') LIMIT 1`,
             [data.venueId, dateYmd, data.time, coachIdVal]
           )
           if (coachBusy.length) {
