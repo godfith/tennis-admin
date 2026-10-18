@@ -299,6 +299,12 @@ exports.main = async (rawEvent) => {
     const time = event.time || ''
     if (!court || !date || !time) return { ok: false, msg: '请选择场地和时段' }
 
+    const [busy] = await pool.query(
+      `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND court=? AND status IN ('booked','locked') LIMIT 1`,
+      [venueId, date, time, court]
+    )
+    if (busy.length) return { ok: false, msg: '该时段已被预约或锁场' }
+
     const no = outTradeNo()
     const desc = '订场 ' + (event.venueName || '') + ' ' + court + ' ' + date + ' ' + time
     const privateKey = normalizePem(mch.keyPem)
