@@ -502,6 +502,7 @@
         </el-select>
         <el-button type="primary" :loading="batchLoading" @click="loadBatchUsers">搜索用户</el-button>
         <el-button @click="addAllSearch">当前结果全选</el-button>
+        <el-button type="success" @click="regVisible = true">新增用户</el-button>
       </div>
       <el-table
         :data="batchList"
