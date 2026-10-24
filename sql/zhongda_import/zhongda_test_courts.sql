@@ -18,7 +18,7 @@ FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM courts WHERE venue_id='venue_zhongda' 
 -- DELETE FROM court_prices WHERE venue_id='venue_zhongda' AND court IN ('测试1号场','测试2号场','测试发球机');
 
 INSERT INTO court_prices (venue_id, court, time_slot, weekday, price)
-SELECT 'venue_zhongda', c.name, t.slot, w.wd, 90
+SELECT 'venue_zhongda', c.name, t.slot, w.wd, 0.01
 FROM (
   SELECT '测试1号场' AS name UNION SELECT '测试2号场' UNION SELECT '测试发球机'
 ) c
