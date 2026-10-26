@@ -63,7 +63,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
-const base = '/api'
+const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 const venues = ref([])
 const courts = ref([])
 const saving = ref(false)
