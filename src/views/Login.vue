@@ -5,7 +5,7 @@
       <div class="subtitle">管理后台</div>
       <el-form @submit.prevent="onLogin">
         <el-form-item>
-          <el-input v-model="username" placeholder="账号" size="large" />
+          <el-input v-model="username" placeholder="账号 / 电话 / 姓名" size="large" />
         </el-form-item>
         <el-form-item>
           <el-input v-model="password" type="password" placeholder="密码" size="large" show-password @keyup.enter="onLogin" />

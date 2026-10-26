@@ -35,14 +35,14 @@ exports.main = async (event) => {
     let rows
     try {
       const [r] = await pool.query(
-        'SELECT id, username, password, name, role, venue_id, venue_name, status, permissions FROM admins WHERE username=? LIMIT 1',
-        [username]
+        'SELECT id, username, password, name, role, venue_id, venue_name, status, permissions FROM admins WHERE username=? OR phone=? OR name=? LIMIT 1',
+        [username, username, username]
       )
       rows = r
     } catch (e) {
       const [r] = await pool.query(
-        'SELECT id, username, password, name, role, venue_id, venue_name, status FROM admins WHERE username=? LIMIT 1',
-        [username]
+        'SELECT id, username, password, name, role, venue_id, venue_name, status FROM admins WHERE username=? OR phone=? OR name=? LIMIT 1',
+        [username, username, username]
       )
       rows = r
     }
