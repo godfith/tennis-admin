@@ -135,7 +135,7 @@ exports.main = async (rawEvent) => {
             }
             if (bookingId) {
               await pool.query(
-                'UPDATE bookings SET pay_order_id=?, amount=IFNULL(amount, ?) WHERE id=?',
+                'UPDATE bookings SET pay_order_id=?, amount=? WHERE id=?',
                 [o.id, amt, bookingId]
               )
               await pool.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
