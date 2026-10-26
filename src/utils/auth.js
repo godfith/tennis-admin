@@ -124,5 +124,11 @@ export function can(action) {
 }
 
 export function homePath() {
+  const custom = getPerms()
+  if (custom.length) {
+    const pages = ['/dashboard', '/activity', '/finance', '/occupancy', '/bookings', '/users', '/cards']
+    for (const p of pages) if (custom.includes(p)) return p
+    return custom[0].startsWith('/') ? custom[0] : '/dashboard'
+  }
   return HOME[roleKind()] || '/bookings'
 }
