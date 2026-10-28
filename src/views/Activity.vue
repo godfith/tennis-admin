@@ -45,6 +45,11 @@
       <el-select v-model="col.amount" filterable allow-create default-first-option clearable size="small" placeholder="金额" style="width: 120px">
         <el-option v-for="v in opts.amount" :key="'a'+v" :label="v" :value="v" />
       </el-select>
+      <el-select v-model="col.source" clearable size="small" placeholder="资金来源" style="width: 120px">
+        <el-option label="美团" value="美团" />
+        <el-option label="抖音" value="抖音" />
+        <el-option label="线下" value="线下" />
+      </el-select>
       <el-select v-model="col.detail" filterable allow-create default-first-option clearable size="small" placeholder="详情" style="width: 200px">
         <el-option v-for="v in opts.detail" :key="'d'+v" :label="v" :value="v" />
       </el-select>
@@ -80,6 +85,7 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
+      <el-table-column prop="source" label="来源" width="80" />
       <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip />
       <el-table-column prop="venueName" label="场馆" width="160" show-overflow-tooltip />
     </el-table>
@@ -120,7 +126,7 @@ const col = ref({
   phone: '',
   cardName: '',
   amount: '',
-  detail: ''
+  detail: '', source: ''
 })
 
 const base = import.meta.env.DEV
@@ -206,7 +212,7 @@ const opts = computed(() => ({
 const filtered = computed(() => {
   return list.value.filter((row) => {
     const q = col.value
-    const keys = ['timeText', 'operatorName', 'userName', 'phone', 'cardName', 'amount', 'detail']
+    const keys = ['timeText', 'operatorName', 'userName', 'phone', 'cardName', 'amount', 'detail', 'source']
     return keys.every((k) => {
       const want = String(q[k] || '').trim().toLowerCase()
       if (!want) return true
@@ -251,6 +257,11 @@ async function fetchAll() {
       const key = r.id ? 'id:' + r.id : [r.timeText, r.type, r.phone, r.userName, r.detail, r.amount].join('|')
       if (seen.has(key)) return false
       seen.add(key)
+      const d = String(r.detail || '')
+      if (d.indexOf('美团') >= 0) r.source = '美团'
+      else if (d.indexOf('抖音') >= 0) r.source = '抖音'
+      else if (d.indexOf('线下') >= 0) r.source = '线下'
+      else r.source = ''
       return true
     })
     cardIssueTotal.value = Number(result.cardIssueTotal) || 0
@@ -302,7 +313,7 @@ function resetAll() {
   filterType.value = ''
   startDate.value = ''
   endDate.value = ''
-  col.value = { timeText: '', operatorName: '', userName: '', phone: '', cardName: '', amount: '', detail: '' }
+  col.value = { timeText: '', operatorName: '', userName: '', phone: '', cardName: '', amount: '', detail: '', source: '' }
   fetchAll()
 }
 
