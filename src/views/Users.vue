@@ -568,15 +568,13 @@
           <el-tag :type="typeTag(selectedTemplate.type)">{{ typeLabel(selectedTemplate.type) }}</el-tag>
         </el-form-item>
         <el-form-item label="支付来源">
-          <el-checkbox-group v-model="issueForm.paySources">
-            <el-checkbox value="美团">美团</el-checkbox>
-            <el-checkbox value="抖音核销">抖音核销</el-checkbox>
-            <el-checkbox value="线下金额">线下金额</el-checkbox>
-          </el-checkbox-group>
+          <div class="pay-row"><span>美团</span><el-input-number v-model="issueForm.payMeituan" :min="0" :precision="2" :step="10" size="small" @change="sumPay" /></div>
+          <div class="pay-row"><span>抖音核销</span><el-input-number v-model="issueForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumPay" /></div>
+          <div class="pay-row"><span>线下金额</span><el-input-number v-model="issueForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumPay" /></div>
         </el-form-item>
         <el-form-item label="实收金额" required>
           <el-input-number v-model="issueForm.price" :min="0" :precision="2" :step="1" />
-          <span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span>
+          <span class="hint">元（自动加总，可改）</span>
           <div v-if="selectedTemplate && Number(selectedTemplate.price) > 0 && Number(issueForm.price) !== Number(selectedTemplate.price)" class="warn">金额与模板 ¥{{ selectedTemplate.price }} 不一致，将记异常</div>
         </el-form-item>
         <el-form-item v-if="selectedTemplate && isTimesLike(selectedTemplate.type)" label="次数">
@@ -876,7 +874,7 @@ const canIssueCard = computed(() => can('issueCard') || roleKind() === 'admin')
 const extendMin = isStoreManager ? -120 : -36500
 const extendMax = isStoreManager ? 120 : 36500
 const issueForm = ref({
-  templateId: '', price: 0, totalTimes: 10, validFrom: '', validTo: '', paySources: [],
+  templateId: '', price: 0, totalTimes: 10, validFrom: '', validTo: '', payMeituan: 0, payDouyin: 0, payOffline: 0,
   remark: '', venueId: '', venueName: '', issuerName: ''
 })
 
@@ -894,6 +892,12 @@ const previewNewValidTo = computed(() => {
 function displayName(u) {
   if (!u) return '-'
   return u.nickName || u.nickname || u.name || u.userId || u._id || '-'
+}
+function sumPay() {
+  const m = Number(issueForm.value.payMeituan) || 0
+  const d = Number(issueForm.value.payDouyin) || 0
+  const o = Number(issueForm.value.payOffline) || 0
+  issueForm.value.price = +(m + d + o).toFixed(2)
 }
 function money(v) {
   const n = Number(v)
@@ -1806,7 +1810,9 @@ async function issueOne(user) {
     activateMode: issueForm.value.activateMode || 'now',
     durationDays: Number(issueForm.value.durationDays) || 0,
     remark: issueForm.value.remark,
-    paySources: issueForm.value.paySources || [],
+    payMeituan: Number(issueForm.value.payMeituan) || 0,
+    payDouyin: Number(issueForm.value.payDouyin) || 0,
+    payOffline: Number(issueForm.value.payOffline) || 0,
     venueId: issueForm.value.venueId,
     venueName: issueForm.value.venueName,
     issuerName: String(issueForm.value.issuerName).trim(),
@@ -1896,6 +1902,8 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .muted { color: #ccc; }
 .hint { margin-left: 8px; color: #999; font-size: 12px; }
 .warn { color: #e6a23c; font-size: 12px; margin-top: 4px; }
+.pay-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.pay-row span { width: 70px; color: #666; }
 .wallet-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .drawer-name { font-size: 18px; font-weight: 700; }
 .drawer-sub { font-size: 13px; color: #888; margin-top: 2px; }

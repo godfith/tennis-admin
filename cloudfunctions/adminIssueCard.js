@@ -27,7 +27,9 @@ exports.main = async (event) => {
       validTo,
       remark,
       price,
-      paySources,
+      payMeituan,
+      payDouyin,
+      payOffline,
       venueId,
       venueName,
       issuerName
@@ -86,8 +88,14 @@ exports.main = async (event) => {
       if (!to && ends.length) to = ends[ends.length - 1]
     }
     const payPrice = Number(price) || 0
-    const sources = Array.isArray(paySources) ? paySources.filter(Boolean) : []
-    const sourceText = sources.length ? ' [' + sources.join('+') + ']' : ''
+    const mt = Number(payMeituan) || 0
+    const dy = Number(payDouyin) || 0
+    const off = Number(payOffline) || 0
+    const parts = []
+    if (mt > 0) parts.push('美团' + mt)
+    if (dy > 0) parts.push('抖音' + dy)
+    if (off > 0) parts.push('线下' + off)
+    const sourceText = parts.length ? ' [' + parts.join('+') + ']' : ''
     const tplPrice = Number(tpl.price) || 0
     const mismatch = tplPrice > 0 && Math.abs(payPrice - tplPrice) > 0.01
 
