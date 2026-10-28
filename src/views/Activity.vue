@@ -78,7 +78,13 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
-      <el-table-column prop="cardName" label="卡券名称" min-width="180" show-overflow-tooltip />
+      <el-table-column prop="cardName" label="卡券名称" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span v-if="row.cardName">{{ row.cardName }}</span>
+          <span v-else-if="row.type === 'booking_add' || row.type === '订场'" class="muted">未用卡</span>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
       <el-table-column label="金额" width="100" align="right" sortable prop="amount">
         <template #default="{ row }">
           <span v-if="row.amount != null && row.amount !== ''">¥{{ fmt(row.amount) }}</span>
@@ -441,4 +447,5 @@ h2 { margin: 0 0 4px; font-size: 20px; color: #1a5c3a; }
   font-size: 14px;
 }
 .sum-bar b { font-size: 18px; margin-left: 4px; }
+.muted { color: #999; }
 </style>
