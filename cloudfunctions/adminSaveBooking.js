@@ -140,8 +140,8 @@ async function writeLog(conn, row) {
   try {
     await conn.query(
       `INSERT INTO activity_logs
-        (type, user_name, operator_name, phone, detail, venue_id, venue_name, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+        (type, user_name, operator_name, phone, detail, venue_id, venue_name, amount, card_name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         row.type || '',
         row.userName || '',
@@ -149,7 +149,9 @@ async function writeLog(conn, row) {
         row.phone || '',
         row.detail || '',
         row.venueId || '',
-        row.venueName || ''
+        row.venueName || '',
+        row.amount || 0,
+        row.cardName || ''
       ]
     )
   } catch (e) {}
@@ -604,7 +606,9 @@ exports.main = async (event) => {
         phone: phoneVal,
         detail,
         venueId: data.venueId,
-        venueName: data.venueName || ''
+        venueName: data.venueName || '',
+        amount: bookAmount,
+        cardName: cardName || ''
       })
 
       let ledgerError = null
