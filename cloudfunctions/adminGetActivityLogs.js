@@ -185,9 +185,12 @@ exports.main = async (event) => {
     if (has('card_name')) selectBits.push('l.card_name')
     if (has('user_id')) selectBits.push('l.user_id')
 
-    let sql = `SELECT ${selectBits.join(', ')}
+    let sql = `SELECT ${selectBits.join(', ')},
+                        IFNULL(l.amount, b.amount) AS amount,
+                        IFNULL(l.card_name, b.card_name) AS card_name
                  FROM activity_logs l
                  LEFT JOIN users u ON ${has('user_id') ? 'u.id = l.user_id' : '1=0'}
+                 LEFT JOIN bookings b ON l.type IN ('booking_add','订场') AND l.phone = b.phone AND l.detail LIKE CONCAT('%', b.court, '%') AND DATE(l.created_at) = b.date
                 WHERE 1=1`
     const params = []
     if (venueId) {

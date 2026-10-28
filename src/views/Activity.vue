@@ -226,7 +226,8 @@ const filtered = computed(() => {
       const want = String(q[k] || '').trim().toLowerCase()
       if (!want) return true
       if (k === 'amount') {
-        const rv = Number(row.amount) || 0
+        if (row.amount == null || row.amount === '') return false
+        const rv = Number(row.amount)
         const wv = Number(want)
         return !isNaN(wv) && Math.abs(rv - wv) < 0.01
       }
