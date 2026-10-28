@@ -316,8 +316,10 @@ function setRange(type) {
     const x = new Date(now)
     const day = x.getDay()
     x.setDate(x.getDate() - (day === 0 ? 6 : day - 1))
+    const end = new Date(x)
+    end.setDate(x.getDate() + 6)
     startDate.value = ymd(x)
-    endDate.value = ymd(now)
+    endDate.value = ymd(end)
   } else {
     startDate.value = ymd(new Date(now.getFullYear(), now.getMonth(), 1))
     endDate.value = ymd(now)

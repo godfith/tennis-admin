@@ -136,8 +136,11 @@ const filters = reactive({
 function setRange(type) {
   const now = new Date()
   if (type === 'week') {
-    filters.startDate = fmt(startOfWeek(now))
-    filters.endDate = fmt(now)
+    const s = startOfWeek(now)
+    const e = new Date(s)
+    e.setDate(s.getDate() + 6)
+    filters.startDate = fmt(s)
+    filters.endDate = fmt(e)
   } else if (type === 'month') {
     filters.startDate = fmt(new Date(now.getFullYear(), now.getMonth(), 1))
     filters.endDate = fmt(now)

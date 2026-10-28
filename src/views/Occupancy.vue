@@ -236,8 +236,11 @@ function startOfWeek(d) {
 function setRange(type) {
   const now = new Date()
   if (type === 'week') {
-    startDate.value = ymd(startOfWeek(now))
-    endDate.value = ymd(now)
+    const s = startOfWeek(now)
+    const e = new Date(s)
+    e.setDate(s.getDate() + 6)
+    startDate.value = ymd(s)
+    endDate.value = ymd(e)
   } else if (type === 'month') {
     startDate.value = ymd(new Date(now.getFullYear(), now.getMonth(), 1))
     endDate.value = ymd(now)
