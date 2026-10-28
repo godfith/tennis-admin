@@ -57,7 +57,7 @@
 
     <div class="sum-bar">
       <span>总数量 <b>{{ filtered.length }}</b> 条</span>
-      <span>发卡金额（按发卡表） <b>¥{{ fmt(cardIssueTotal) }}</b></span>
+      <span>发卡金额（按筛选） <b>¥{{ fmt(filteredCardTotal) }}</b></span>
       <span>订场实收 <b>¥{{ fmt(bookingCashTotal) }}</b></span>
     </div>
 
@@ -180,6 +180,9 @@ function fmt(n) {
 const totalAmount = computed(() =>
   filtered.value.reduce((s, r) => s + (r.amount == null || r.amount === '' ? 0 : Number(r.amount) || 0), 0)
 )
+const filteredCardTotal = computed(() =>
+  filtered.value.filter((r) => r.type === 'issue_card' || r.type === '发卡').reduce((s, r) => s + (Number(r.amount) || 0), 0)
+)
 const amountCount = computed(() =>
   filtered.value.filter((r) => r.amount != null && r.amount !== '').length
 )
@@ -222,6 +225,11 @@ const filtered = computed(() => {
     return keys.every((k) => {
       const want = String(q[k] || '').trim().toLowerCase()
       if (!want) return true
+      if (k === 'amount') {
+        const rv = Number(row.amount) || 0
+        const wv = Number(want)
+        return !isNaN(wv) && Math.abs(rv - wv) < 0.01
+      }
       const val = String(row[k] == null ? '' : row[k]).toLowerCase()
       return val.indexOf(want) >= 0
     })
