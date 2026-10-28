@@ -21,11 +21,13 @@
     </div>
 
     <div class="legend">
-      <span class="lg free">未预约</span>
-      <span class="lg booked">已预约</span>
-      <span class="lg past">已过期</span>
-      <span class="lg locked">锁场</span>
-      <span class="lg group">团课</span>
+      <span class="legend-title">颜色说明</span>
+      <span class="lg free">绿色 = 未预约，可以订</span>
+      <span class="lg booked">橙色 = 已预约，还没到点</span>
+      <span class="lg past">灰色 = 已过期</span>
+      <span class="lg locked">浅灰 = 锁场，不可约</span>
+      <span class="lg group">粉色 = 团课</span>
+      <span class="lg phone">蓝色数字 = 手机号</span>
     </div>
 
     <div class="grid-wrap" v-loading="loading">
@@ -1362,7 +1364,8 @@ onUnmounted(() => {
 h2 { margin: 0; font-size: 20px; }
 .date-label { color: #1a5c3a; font-weight: 600; font-size: 15px; }
 .venue-tip { color: #888; font-size: 14px; }
-.legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 13px; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; margin-bottom: 12px; padding: 8px 12px; background: #fff; border: 1px solid #eee; border-radius: 8px; font-size: 13px; color: #333; }
+.legend-title { font-weight: 700; color: #1a5c3a; margin-right: 4px; }
 .lg { display: inline-flex; align-items: center; gap: 6px; }
 .lg::before {
   content: ''; width: 12px; height: 12px; border-radius: 3px;
@@ -1372,6 +1375,7 @@ h2 { margin: 0; font-size: 20px; }
 .lg.past::before { background: #eceff1; border: 1px solid #90a4ae; }
 .lg.locked::before { background: #f5f5f5; border: 1px solid #9e9e9e; }
 .lg.group::before { background: #fce4ec; border: 1px solid #ec407a; }
+.lg.phone::before { background: #1565c0; border: 1px solid #1565c0; }
 .grid-wrap {
   overflow: auto; background: #fff; border-radius: 12px; border: 1px solid #e8e8e8;
 }
@@ -1400,7 +1404,7 @@ h2 { margin: 0; font-size: 20px; }
 .slot.group:hover { background: #f8bbd0; }
 .booked-user { font-weight: 700; font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .booked-status { font-size: 12px; margin-top: 3px; opacity: 0.9; }
-.booked-phone { font-size: 14px; font-weight: 600; margin-top: 3px; }
+.booked-phone { font-size: 15px; font-weight: 700; margin-top: 4px; color: #1565c0; letter-spacing: 0.3px; }
 .mode-switch { margin-bottom: 12px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
 .phone-text { user-select: text; margin-right: 8px; }
