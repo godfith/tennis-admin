@@ -283,6 +283,7 @@
           <div class="row-edit">
             <el-input-number v-if="editField==='amount'" v-model="editForm.amount" :min="0" :precision="2" :step="10" />
             <span v-else>¥{{ Number(editForm.amount || 0).toFixed(2) }}</span>
+            <span v-if="editForm.cardId && Number(editForm.amount) > 0" class="warn" style="margin-left:8px;color:#e6a23c">用卡又有实收，流水会重复</span>
             <el-button v-if="!isBookingDone(current)" link type="primary" @click="editField = editField==='amount' ? '' : 'amount'">{{ editField==='amount' ? '完成' : '修改金额' }}</el-button>
           </div>
         </el-form-item>
