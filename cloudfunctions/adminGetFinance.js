@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'getFinance-20261028b'
+const FN_VER = 'getFinance-20261028c'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -505,6 +505,15 @@ exports.main = async (raw) => {
       return 0
     }
 
+    const venueNameMap = {}
+    try {
+      const [vns] = await pool.query('SELECT id, name FROM venues')
+      ;(vns || []).forEach((v) => {
+        if (v.id) venueNameMap[String(v.id)] = v.name
+        if (v.name) venueNameMap[String(v.name)] = v.name
+      })
+    } catch (e) { errors.push('venues:' + e.message) }
+
     let liabilityAmount = 0
     let liabilityCount = 0
     const liabilityByVenue = {}
@@ -521,32 +530,42 @@ exports.main = async (raw) => {
         if (v <= 0) return
         liabilityAmount = money(liabilityAmount + v)
         liabilityCount += 1
-        const key = c.venue_name || c.venue_id || '未知'
-        if (!liabilityByVenue[key]) liabilityByVenue[key] = { venueName: key, amount: 0, count: 0 }
+        const key = c.venue_id ? String(c.venue_id) : (c.venue_name || '未知')
+        const label = (c.venue_id && venueNameMap[String(c.venue_id)]) || c.venue_name || key
+        if (!liabilityByVenue[key]) liabilityByVenue[key] = { venueName: label, amount: 0, count: 0 }
         liabilityByVenue[key].amount = money(liabilityByVenue[key].amount + v)
         liabilityByVenue[key].count += 1
       })
     } catch (e) { errors.push('liability:' + e.message) }
 
+    function officialName(id, name) {
+      const byId = id ? venueNameMap[String(id)] : ''
+      if (byId) return byId
+      const n = String(name || '')
+      if (venueNameMap[n]) return venueNameMap[n]
+      return n || '未知'
+    }
     const venueMap = {}
-    function vrow(name) {
-      const k = name || '未知'
-      if (!venueMap[k]) venueMap[k] = { venueName: k, issue: 0, court: 0, refund: 0, income: 0 }
+    function vrow(id, name) {
+      const label = officialName(id, name)
+      const k = id ? String(id) : label
+      if (!venueMap[k]) venueMap[k] = { venueId: id || '', venueName: label, issue: 0, court: 0, refund: 0, income: 0 }
+      if (label && label !== '未知') venueMap[k].venueName = label
       return venueMap[k]
     }
     try {
       const [vCards] = await pool.query(
-        `SELECT venue_name, price, issuer_name FROM member_cards
+        `SELECT venue_id, venue_name, price, issuer_name FROM member_cards
           WHERE created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
             AND IFNULL(status,'') <> 'deleted'`,
         [startDate + ' 00:00:00', endDate]
       )
       ;(vCards || []).forEach((c) => {
         if (isImportedIssuer(c.issuer_name)) return
-        vrow(c.venue_name).issue = money(vrow(c.venue_name).issue + money(c.price))
+        vrow(c.venue_id, c.venue_name).issue = money(vrow(c.venue_id, c.venue_name).issue + money(c.price))
       })
       const [vRefund] = await pool.query(
-        `SELECT venue_name, price, total_times, remaining_times, refund_amount, issuer_name
+        `SELECT venue_id, venue_name, price, total_times, remaining_times, refund_amount, issuer_name
            FROM member_cards
           WHERE status='refunded'
             AND IFNULL(refunded_at, updated_at) >= ? AND IFNULL(refunded_at, updated_at) < DATE_ADD(?, INTERVAL 1 DAY)`,
@@ -554,10 +573,10 @@ exports.main = async (raw) => {
       )
       ;(vRefund || []).forEach((c) => {
         if (isImportedIssuer(c.issuer_name)) return
-        vrow(c.venue_name).refund = money(vrow(c.venue_name).refund + unusedRefund(c))
+        vrow(c.venue_id, c.venue_name).refund = money(vrow(c.venue_id, c.venue_name).refund + unusedRefund(c))
       })
       const [vBooks] = await pool.query(
-        `SELECT venue_name, amount, card_id, status, user_name, source
+        `SELECT venue_id, venue_name, amount, card_id, status, user_name, source
            FROM bookings WHERE date BETWEEN ? AND ?`,
         [startDate, endDate]
       )
@@ -565,7 +584,7 @@ exports.main = async (raw) => {
         if (b.status === 'cancelled' || b.status === 'locked') return
         if (String(b.user_name || '') === '锁场' || String(b.source || '') === 'lock') return
         const amt = money(b.amount)
-        if (amt > 0) vrow(b.venue_name).court = money(vrow(b.venue_name).court + amt)
+        if (amt > 0) vrow(b.venue_id, b.venue_name).court = money(vrow(b.venue_id, b.venue_name).court + amt)
       })
     } catch (e) { errors.push('venueCompare:' + e.message) }
     const venueCompare = Object.values(venueMap)
