@@ -607,7 +607,7 @@ exports.main = async (event) => {
         detail,
         venueId: data.venueId,
         venueName: data.venueName || '',
-        amount: bookAmount,
+        amount: cardIdVal ? cardUnit(bookCard) : bookAmount,
         cardName: cardName || ''
       })
 
