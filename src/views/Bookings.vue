@@ -113,6 +113,12 @@
             <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="bookForm.issueTpl" label="发卡来源">
+          <div class="pay-row"><span>美团</span><el-input-number v-model="bookForm.payMeituan" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
+          <div class="pay-row"><span>抖音核销</span><el-input-number v-model="bookForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
+          <div class="pay-row"><span>线下金额</span><el-input-number v-model="bookForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
+          <div class="price-hint" style="margin-top:4px">发卡实收 ¥{{ Number(bookForm.issuePrice||0).toFixed(2) }}（自动加总）</div>
+        </el-form-item>
         <el-form-item label="使用会员卡">
           <el-select
             v-model="bookForm.cardId"
@@ -299,6 +305,12 @@
             <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="editForm.issueTpl && !isBookingDone(current)" label="发卡来源">
+          <div class="pay-row"><span>美团</span><el-input-number v-model="editForm.payMeituan" :min="0" :precision="2" :step="10" size="small" @change="sumEditIssue" /></div>
+          <div class="pay-row"><span>抖音核销</span><el-input-number v-model="editForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumEditIssue" /></div>
+          <div class="pay-row"><span>线下金额</span><el-input-number v-model="editForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumEditIssue" /></div>
+          <div class="price-hint" style="margin-top:4px">发卡实收 ¥{{ Number(editForm.issuePrice||0).toFixed(2) }}</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button v-if="current && isLockBooking(current)" type="primary" @click="lockToBook">转为预约</el-button>
@@ -322,8 +334,14 @@
               <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
             </el-select>
           </el-form-item>
+          <el-form-item label="发卡来源">
+            <div class="pay-row"><span>美团</span><el-input-number v-model="convertForm.payMeituan" :min="0" :precision="2" :step="10" size="small" @change="sumConvertIssue" /></div>
+            <div class="pay-row"><span>抖音核销</span><el-input-number v-model="convertForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumConvertIssue" /></div>
+            <div class="pay-row"><span>线下金额</span><el-input-number v-model="convertForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumConvertIssue" /></div>
+          </el-form-item>
           <el-form-item label="发卡金额" required>
             <el-input-number v-model="convertForm.issuePrice" :min="0" :precision="2" :step="10" />
+            <span class="price-hint">自动加总，可改</span>
           </el-form-item>
           <el-form-item v-if="convertNeedCoach" label="教练" required>
             <el-select v-model="convertForm.coachId" placeholder="教练卡请选教练" style="width:100%" :loading="coachLoading">
@@ -387,14 +405,14 @@ const bookVisible = ref(false)
 const groupVisible = ref(false)
 const detailVisible = ref(false)
 const editField = ref('')
-const editForm = ref({ court: '', date: '', time: '', cardId: '', cardName: '', amount: 0, remark: '', coachId: '', issueTpl: '' })
+const editForm = ref({ court: '', date: '', time: '', cardId: '', cardName: '', amount: 0, remark: '', coachId: '', issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0 })
 const editNeedCoach = ref(false)
 const current = ref(null)
 const detailPhone = ref('')
 const currentGroup = ref(null)
 
 const bookForm = ref({
-  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: ''
+  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0
 })
 const templates = ref([])
 const tplLoading = ref(false)
@@ -444,7 +462,7 @@ const canRefundCardOnly = computed(() => {
 const convertVisible = ref(false)
 const convertMode = ref('cash')
 const convertNeedCoach = ref(false)
-const convertForm = ref({ issueTpl: '', issuePrice: 0, coachId: '', cashAmount: 0 })
+const convertForm = ref({ issueTpl: '', issuePrice: 0, coachId: '', cashAmount: 0, payMeituan: 0, payDouyin: 0, payOffline: 0 })
 function tplLabel(t) {
   const tag = t.type === 'coach' ? '教练卡' : t.type === 'times' ? '次卡' : t.type === 'time' ? '时间卡' : t.type === 'group' ? '团课卡' : ''
   return tag ? `${t.name}（${tag}）` : (t.name || '')
@@ -934,7 +952,10 @@ async function saveDetail() {
         coachId: editForm.value.coachId || '',
         coachName: coach ? coach.name : '',
         issueTemplateId: editForm.value.issueTpl || '',
-        issuePrice: Number(editForm.value.amount) || 0,
+        issuePrice: editForm.value.issueTpl ? (Number(editForm.value.issuePrice) || 0) : (Number(editForm.value.amount) || 0),
+        payMeituan: Number(editForm.value.payMeituan) || 0,
+        payDouyin: Number(editForm.value.payDouyin) || 0,
+        payOffline: Number(editForm.value.payOffline) || 0,
         operatorName: localStorage.getItem('admin_name') || '管理员'
       }
     })
@@ -983,6 +1004,9 @@ async function submitConvert() {
         data: {
           issueTemplateId: convertForm.value.issueTpl,
           issuePrice: convertForm.value.issuePrice,
+          payMeituan: Number(convertForm.value.payMeituan) || 0,
+          payDouyin: Number(convertForm.value.payDouyin) || 0,
+          payOffline: Number(convertForm.value.payOffline) || 0,
           coachId: convertForm.value.coachId || '',
           coachName: coach ? coach.name : '',
           operatorName: op
@@ -1048,6 +1072,25 @@ function goUser(b) {
   const q = phone || (b && (b.memberId || b.userId || b.userName)) || ''
   if (!q) { ElMessage.warning('没有客户信息'); return }
   router.push({ path: '/users', query: { q: String(q), open: '1', from: 'bookings' } })
+}
+
+function sumBookIssue() {
+  const m = Number(bookForm.value.payMeituan) || 0
+  const d = Number(bookForm.value.payDouyin) || 0
+  const o = Number(bookForm.value.payOffline) || 0
+  bookForm.value.issuePrice = +(m + d + o).toFixed(2)
+}
+function sumEditIssue() {
+  const m = Number(editForm.value.payMeituan) || 0
+  const d = Number(editForm.value.payDouyin) || 0
+  const o = Number(editForm.value.payOffline) || 0
+  editForm.value.issuePrice = +(m + d + o).toFixed(2)
+}
+function sumConvertIssue() {
+  const m = Number(convertForm.value.payMeituan) || 0
+  const d = Number(convertForm.value.payDouyin) || 0
+  const o = Number(convertForm.value.payOffline) || 0
+  convertForm.value.issuePrice = +(m + d + o).toFixed(2)
 }
 async function submitBook() {
   if (!bookForm.value.memberKey || !bookForm.value.userName) {
@@ -1121,7 +1164,10 @@ async function submitBook() {
         coachName,
         amount: Number(bookForm.value.payAmount) || 0,
         issueTemplateId: bookForm.value.issueTpl || '',
-        issuePrice: Number(bookForm.value.payAmount) || 0,
+        issuePrice: bookForm.value.issueTpl ? (Number(bookForm.value.issuePrice) || 0) : (Number(bookForm.value.payAmount) || 0),
+        payMeituan: Number(bookForm.value.payMeituan) || 0,
+        payDouyin: Number(bookForm.value.payDouyin) || 0,
+        payOffline: Number(bookForm.value.payOffline) || 0,
         operatorName: localStorage.getItem('admin_name') || '管理员'
       }
     })
@@ -1353,4 +1399,6 @@ h2 { margin: 0; font-size: 20px; }
   color: #999;
   font-size: 12px;
 }
+.pay-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.pay-row span { width: 64px; color: #666; font-size: 13px; }
 </style>

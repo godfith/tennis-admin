@@ -22,6 +22,18 @@ function parseEvent(event) {
   return body
 }
 
+
+function sourceText(data) {
+  const mt = money(data && data.payMeituan)
+  const dy = money(data && data.payDouyin)
+  const off = money(data && data.payOffline)
+  const parts = []
+  if (mt > 0) parts.push('美团' + mt)
+  if (dy > 0) parts.push('抖音' + dy)
+  if (off > 0) parts.push('线下' + off)
+  return parts.length ? ' [' + parts.join('+') + ']' : ''
+}
+
 function money(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 0
@@ -188,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261014a'
+const FN_VER = 'saveBooking-20261028a'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -372,7 +384,7 @@ exports.main = async (event) => {
             data.issueValidFrom || null,
             data.issueValidTo || null,
             timeRule || null,
-            data.remark || '订场同时发卡',
+            (data.remark || '订场同时发卡') + sourceText(data),
             data.operatorName || '管理员',
             payPrice
           ]
@@ -392,7 +404,18 @@ exports.main = async (event) => {
             remark: (tpl.name || '会员卡') + ' 订场发卡'
           })
         }
-      }
+
+        await writeLog(conn, {
+          type: 'issue_card',
+          userName: data.userName || '',
+          operatorName: data.operatorName || '管理员',
+          phone: data.phone || '',
+          detail: '发卡 ' + (tpl.name || '') + (payPrice ? ' 收款' + payPrice + '元' : '') + sourceText(data),
+          venueId: data.venueId,
+          venueName: data.venueName || '',
+          amount: payPrice,
+          cardName: tpl.name || ''
+        })      }
 
       let cardIdVal = null
       let cardName = data.cardName || ''
@@ -789,7 +812,7 @@ exports.main = async (event) => {
           [
             b.user_id, b.openid || '', b.user_name || '', b.venue_id, b.venue_name || '',
             tpl.id, tpl.name, tpl.type, times, Math.max(0, times - 1),
-            null, null, timeRule || null, '详情同时发卡并扣一次',
+            null, null, timeRule || null, '详情同时发卡并扣一次' + sourceText(data),
             (data && data.operatorName) || '管理员', payPrice
           ]
         )
@@ -810,7 +833,7 @@ exports.main = async (event) => {
         )
         await writeLog(conn, {
           type: 'issue_card', userName: b.user_name, operatorName: (data && data.operatorName) || '管理员',
-          phone: b.phone, detail: '预约同时发卡 ' + (tpl.name || '') + (payPrice ? ' 收款' + payPrice + '元' : ''),
+          phone: b.phone, detail: '预约同时发卡 ' + (tpl.name || '') + (payPrice ? ' 收款' + payPrice + '元' : '') + sourceText(data),
           venueId: b.venue_id, venueName: b.venue_name
         })
       }
@@ -862,7 +885,7 @@ exports.main = async (event) => {
           [
             b.user_id, b.openid || '', b.user_name || '', b.venue_id, b.venue_name || '',
             tpl.id, tpl.name, tpl.type, times, remain, null, null, timeRule || null,
-            remain <= 0 ? 'used_up' : 'active', '只退款改发卡', op, issuePrice
+            remain <= 0 ? 'used_up' : 'active', '只退款改发卡' + sourceText(data), op, issuePrice
           ]
         )
         await conn.query(
@@ -883,7 +906,7 @@ exports.main = async (event) => {
         }
         await writeLog(conn, {
           type: 'booking_convert', userName: b.user_name, operatorName: op, phone: b.phone,
-          detail: '只退款' + amt + '元 发卡「' + (tpl.name || '') + '」' + issuePrice + '元 扣1次',
+          detail: '只退款' + amt + '元 发卡「' + (tpl.name || '') + '」' + issuePrice + '元 扣1次' + sourceText(data),
           venueId: b.venue_id, venueName: b.venue_name
         })
         await conn.commit()
