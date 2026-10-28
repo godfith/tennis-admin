@@ -190,7 +190,7 @@ exports.main = async (event) => {
                         IFNULL(l.card_name, b.card_name) AS card_name
                  FROM activity_logs l
                  LEFT JOIN users u ON ${has('user_id') ? 'u.id = l.user_id' : '1=0'}
-                 LEFT JOIN bookings b ON l.type IN ('booking_add','订场') AND l.phone = b.phone AND l.detail LIKE CONCAT('%', b.court, '%') AND DATE(l.created_at) = b.date
+                 LEFT JOIN bookings b ON (l.type = 'booking_add' OR l.type = '订场') AND l.phone = b.phone AND l.venue_id = b.venue_id AND DATE(l.created_at) = b.date
                 WHERE 1=1`
     const params = []
     if (venueId) {
