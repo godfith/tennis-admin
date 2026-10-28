@@ -577,7 +577,7 @@
         <el-form-item label="实收金额" required>
           <el-input-number v-model="issueForm.price" :min="0" :precision="2" :step="1" />
           <span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span>
-          <div v-if="selectedTemplate <span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span><span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span> Number(selectedTemplate.price) > 0 <span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span><span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span> Number(issueForm.price) !== Number(selectedTemplate.price)" class="warn">金额与模板 ¥{{ selectedTemplate.price }} 不一致，将记异常</div>
+          <div v-if="selectedTemplate && Number(selectedTemplate.price) > 0 && Number(issueForm.price) !== Number(selectedTemplate.price)" class="warn">金额与模板 ¥{{ selectedTemplate.price }} 不一致，将记异常</div>
         </el-form-item>
         <el-form-item v-if="selectedTemplate && isTimesLike(selectedTemplate.type)" label="次数">
           <el-input-number v-model="issueForm.totalTimes" :min="1" />
