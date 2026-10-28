@@ -47,20 +47,22 @@
             @click="onCellClick(c.name, t)"
           >
             <template v-if="getGroupClass(c.name, t)">
-              <div class="bk-name group-name">{{ getGroupClass(c.name, t).name || '团课' }}</div>
-              <div class="bk-card group">团课 {{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }}</div>
-              <div v-if="getGroupClass(c.name, t).coachName" class="bk-coach">教练 {{ getGroupClass(c.name, t).coachName }}</div>
+              <div class="tag tag-group">团课</div>
+              <div class="bk-name">{{ getGroupClass(c.name, t).name || '团课' }}</div>
+              <div class="bk-sub">{{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }} 人<span v-if="getGroupClass(c.name, t).coachName"> · {{ getGroupClass(c.name, t).coachName }}</span></div>
             </template>
             <template v-else-if="getBooking(c.name, t)">
-              <div class="bk-name">
-                {{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
-              </div>
-              <div v-if="isLockBooking(getBooking(c.name, t))" class="bk-lock">{{ getBooking(c.name, t).remark || '不可约' }}</div>
+              <template v-if="isLockBooking(getBooking(c.name, t))">
+                <div class="tag tag-lock">锁场</div>
+                <div class="bk-name lock-name">不可约</div>
+                <div class="bk-sub">{{ getBooking(c.name, t).remark || '' }}</div>
+              </template>
               <template v-else>
-                <div class="bk-card" :class="bookKind(getBooking(c.name, t))">{{ cardLine(getBooking(c.name, t)) }}</div>
-                <div v-if="getBooking(c.name, t).coachName" class="bk-coach">教练 {{ getBooking(c.name, t).coachName }}</div>
-                <div class="bk-meta">
-                  <span v-if="getBooking(c.name, t).phone" class="bk-phone">{{ getBooking(c.name, t).phone }}</span>
+                <div class="tag" :class="'tag-' + bookKind(getBooking(c.name, t))">{{ kindLabel(bookKind(getBooking(c.name, t))) }}</div>
+                <div class="bk-name">{{ getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约' }}</div>
+                <div class="bk-phone" v-if="getBooking(c.name, t).phone">{{ getBooking(c.name, t).phone }}</div>
+                <div class="bk-foot">
+                  <span class="bk-card">{{ cardLine(getBooking(c.name, t)) }}</span>
                   <span v-if="Number(getBooking(c.name, t).amount) > 0" class="bk-amt">¥{{ Number(getBooking(c.name, t).amount).toFixed(0) }}</span>
                 </div>
               </template>
@@ -68,7 +70,7 @@
             <template v-else>
               <div class="free-text">可约</div>
               <div class="slot-price" v-if="getPrice(c.name, t) > 0">¥{{ getPrice(c.name, t) }}</div>
-              <div class="slot-price muted" v-else>未定价</div>
+              <div class="slot-price muted" v-else>—</div>
             </template>
           </div>
         </template>
@@ -630,6 +632,9 @@ function getPrice(courtName, time) {
   const key = `${courtName}_${time}`
   const v = priceMap.value[key]
   return v != null ? Number(v) : 0
+}
+function kindLabel(k) {
+  return { cash: '现金', times: '次卡', coach: '教练', time: '时间卡', group: '团课', pickle: '匹克' }[k] || '预约'
 }
 function bookKind(b) {
   if (!b) return 'cash'
@@ -1382,41 +1387,43 @@ h2 { margin: 0; font-size: 20px; }
 }
 .grid { display: grid; min-width: 640px; }
 .cell {
-  border-right: 1px solid #f0f0f0; border-bottom: 1px solid #f0f0f0;
-  padding: 10px 8px; min-height: 68px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  font-size: 15px;
+  border-right: 1px solid #eee; border-bottom: 1px solid #eee;
+  padding: 8px 10px; min-height: 86px;
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
+  font-size: 14px; text-align: left;
 }
-.head { background: #f7faf8; font-weight: 600; position: sticky; top: 0; z-index: 2; }
+.head { background: #f7faf8; font-weight: 600; position: sticky; top: 0; z-index: 2; align-items: center; }
 .corner { position: sticky; left: 0; z-index: 3; background: #f7faf8; }
-.time-col { position: sticky; left: 0; background: #fafafa; z-index: 1; color: #555; font-size: 14px; }
+.time-col { position: sticky; left: 0; background: #fafafa; z-index: 1; color: #555; font-size: 14px; align-items: center; }
 .court-name { color: #1a5c3a; font-size: 15px; font-weight: 600; }
-.slot { cursor: pointer; transition: background 0.15s; }
-.slot.free { background: #f0f9f4; color: #67c23a; }
-.slot.free:hover { background: #d8f3e4; }
-.slot.booked { background: #fff8f0; }
-.slot.booked:hover { filter: brightness(0.97); }
-.slot.booked.cash { background: #fff3e0; }
-.slot.booked.times { background: #e3f2fd; }
-.slot.booked.coach { background: #f3e5f5; }
-.slot.booked.time { background: #e8f5e9; }
-.slot.booked.pickle { background: #e0f7fa; }
-.slot.locked { background: #eceff1; color: #546e7a; }
-.slot.locked:hover { background: #cfd8dc; }
-.bk-name { font-size: 15px; font-weight: 700; color: #1a1a1a; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bk-name.group-name { color: #ad1457; }
-.bk-card { font-size: 12px; margin-top: 3px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bk-card.cash { color: #ef6c00; }
-.bk-card.times { color: #1565c0; }
-.bk-card.coach { color: #6a1b9a; }
-.bk-card.time { color: #2e7d32; }
-.bk-card.group { color: #c2185b; }
-.bk-card.pickle { color: #00838f; }
-.bk-coach { font-size: 11px; color: #6a1b9a; margin-top: 2px; }
-.bk-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 3px; gap: 4px; }
-.bk-phone { font-size: 11px; color: #78909c; letter-spacing: 0.2px; }
-.bk-amt { font-size: 13px; font-weight: 700; color: #c62828; }
-.bk-lock { font-size: 12px; color: #78909c; margin-top: 3px; }
+.slot { cursor: pointer; position: relative; border-left: 4px solid transparent; }
+.slot.free { background: #fff; border-left-color: #e8e8e8; }
+.slot.free:hover { background: #f6fbf8; border-left-color: #81c784; }
+.slot.booked { background: #fff; }
+.slot.booked.cash { border-left-color: #ef6c00; background: #fffaf5; }
+.slot.booked.times { border-left-color: #1565c0; background: #f5f9ff; }
+.slot.booked.coach { border-left-color: #6a1b9a; background: #faf6fc; }
+.slot.booked.time { border-left-color: #2e7d32; background: #f6fbf7; }
+.slot.booked.pickle { border-left-color: #00838f; background: #f4fcfd; }
+.slot.booked:hover { filter: brightness(0.98); }
+.slot.locked { background: #f4f5f6; border-left-color: #90a4ae; }
+.slot.group { background: #fff5f8; border-left-color: #e91e63; }
+.slot.group:hover { background: #fce4ec; }
+.tag { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-bottom: 4px; letter-spacing: 0.5px; }
+.tag-cash { background: #ef6c00; color: #fff; }
+.tag-times { background: #1565c0; color: #fff; }
+.tag-coach { background: #6a1b9a; color: #fff; }
+.tag-time { background: #2e7d32; color: #fff; }
+.tag-group { background: #e91e63; color: #fff; }
+.tag-pickle { background: #00838f; color: #fff; }
+.tag-lock { background: #78909c; color: #fff; }
+.bk-name { font-size: 16px; font-weight: 700; color: #111; line-height: 1.25; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-name.lock-name { color: #607d8b; }
+.bk-phone { font-size: 15px; font-weight: 600; color: #222; margin-top: 2px; letter-spacing: 0.3px; }
+.bk-foot { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 4px; gap: 6px; }
+.bk-card { font-size: 12px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-amt { font-size: 14px; font-weight: 700; color: #c62828; flex-shrink: 0; }
+.bk-sub { font-size: 13px; color: #666; margin-top: 2px; }
 .mode-switch { margin-bottom: 12px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
 .phone-text { user-select: text; margin-right: 8px; }
@@ -1428,14 +1435,14 @@ h2 { margin: 0; font-size: 20px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .booked-status { font-size: 12px; margin-top: 4px; }
-.free-text { font-size: 15px; }
+.free-text { font-size: 14px; color: #c8c8c8; font-weight: 500; }
 .empty { text-align: center; color: #999; padding: 40px; font-size: 15px; }
 .card-tip { font-size: 12px; color: #999; margin-top: 4px; }
 .card-tip.error { color: #f56c6c; }
 .slot-price {
-  font-size: 12px;
-  color: #1a5c3a;
-  margin-top: 4px;
+  font-size: 13px;
+  color: #9ccc9c;
+  margin-top: 2px;
   font-weight: 600;
 }
 .slot-price.muted {
