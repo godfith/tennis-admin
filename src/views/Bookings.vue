@@ -21,11 +21,9 @@
     </div>
 
     <div class="legend">
-      <span class="lg free">可约</span>
-      <span class="lg cash">现金订场</span>
-      <span class="lg times">次卡</span>
-      <span class="lg coach">教练卡</span>
-      <span class="lg time">时间卡</span>
+      <span class="lg free">未预约</span>
+      <span class="lg booked">已预约</span>
+      <span class="lg past">已过期</span>
       <span class="lg locked">锁场</span>
       <span class="lg group">团课</span>
     </div>
@@ -47,30 +45,18 @@
             @click="onCellClick(c.name, t)"
           >
             <template v-if="getGroupClass(c.name, t)">
-              <div class="tag tag-group">团课</div>
-              <div class="bk-name">{{ getGroupClass(c.name, t).name || '团课' }}</div>
-              <div class="bk-sub">{{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }} 人<span v-if="getGroupClass(c.name, t).coachName"> · {{ getGroupClass(c.name, t).coachName }}</span></div>
+              <div class="booked-user">{{ getGroupClass(c.name, t).name || '团课' }}</div>
+              <div class="booked-status">团课 {{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }} · {{ getGroupClass(c.name, t).coachName || '' }}</div>
             </template>
             <template v-else-if="getBooking(c.name, t)">
-              <template v-if="isLockBooking(getBooking(c.name, t))">
-                <div class="tag tag-lock">锁场</div>
-                <div class="bk-name lock-name">不可约</div>
-                <div class="bk-sub">{{ getBooking(c.name, t).remark || '' }}</div>
-              </template>
-              <template v-else>
-                <div class="tag" :class="'tag-' + bookKind(getBooking(c.name, t))">{{ kindLabel(bookKind(getBooking(c.name, t))) }}</div>
-                <div class="bk-name">{{ getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约' }}</div>
-                <div class="bk-phone" v-if="getBooking(c.name, t).phone">{{ getBooking(c.name, t).phone }}</div>
-                <div class="bk-foot">
-                  <span class="bk-card">{{ cardLine(getBooking(c.name, t)) }}</span>
-                  <span v-if="Number(getBooking(c.name, t).amount) > 0" class="bk-amt">¥{{ Number(getBooking(c.name, t).amount).toFixed(0) }}</span>
-                </div>
-              </template>
+              <div class="booked-user">{{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}</div>
+              <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
+              <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).phone" class="booked-phone">{{ getBooking(c.name, t).phone }}</div>
             </template>
             <template v-else>
               <div class="free-text">可约</div>
               <div class="slot-price" v-if="getPrice(c.name, t) > 0">¥{{ getPrice(c.name, t) }}</div>
-              <div class="slot-price muted" v-else>—</div>
+              <div class="slot-price muted" v-else>未定价</div>
             </template>
           </div>
         </template>
@@ -659,12 +645,18 @@ function cardLine(b) {
   if (isTimes && left != null && left !== '') text += total != null && total !== '' ? ` ${left}/${total}` : ` 剩${left}`
   return text
 }
+function slotPast(time) {
+  const day = currentDate.value
+  const start = String(time || '').split('-')[0] || '00:00'
+  const ts = new Date(day.replace(/-/g, '/') + ' ' + start).getTime()
+  return !Number.isNaN(ts) && ts <= Date.now()
+}
 function cellClass(courtName, time) {
-  if (getGroupClass(courtName, time)) return 'group'
+  if (getGroupClass(courtName, time)) return slotPast(time) ? 'group past' : 'group'
   const b = getBooking(courtName, time)
   if (!b) return 'free'
   if (isLockBooking(b)) return 'locked'
-  return 'booked ' + bookKind(b)
+  return slotPast(time) ? 'past' : 'booked'
 }
 
 function onCellClick(courtName, time) {
@@ -1375,12 +1367,10 @@ h2 { margin: 0; font-size: 20px; }
 .lg::before {
   content: ''; width: 12px; height: 12px; border-radius: 3px;
 }
-.lg.free::before { background: #f0f9f4; border: 1px solid #67c23a; }
-.lg.cash::before { background: #fff3e0; border: 1px solid #ef6c00; }
-.lg.times::before { background: #e3f2fd; border: 1px solid #1565c0; }
-.lg.coach::before { background: #f3e5f5; border: 1px solid #6a1b9a; }
-.lg.time::before { background: #e8f5e9; border: 1px solid #2e7d32; }
-.lg.locked::before { background: #eceff1; border: 1px solid #78909c; }
+.lg.free::before { background: #e8f5e9; border: 1px solid #43a047; }
+.lg.booked::before { background: #fff3e0; border: 1px solid #ef6c00; }
+.lg.past::before { background: #eceff1; border: 1px solid #90a4ae; }
+.lg.locked::before { background: #f5f5f5; border: 1px solid #9e9e9e; }
 .lg.group::before { background: #fce4ec; border: 1px solid #ec407a; }
 .grid-wrap {
   overflow: auto; background: #fff; border-radius: 12px; border: 1px solid #e8e8e8;
@@ -1388,42 +1378,29 @@ h2 { margin: 0; font-size: 20px; }
 .grid { display: grid; min-width: 640px; }
 .cell {
   border-right: 1px solid #eee; border-bottom: 1px solid #eee;
-  padding: 8px 10px; min-height: 86px;
-  display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
-  font-size: 14px; text-align: left;
+  padding: 10px 8px; min-height: 72px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-size: 15px;
 }
 .head { background: #f7faf8; font-weight: 600; position: sticky; top: 0; z-index: 2; align-items: center; }
 .corner { position: sticky; left: 0; z-index: 3; background: #f7faf8; }
 .time-col { position: sticky; left: 0; background: #fafafa; z-index: 1; color: #555; font-size: 14px; align-items: center; }
 .court-name { color: #1a5c3a; font-size: 15px; font-weight: 600; }
-.slot { cursor: pointer; position: relative; border-left: 4px solid transparent; }
-.slot.free { background: #fff; border-left-color: #e8e8e8; }
-.slot.free:hover { background: #f6fbf8; border-left-color: #81c784; }
-.slot.booked { background: #fff; }
-.slot.booked.cash { border-left-color: #ef6c00; background: #fffaf5; }
-.slot.booked.times { border-left-color: #1565c0; background: #f5f9ff; }
-.slot.booked.coach { border-left-color: #6a1b9a; background: #faf6fc; }
-.slot.booked.time { border-left-color: #2e7d32; background: #f6fbf7; }
-.slot.booked.pickle { border-left-color: #00838f; background: #f4fcfd; }
-.slot.booked:hover { filter: brightness(0.98); }
-.slot.locked { background: #f4f5f6; border-left-color: #90a4ae; }
-.slot.group { background: #fff5f8; border-left-color: #e91e63; }
-.slot.group:hover { background: #fce4ec; }
-.tag { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-bottom: 4px; letter-spacing: 0.5px; }
-.tag-cash { background: #ef6c00; color: #fff; }
-.tag-times { background: #1565c0; color: #fff; }
-.tag-coach { background: #6a1b9a; color: #fff; }
-.tag-time { background: #2e7d32; color: #fff; }
-.tag-group { background: #e91e63; color: #fff; }
-.tag-pickle { background: #00838f; color: #fff; }
-.tag-lock { background: #78909c; color: #fff; }
-.bk-name { font-size: 16px; font-weight: 700; color: #111; line-height: 1.25; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bk-name.lock-name { color: #607d8b; }
-.bk-phone { font-size: 15px; font-weight: 600; color: #222; margin-top: 2px; letter-spacing: 0.3px; }
-.bk-foot { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 4px; gap: 6px; }
-.bk-card { font-size: 12px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bk-amt { font-size: 14px; font-weight: 700; color: #c62828; flex-shrink: 0; }
-.bk-sub { font-size: 13px; color: #666; margin-top: 2px; }
+.slot { cursor: pointer; transition: background 0.15s; }
+.slot.free { background: #e8f5e9; color: #2e7d32; }
+.slot.free:hover { background: #c8e6c9; }
+.slot.booked { background: #ffe0b2; color: #e65100; }
+.slot.booked:hover { background: #ffcc80; }
+.slot.past { background: #eceff1; color: #78909c; }
+.slot.past:hover { background: #cfd8dc; }
+.slot.locked { background: #f5f5f5; color: #9e9e9e; }
+.slot.locked:hover { background: #eeeeee; }
+.slot.group { background: #fce4ec; color: #c2185b; }
+.slot.group.past { background: #f3e5e8; color: #ad8490; }
+.slot.group:hover { background: #f8bbd0; }
+.booked-user { font-weight: 700; font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.booked-status { font-size: 12px; margin-top: 3px; opacity: 0.9; }
+.booked-phone { font-size: 14px; font-weight: 600; margin-top: 3px; }
 .mode-switch { margin-bottom: 12px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
 .phone-text { user-select: text; margin-right: 8px; }
@@ -1435,14 +1412,14 @@ h2 { margin: 0; font-size: 20px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .booked-status { font-size: 12px; margin-top: 4px; }
-.free-text { font-size: 14px; color: #c8c8c8; font-weight: 500; }
+.free-text { font-size: 15px; font-weight: 600; }
 .empty { text-align: center; color: #999; padding: 40px; font-size: 15px; }
 .card-tip { font-size: 12px; color: #999; margin-top: 4px; }
 .card-tip.error { color: #f56c6c; }
 .slot-price {
   font-size: 13px;
-  color: #9ccc9c;
-  margin-top: 2px;
+  color: #2e7d32;
+  margin-top: 4px;
   font-weight: 600;
 }
 .slot-price.muted {
