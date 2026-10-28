@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'getFinance-20261028a'
+const FN_VER = 'getFinance-20261028b'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -124,7 +124,7 @@ exports.main = async (raw) => {
     let cardSql = `SELECT c.id, c.card_name, c.type, c.total_times, c.remaining_times, c.price,
                           c.valid_from, c.valid_to, c.status, c.created_at, c.updated_at, c.user_name,
                           c.venue_id, c.venue_name, c.issuer_name, c.refund_amount, c.refunded_at,
-                          c.user_id, u.phone AS user_phone
+                          c.user_id, c.remark, u.phone AS user_phone
                      FROM member_cards c
                      LEFT JOIN users u ON u.id = c.user_id
                     WHERE c.created_at >= ? AND c.created_at < DATE_ADD(?, INTERVAL 1 DAY)
@@ -153,7 +153,7 @@ exports.main = async (raw) => {
 
     let bookSql = `SELECT b.id, b.venue_id, b.venue_name, b.court, b.date, b.time, b.status,
                           b.card_id, b.card_name, b.card_type, b.user_name, b.source, b.created_at, b.amount,
-                          b.user_id, b.phone, b.operator_name, u.phone AS user_phone
+                          b.user_id, b.phone, b.operator_name, b.pay_order_id, u.phone AS user_phone
                      FROM bookings b
                      LEFT JOIN users u ON u.id = b.user_id
                     WHERE b.date BETWEEN ? AND ?`
@@ -237,7 +237,8 @@ exports.main = async (raw) => {
         issuerName: c.issuer_name || '',
         operatorName: c.issuer_name || '',
         imported,
-        amount: amt
+        amount: amt,
+        remark: c.remark || ''
       })
     })
 
@@ -444,6 +445,192 @@ exports.main = async (raw) => {
     consumeList.sort(byTimeDesc)
     courtPayList.sort(byTimeDesc)
 
+
+    function parseSources(remark) {
+      const s = String(remark || '')
+      const out = { meituan: 0, douyin: 0, offline: 0 }
+      const mt = s.match(/美团(\d+(?:\.\d+)?)/)
+      const dy = s.match(/抖音(\d+(?:\.\d+)?)/)
+      const off = s.match(/线下(\d+(?:\.\d+)?)/)
+      if (mt) out.meituan = money(mt[1])
+      if (dy) out.douyin = money(dy[1])
+      if (off) out.offline = money(off[1])
+      return out
+    }
+
+    const sources = { meituan: 0, douyin: 0, offline: 0, wechat: money(wxCourt), cash: 0, unmarked: 0 }
+    ;(cards || []).forEach((c) => {
+      if (isImportedIssuer(c.issuer_name)) return
+      const ps = parseSources(c.remark)
+      const sum = money(ps.meituan + ps.douyin + ps.offline)
+      sources.meituan = money(sources.meituan + ps.meituan)
+      sources.douyin = money(sources.douyin + ps.douyin)
+      sources.offline = money(sources.offline + ps.offline)
+      if (sum <= 0 && money(c.price) > 0) sources.unmarked = money(sources.unmarked + money(c.price))
+    })
+    let wechatBook = 0
+    let cashBook = 0
+    ;(books || []).forEach((b) => {
+      if (b.status === 'cancelled' || b.status === 'locked') return
+      if (String(b.user_name || '') === '锁场' || String(b.source || '') === 'lock') return
+      const amt = money(b.amount)
+      if (amt <= 0) return
+      if (b.pay_order_id) wechatBook = money(wechatBook + amt)
+      else cashBook = money(cashBook + amt)
+    })
+    sources.wechat = wechatBook > 0 ? wechatBook : money(wxCourt)
+    sources.cash = cashBook
+
+    function remainValue(c) {
+      if (isImportedIssuer(c.issuer_name)) return 0
+      const price = money(c.price)
+      if (price <= 0) return 0
+      const type = c.type
+      if (type === 'times' || type === 'coach' || type === 'group') {
+        const total = Number(c.total_times) || 0
+        const left = Number(c.remaining_times) || 0
+        if (total <= 0 || left <= 0) return 0
+        return money((price * left) / total)
+      }
+      if (type === 'time') {
+        if (!c.valid_to) return price
+        const today = fmtDate(new Date())
+        if (today && String(c.valid_to).slice(0, 10) < today) return 0
+        const total = daysBetween(c.valid_from, c.valid_to)
+        const from = c.valid_from && String(c.valid_from).slice(0, 10) > today ? String(c.valid_from).slice(0, 10) : today
+        const left = daysBetween(from, c.valid_to)
+        if (total <= 0 || left <= 0) return 0
+        return money((price * left) / total)
+      }
+      return 0
+    }
+
+    let liabilityAmount = 0
+    let liabilityCount = 0
+    const liabilityByVenue = {}
+    try {
+      let liq = `SELECT id, card_name, type, total_times, remaining_times, price, valid_from, valid_to,
+                        issuer_name, venue_id, venue_name
+                   FROM member_cards
+                  WHERE status='active'`
+      const lip = []
+      if (venueId) { liq += ' AND venue_id=?'; lip.push(venueId) }
+      const [liRows] = await pool.query(liq, lip)
+      ;(liRows || []).forEach((c) => {
+        const v = remainValue(c)
+        if (v <= 0) return
+        liabilityAmount = money(liabilityAmount + v)
+        liabilityCount += 1
+        const key = c.venue_name || c.venue_id || '未知'
+        if (!liabilityByVenue[key]) liabilityByVenue[key] = { venueName: key, amount: 0, count: 0 }
+        liabilityByVenue[key].amount = money(liabilityByVenue[key].amount + v)
+        liabilityByVenue[key].count += 1
+      })
+    } catch (e) { errors.push('liability:' + e.message) }
+
+    const venueMap = {}
+    function vrow(name) {
+      const k = name || '未知'
+      if (!venueMap[k]) venueMap[k] = { venueName: k, issue: 0, court: 0, refund: 0, income: 0 }
+      return venueMap[k]
+    }
+    try {
+      const [vCards] = await pool.query(
+        `SELECT venue_name, price, issuer_name FROM member_cards
+          WHERE created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
+            AND IFNULL(status,'') <> 'deleted'`,
+        [startDate + ' 00:00:00', endDate]
+      )
+      ;(vCards || []).forEach((c) => {
+        if (isImportedIssuer(c.issuer_name)) return
+        vrow(c.venue_name).issue = money(vrow(c.venue_name).issue + money(c.price))
+      })
+      const [vRefund] = await pool.query(
+        `SELECT venue_name, price, total_times, remaining_times, refund_amount, issuer_name
+           FROM member_cards
+          WHERE status='refunded'
+            AND IFNULL(refunded_at, updated_at) >= ? AND IFNULL(refunded_at, updated_at) < DATE_ADD(?, INTERVAL 1 DAY)`,
+        [startDate + ' 00:00:00', endDate]
+      )
+      ;(vRefund || []).forEach((c) => {
+        if (isImportedIssuer(c.issuer_name)) return
+        vrow(c.venue_name).refund = money(vrow(c.venue_name).refund + unusedRefund(c))
+      })
+      const [vBooks] = await pool.query(
+        `SELECT venue_name, amount, card_id, status, user_name, source
+           FROM bookings WHERE date BETWEEN ? AND ?`,
+        [startDate, endDate]
+      )
+      ;(vBooks || []).forEach((b) => {
+        if (b.status === 'cancelled' || b.status === 'locked') return
+        if (String(b.user_name || '') === '锁场' || String(b.source || '') === 'lock') return
+        const amt = money(b.amount)
+        if (amt > 0) vrow(b.venue_name).court = money(vrow(b.venue_name).court + amt)
+      })
+    } catch (e) { errors.push('venueCompare:' + e.message) }
+    const venueCompare = Object.values(venueMap)
+      .map((r) => Object.assign(r, { turnover: money(r.issue + r.court - r.refund) }))
+      .sort((a, b) => b.turnover - a.turnover)
+
+    const exceptions = []
+    ;(cards || []).forEach((c) => {
+      if (String(c.remark || '').indexOf('金额异常') >= 0) {
+        exceptions.push({
+          date: fmtDate(c.created_at), type: '金额异常', name: c.card_name || '',
+          userName: c.user_name || '', amount: money(c.price), venueName: c.venue_name || '',
+          detail: c.remark || ''
+        })
+      }
+    })
+    ;(refundRows || []).forEach((c) => {
+      exceptions.push({
+        date: fmtDate(c.refunded_at || c.updated_at), type: '退卡', name: c.card_name || '',
+        userName: c.user_name || '', amount: money(-unusedRefund(c)), venueName: c.venue_name || '',
+        detail: '退未用 ' + unusedRefund(c)
+      })
+    })
+    ;(books || []).forEach((b) => {
+      if (b.status === 'cancelled' || b.status === 'locked') return
+      if (b.card_id && money(b.amount) > 0) {
+        exceptions.push({
+          date: fmtDate(b.date), type: '用卡又收款', name: (b.court || '') + ' ' + (b.time || ''),
+          userName: b.user_name || '', amount: money(b.amount), venueName: b.venue_name || '',
+          detail: (b.card_name || '用卡') + ' 同时收款' + money(b.amount)
+        })
+      }
+    })
+    ;(ledRows || []).forEach((r) => {
+      if (r.type === 'court_adjust') {
+        exceptions.push({
+          date: fmtDate(r.biz_date), type: '改金额', name: r.remark || '',
+          userName: r.user_name || '', amount: money(r.amount), venueName: r.venue_name || '',
+          detail: r.remark || ''
+        })
+      }
+    })
+    exceptions.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+
+    const opMap = {}
+    function opAdd(name, field, amt) {
+      const k = name || '未知'
+      if (!opMap[k]) opMap[k] = { operatorName: k, issue: 0, court: 0, refund: 0 }
+      opMap[k][field] = money(opMap[k][field] + amt)
+    }
+    ;(cards || []).forEach((c) => {
+      if (isImportedIssuer(c.issuer_name)) return
+      opAdd(c.issuer_name, 'issue', money(c.price))
+    })
+    ;(refundRows || []).forEach((c) => {
+      if (isImportedIssuer(c.issuer_name)) return
+      opAdd(c.issuer_name, 'refund', unusedRefund(c))
+    })
+    ;(consumeList || []).filter((r) => r.type === 'court').forEach((r) => {
+      opAdd(r.operatorName, 'court', money(r.amount))
+    })
+    const operatorSummary = Object.values(opMap)
+      .map((r) => Object.assign(r, { total: money(r.issue + r.court - r.refund) }))
+      .sort((a, b) => b.total - a.total)
+
     return {
       ok: true,
       fnVer: FN_VER,
@@ -468,6 +655,15 @@ exports.main = async (raw) => {
         count: realIssueCount,
         amount: money(turnoverCard + refundRows.filter((c) => !isImportedIssuer(c.issuer_name)).reduce((s, c) => s + unusedRefund(c), 0))
       },
+      sources,
+      liability: {
+        amount: money(liabilityAmount),
+        count: liabilityCount,
+        byVenue: Object.values(liabilityByVenue).sort((a, b) => b.amount - a.amount)
+      },
+      venueCompare,
+      exceptions: exceptions.slice(0, 200),
+      operatorSummary,
       daily,
       issueList: cardIssueList,
       payList: courtPayList,

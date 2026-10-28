@@ -9,6 +9,7 @@
         </p>
       </div>
       <el-button type="success" plain :disabled="!daily.length" @click="exportCsv">导出日报</el-button>
+      <el-button type="success" plain :disabled="!issueList.length && !consumeList.length" @click="exportDetail">导出明细</el-button>
     </div>
 
     <el-form :inline="true" class="filters" @submit.prevent>
@@ -65,6 +66,82 @@
         </div>
       </el-col>
     </el-row>
+
+    <el-row :gutter="16" class="stat-row">
+      <el-col :xs="12" :sm="8" :md="4">
+        <div class="stat-card s"><div class="stat-label">美团</div><div class="stat-value sm">¥{{ fmt(sources.meituan) }}</div></div>
+      </el-col>
+      <el-col :xs="12" :sm="8" :md="4">
+        <div class="stat-card s"><div class="stat-label">抖音核销</div><div class="stat-value sm">¥{{ fmt(sources.douyin) }}</div></div>
+      </el-col>
+      <el-col :xs="12" :sm="8" :md="4">
+        <div class="stat-card s"><div class="stat-label">线下金额</div><div class="stat-value sm">¥{{ fmt(sources.offline) }}</div></div>
+      </el-col>
+      <el-col :xs="12" :sm="8" :md="4">
+        <div class="stat-card s"><div class="stat-label">微信支付</div><div class="stat-value sm">¥{{ fmt(sources.wechat) }}</div></div>
+      </el-col>
+      <el-col :xs="12" :sm="8" :md="4">
+        <div class="stat-card s"><div class="stat-label">后台现金</div><div class="stat-value sm">¥{{ fmt(sources.cash) }}</div></div>
+      </el-col>
+      <el-col :xs="12" :sm="8" :md="4">
+        <div class="stat-card s"><div class="stat-label">未标来源</div><div class="stat-value sm">¥{{ fmt(sources.unmarked) }}</div></div>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="16" class="stat-row">
+      <el-col :xs="24" :sm="12">
+        <div class="stat-card l">
+          <div class="stat-label">当前持卡未核销（预收款负债）</div>
+          <div class="stat-value">¥{{ fmt(liability.amount) }}</div>
+          <div class="stat-split">{{ liability.count }} 张有效卡 · 次卡按余次、时间卡按剩余天数 · 迁入卡记 0</div>
+        </div>
+      </el-col>
+      <el-col :xs="24" :sm="12">
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-title">负债按店</div>
+          <el-table :data="liability.byVenue" size="small" border max-height="160">
+            <el-table-column prop="venueName" label="场馆" />
+            <el-table-column label="张数" width="70" align="right" prop="count" />
+            <el-table-column label="金额" width="110" align="right"><template #default="{ row }">¥{{ fmt(row.amount) }}</template></el-table-column>
+          </el-table>
+        </div>
+      </el-col>
+    </el-row>
+
+    <div class="card">
+      <div class="card-title">五店对比（当前日期）</div>
+      <el-table :data="venueCompare" stripe border size="small">
+        <el-table-column prop="venueName" label="场馆" min-width="160" />
+        <el-table-column label="发卡" align="right"><template #default="{ row }">¥{{ fmt(row.issue) }}</template></el-table-column>
+        <el-table-column label="订场" align="right"><template #default="{ row }">¥{{ fmt(row.court) }}</template></el-table-column>
+        <el-table-column label="退卡" align="right"><template #default="{ row }">¥{{ fmt(row.refund) }}</template></el-table-column>
+        <el-table-column label="营业额" align="right"><template #default="{ row }">¥{{ fmt(row.turnover) }}</template></el-table-column>
+      </el-table>
+    </div>
+
+    <div class="card">
+      <div class="card-title">按操作人</div>
+      <el-table :data="operatorSummary" stripe border size="small" max-height="240">
+        <el-table-column prop="operatorName" label="操作人" min-width="120" />
+        <el-table-column label="发卡" align="right"><template #default="{ row }">¥{{ fmt(row.issue) }}</template></el-table-column>
+        <el-table-column label="订场" align="right"><template #default="{ row }">¥{{ fmt(row.court) }}</template></el-table-column>
+        <el-table-column label="退卡" align="right"><template #default="{ row }">¥{{ fmt(row.refund) }}</template></el-table-column>
+        <el-table-column label="合计" align="right"><template #default="{ row }">¥{{ fmt(row.total) }}</template></el-table-column>
+      </el-table>
+    </div>
+
+    <div class="card">
+      <div class="card-title">异常清单（{{ exceptions.length }}）</div>
+      <el-table :data="exceptions" stripe border size="small" max-height="280">
+        <el-table-column prop="date" label="日期" width="110" />
+        <el-table-column prop="type" label="类型" width="100" />
+        <el-table-column prop="name" label="内容" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="userName" label="会员" width="120" show-overflow-tooltip />
+        <el-table-column label="金额" width="100" align="right"><template #default="{ row }">¥{{ fmt(row.amount) }}</template></el-table-column>
+        <el-table-column prop="venueName" label="场馆" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="detail" label="说明" min-width="200" show-overflow-tooltip />
+      </el-table>
+    </div>
 
     <div class="card">
       <div class="card-title">按日汇总</div>
@@ -198,6 +275,11 @@ const imported = ref({ count: 0, amount: 0 })
 const daily = ref([])
 const issueList = ref([])
 const consumeList = ref([])
+const sources = ref({ meituan: 0, douyin: 0, offline: 0, wechat: 0, cash: 0, unmarked: 0 })
+const liability = ref({ amount: 0, count: 0, byVenue: [] })
+const venueCompare = ref([])
+const exceptions = ref([])
+const operatorSummary = ref([])
 
 const issueQ = ref({ timeText: '', cardName: '', userName: '', phone: '', operatorName: '', amount: '', type: '' })
 const useQ = ref({ timeText: '', cardName: '', userName: '', phone: '', operatorName: '', amount: '', type: '' })
@@ -338,13 +420,19 @@ async function loadData() {
     daily.value = result.daily || []
     issueList.value = (result.issueList || []).map((r) => {
       const d = String(r.remark || r.detail || '')
-      if (d.indexOf('美团') >= 0) r.source = '美团'
-      else if (d.indexOf('抖音') >= 0) r.source = '抖音'
-      else if (d.indexOf('线下') >= 0) r.source = '线下'
-      else r.source = ''
+      const parts = []
+      if (d.indexOf('美团') >= 0) parts.push('美团')
+      if (d.indexOf('抖音') >= 0) parts.push('抖音')
+      if (d.indexOf('线下') >= 0) parts.push('线下')
+      r.source = parts.join('+')
       return r
     })
     consumeList.value = result.consumeList || []
+    sources.value = result.sources || { meituan: 0, douyin: 0, offline: 0, wechat: 0, cash: 0, unmarked: 0 }
+    liability.value = result.liability || { amount: 0, count: 0, byVenue: [] }
+    venueCompare.value = result.venueCompare || []
+    exceptions.value = result.exceptions || []
+    operatorSummary.value = result.operatorSummary || []
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
   } finally {
@@ -352,6 +440,27 @@ async function loadData() {
   }
 }
 
+function csvCell(v) {
+  const s = String(v == null ? '' : v)
+  if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'
+  return s
+}
+function exportDetail() {
+  const lines = [['类型', '时间', '卡券/内容', '会员', '手机号', '金额', '来源', '操作人', '场馆'].map(csvCell).join(',')]
+  issueFiltered.value.forEach((r) => {
+    lines.push([r.typeLabel, r.timeText, r.cardName, r.userName, r.phone, fmt(r.amount), r.source || '', r.operatorName, r.venueName].map(csvCell).join(','))
+  })
+  consumeFiltered.value.forEach((r) => {
+    lines.push([r.typeLabel, r.timeText, r.name, r.userName, r.phone, fmt(r.amount), '', r.operatorName, r.venueName].map(csvCell).join(','))
+  })
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `财报明细_${startDate.value}_${endDate.value}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 function exportCsv() {
   const lines = [['日期', '营业额', '实际收入', '迁入金额'].join(',')]
   daily.value.forEach((r) => {
@@ -401,6 +510,9 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .stat-card.i { border-top-color: #e6a23c; }
 .stat-card.d { border-top-color: #909399; }
 .stat-card.w { border-top-color: #f56c6c; }
+.stat-card.s { border-top-color: #409eff; }
+.stat-card.l { border-top-color: #6c3483; }
+.stat-value.sm { font-size: 20px; }
 .stat-label { font-size: 13px; color: #888; }
 .stat-value { font-size: 26px; font-weight: 700; color: #222; margin: 6px 0 4px; }
 .stat-split { font-size: 12px; color: #909399; }
