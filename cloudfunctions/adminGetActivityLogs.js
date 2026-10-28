@@ -186,11 +186,17 @@ exports.main = async (event) => {
     if (has('user_id')) selectBits.push('l.user_id')
 
     let sql = `SELECT ${selectBits.join(', ')},
-                        IFNULL(l.amount, b.amount) AS amount,
+                        CASE
+                          WHEN l.amount > 0 THEN l.amount
+                          WHEN b.card_id IS NOT NULL AND mc.price > 0 AND mc.total_times > 0 THEN ROUND(mc.price / mc.total_times, 2)
+                          WHEN b.card_id IS NOT NULL AND mc.price > 0 AND mc.valid_from IS NOT NULL AND mc.valid_to IS NOT NULL THEN ROUND(mc.price / GREATEST(DATEDIFF(mc.valid_to, mc.valid_from) + 1, 1), 2)
+                          ELSE IFNULL(b.amount, 0)
+                        END AS amount,
                         IFNULL(l.card_name, b.card_name) AS card_name
                  FROM activity_logs l
                  LEFT JOIN users u ON ${has('user_id') ? 'u.id = l.user_id' : '1=0'}
                  LEFT JOIN bookings b ON (l.type = 'booking_add' OR l.type = '订场') AND l.phone = b.phone AND l.venue_id = b.venue_id AND DATE(l.created_at) = b.date
+                 LEFT JOIN member_cards mc ON b.card_id = mc.id
                 WHERE 1=1`
     const params = []
     if (venueId) {
