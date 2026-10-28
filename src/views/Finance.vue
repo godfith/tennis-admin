@@ -109,6 +109,7 @@
       </div>
       <el-table :data="issueFiltered" stripe border size="small" max-height="420">
         <el-table-column prop="timeText" label="操作时间" width="170" sortable />
+        <el-table-column prop="source" label="来源" width="80" />
         <el-table-column prop="typeLabel" label="类型" width="80" />
         <el-table-column prop="cardName" label="卡券名称" min-width="200" show-overflow-tooltip />
         <el-table-column prop="userName" label="会员账号" width="130" show-overflow-tooltip />
@@ -332,7 +333,14 @@ async function loadData() {
     income.value = result.income || { card: 0, court: 0, total: 0 }
     imported.value = result.imported || { count: 0, amount: 0 }
     daily.value = result.daily || []
-    issueList.value = result.issueList || []
+    issueList.value = (result.issueList || []).map((r) => {
+      const d = String(r.remark || r.detail || '')
+      if (d.indexOf('美团') >= 0) r.source = '美团'
+      else if (d.indexOf('抖音') >= 0) r.source = '抖音'
+      else if (d.indexOf('线下') >= 0) r.source = '线下'
+      else r.source = ''
+      return r
+    })
     consumeList.value = result.consumeList || []
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
