@@ -186,12 +186,7 @@ exports.main = async (event) => {
     if (has('user_id')) selectBits.push('l.user_id')
 
     let sql = `SELECT ${selectBits.join(', ')},
-                        CASE
-                          WHEN l.amount > 0 THEN l.amount
-                          WHEN b.card_id IS NOT NULL AND mc.price > 0 AND mc.total_times > 0 THEN ROUND(mc.price / mc.total_times, 2)
-                          WHEN b.card_id IS NOT NULL AND mc.price > 0 AND mc.valid_from IS NOT NULL AND mc.valid_to IS NOT NULL THEN ROUND(mc.price / GREATEST(DATEDIFF(mc.valid_to, mc.valid_from) + 1, 1), 2)
-                          ELSE IFNULL(b.amount, 0)
-                        END AS amount,
+                        l.amount AS amount,
                         IFNULL(l.card_name, b.card_name) AS card_name
                  FROM activity_logs l
                  LEFT JOIN users u ON ${has('user_id') ? 'u.id = l.user_id' : '1=0'}
