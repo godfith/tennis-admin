@@ -27,6 +27,7 @@ exports.main = async (event) => {
       validTo,
       remark,
       price,
+      paySources,
       venueId,
       venueName,
       issuerName
@@ -85,6 +86,10 @@ exports.main = async (event) => {
       if (!to && ends.length) to = ends[ends.length - 1]
     }
     const payPrice = Number(price) || 0
+    const sources = Array.isArray(paySources) ? paySources.filter(Boolean) : []
+    const sourceText = sources.length ? ' [' + sources.join('+') + ']' : ''
+    const tplPrice = Number(tpl.price) || 0
+    const mismatch = tplPrice > 0 && Math.abs(payPrice - tplPrice) > 0.01
 
     const [res] = await pool.query(
       `INSERT INTO member_cards (
@@ -106,7 +111,7 @@ exports.main = async (event) => {
         from,
         to,
         timeRule || null,
-        remark || '',
+        (remark || '') + sourceText,
         issuerName,
         payPrice
       ]
@@ -155,7 +160,7 @@ exports.main = async (event) => {
           userName || '',
           issuerName,
           userPhone,
-          '发卡 ' + (tpl.name || '') + (payPrice ? ' 收款' + payPrice + '元' : ''),
+          '发卡 ' + (tpl.name || '') + (payPrice ? ' 收款' + payPrice + '元' : '') + sourceText + (mismatch ? ' [金额异常:模板' + tplPrice + ']' : ''),
           venueId || '',
           venueName || ''
         ]

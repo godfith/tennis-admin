@@ -567,9 +567,17 @@
         <el-form-item v-if="selectedTemplate" label="卡类型">
           <el-tag :type="typeTag(selectedTemplate.type)">{{ typeLabel(selectedTemplate.type) }}</el-tag>
         </el-form-item>
+        <el-form-item label="支付来源">
+          <el-checkbox-group v-model="issueForm.paySources">
+            <el-checkbox value="美团">美团</el-checkbox>
+            <el-checkbox value="抖音核销">抖音核销</el-checkbox>
+            <el-checkbox value="线下金额">线下金额</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
         <el-form-item label="实收金额" required>
           <el-input-number v-model="issueForm.price" :min="0" :precision="2" :step="1" />
           <span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span>
+          <div v-if="selectedTemplate <span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span><span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span> Number(selectedTemplate.price) > 0 <span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span><span class="hint">元{{ batchMode ? '（每人按此金额记账）' : '（计入营业额）' }}</span> Number(issueForm.price) !== Number(selectedTemplate.price)" class="warn">金额与模板 ¥{{ selectedTemplate.price }} 不一致，将记异常</div>
         </el-form-item>
         <el-form-item v-if="selectedTemplate && isTimesLike(selectedTemplate.type)" label="次数">
           <el-input-number v-model="issueForm.totalTimes" :min="1" />
@@ -868,7 +876,7 @@ const canIssueCard = computed(() => can('issueCard') || roleKind() === 'admin')
 const extendMin = isStoreManager ? -120 : -36500
 const extendMax = isStoreManager ? 120 : 36500
 const issueForm = ref({
-  templateId: '', price: 0, totalTimes: 10, validFrom: '', validTo: '',
+  templateId: '', price: 0, totalTimes: 10, validFrom: '', validTo: '', paySources: [],
   remark: '', venueId: '', venueName: '', issuerName: ''
 })
 
@@ -1798,6 +1806,7 @@ async function issueOne(user) {
     activateMode: issueForm.value.activateMode || 'now',
     durationDays: Number(issueForm.value.durationDays) || 0,
     remark: issueForm.value.remark,
+    paySources: issueForm.value.paySources || [],
     venueId: issueForm.value.venueId,
     venueName: issueForm.value.venueName,
     issuerName: String(issueForm.value.issuerName).trim(),
@@ -1886,6 +1895,7 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .stat.slim { min-width: 120px; flex: 1; }
 .muted { color: #ccc; }
 .hint { margin-left: 8px; color: #999; font-size: 12px; }
+.warn { color: #e6a23c; font-size: 12px; margin-top: 4px; }
 .wallet-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .drawer-name { font-size: 18px; font-weight: 700; }
 .drawer-sub { font-size: 13px; color: #888; margin-top: 2px; }
