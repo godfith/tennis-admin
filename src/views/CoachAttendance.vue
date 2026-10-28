@@ -143,7 +143,7 @@ function setRange(type) {
     filters.endDate = fmt(e)
   } else if (type === 'month') {
     filters.startDate = fmt(new Date(now.getFullYear(), now.getMonth(), 1))
-    filters.endDate = fmt(now)
+    filters.endDate = fmt(new Date(now.getFullYear(), now.getMonth() + 1, 0))
   } else {
     const s = new Date(now)
     s.setDate(s.getDate() - 6)

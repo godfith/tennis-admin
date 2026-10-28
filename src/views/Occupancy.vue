@@ -243,7 +243,7 @@ function setRange(type) {
     endDate.value = ymd(e)
   } else if (type === 'month') {
     startDate.value = ymd(new Date(now.getFullYear(), now.getMonth(), 1))
-    endDate.value = ymd(now)
+    endDate.value = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0))
   } else if (type === 'last30') {
     const s = new Date(now)
     s.setDate(s.getDate() - 29)
