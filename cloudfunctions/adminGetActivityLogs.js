@@ -18,7 +18,7 @@ function isImportedIssuer(name) {
   return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
 }
 
-const FN_VER = 'activity-20261028a'
+const FN_VER = 'activity-20261028b'
 
 const LABELS = {
   register: '用户注册',
@@ -99,7 +99,9 @@ exports.main = async (event) => {
       if (customCats.length) {
         customCats.forEach((c) => {
           groups[c.name] = {}
-          catOrder.push({ name: c.name, keywords: (c.keywords || []).map((k) => String(k).toLowerCase()), byUse: String(c.name).indexOf('体验') >= 0 })
+          const kws = (c.keywords || []).map((k) => String(k).toLowerCase()).filter(Boolean)
+          const byUse = c.byUse === true || c.byUse === 1 || String(c.byUse) === 'true' || String(c.name).indexOf('体验') >= 0
+          catOrder.push({ name: c.name, keywords: kws, byUse })
         })
       } else {
         ;['卡券', '课程', '体验课', '订场'].forEach((n) => { groups[n] = {} })
@@ -112,11 +114,17 @@ exports.main = async (event) => {
       }
       function matchCat(name, type) {
         const n = String(name || '').toLowerCase()
+        let fallback = null
         for (const c of catOrder) {
-          if (!c.keywords.length) continue
+          if (!c.keywords.length) {
+            if (!fallback) fallback = c
+            continue
+          }
           if (c.keywords.some((k) => n.indexOf(k) >= 0)) return c
         }
-        return catOrder[catOrder.length - 1]
+        if (fallback) return fallback
+        if (!groups['其他']) { groups['其他'] = {}; catOrder.push({ name: '其他', keywords: [], byUse: false }) }
+        return { name: '其他', keywords: [], byUse: false }
       }
       function addRow(g, key, amt, cnt) {
         if (!groups[g][key]) groups[g][key] = { name: key, amount: 0, count: 0 }

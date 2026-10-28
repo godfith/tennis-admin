@@ -95,16 +95,24 @@
       <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip />
       <el-table-column prop="venueName" label="场馆" width="160" show-overflow-tooltip />
     </el-table>
-    <el-dialog v-model="weeklyVisible" title="周报分类设置" width="560px">
-      <p class="muted" style="margin:0 0 12px">每行一个分类。关键词用逗号隔开，卡名包含任一关键词就归入该分类。从上往下匹配，先匹配到的优先。体验课按实际上课计，其余按发卡计。</p>
-      <div v-for="(cat, i) in weeklyCats" :key="i" style="display:flex;gap:8px;margin-bottom:8px">
-        <el-input v-model="cat.name" placeholder="分类名" style="width:120px" />
-        <el-input v-model="cat.keywords" placeholder="关键词，逗号隔开" style="flex:1" />
+    <el-dialog v-model="weeklyVisible" title="周报分类设置" width="640px">
+      <p class="muted" style="margin:0 0 8px">卡名包含任一关键词就归入该分类，从上往下匹配，先匹配到的优先。关键词留空 = 兜底（未匹配的卡归入，建议放最后一行）。勾选「按上课」按实际上课计，否则按发卡计。分类会自动保存。</p>
+      <div v-for="(cat, i) in weeklyCats" :key="i" style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+        <el-input v-model="cat.name" placeholder="分类名" style="width:110px" />
+        <el-input v-model="cat.keywords" :placeholder="cat.keywords ? '关键词，逗号隔开' : '留空=兜底'" style="flex:1" />
+        <el-checkbox v-model="cat.byUse" style="margin-right:4px">按上课</el-checkbox>
         <el-button link type="danger" @click="weeklyCats.splice(i, 1)">删除</el-button>
       </div>
-      <el-button size="small" @click="weeklyCats.push({ name: '', keywords: '' })">加分类</el-button>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <el-button size="small" @click="weeklyCats.push({ name: '', keywords: '', byUse: false })">加分类</el-button>
+        <el-button size="small" @click="resetWeeklyCats">恢复默认</el-button>
+      </div>
+      <div v-if="cardNameHints.length" class="hint-box">
+        <div class="hint-title">本期卡名（点一下填到最后一行关键词）</div>
+        <el-tag v-for="n in cardNameHints" :key="n" size="small" style="margin:2px;cursor:pointer" @click="addKeyword(n)">{{ n }}</el-tag>
+      </div>
       <template #footer>
-        <el-button @click="weeklyVisible = false">取消</el-button>
+        <el-button @click="saveWeeklyCats(); weeklyVisible = false">保存并关闭</el-button>
         <el-button type="primary" @click="exportWeekly">导出</el-button>
       </template>
     </el-dialog>
@@ -340,18 +348,57 @@ function csvCell(v) {
   return s
 }
 
+const WEEKLY_KEY = 'weekly_cats_v1'
+const DEFAULT_CATS = [
+  { name: '体验课', keywords: '体验', byUse: true },
+  { name: '课程', keywords: '私教', byUse: false },
+  { name: '订场', keywords: '发球机1小时,1小时发球机,闲时', byUse: false },
+  { name: '卡券', keywords: '', byUse: false }
+]
+function loadWeeklyCats() {
+  try {
+    const raw = localStorage.getItem(WEEKLY_KEY)
+    if (!raw) return DEFAULT_CATS.map((c) => ({ ...c }))
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr) || !arr.length) return DEFAULT_CATS.map((c) => ({ ...c }))
+    return arr.map((c) => ({ name: String(c.name || ''), keywords: String(c.keywords || ''), byUse: !!c.byUse }))
+  } catch (e) {
+    return DEFAULT_CATS.map((c) => ({ ...c }))
+  }
+}
+function saveWeeklyCats() {
+  const cats = weeklyCats.value.filter((c) => String(c.name || '').trim())
+  localStorage.setItem(WEEKLY_KEY, JSON.stringify(cats))
+  ElMessage.success('分类已保存')
+}
+function resetWeeklyCats() {
+  weeklyCats.value = DEFAULT_CATS.map((c) => ({ ...c }))
+  localStorage.removeItem(WEEKLY_KEY)
+  ElMessage.success('已恢复默认')
+}
 const weeklyVisible = ref(false)
-const weeklyCats = ref([
-  { name: '体验课', keywords: '体验' },
-  { name: '课程', keywords: '私教' },
-  { name: '订场', keywords: '发球机1小时,1小时发球机,闲时' },
-  { name: '卡券', keywords: '' }
-])
+const weeklyCats = ref(loadWeeklyCats())
+const cardNameHints = computed(() => {
+  const set = new Set()
+  filtered.value.forEach((r) => {
+    const n = String(r.cardName || '').trim()
+    if (n && n !== '-' && n !== '未用卡') set.add(n)
+  })
+  return Array.from(set).slice(0, 40)
+})
+function addKeyword(name) {
+  if (!weeklyCats.value.length) weeklyCats.value.push({ name: '', keywords: '', byUse: false })
+  const last = weeklyCats.value[weeklyCats.value.length - 1]
+  const parts = String(last.keywords || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+  if (!parts.includes(name)) parts.push(name)
+  last.keywords = parts.join(',')
+}
 function openWeekly() {
   if (!startDate.value || !endDate.value) {
     ElMessage.warning('请先选择日期')
     return
   }
+  weeklyCats.value = loadWeeklyCats()
   weeklyVisible.value = true
 }
 async function exportWeekly() {
@@ -360,12 +407,21 @@ async function exportWeekly() {
     return
   }
   const cats = weeklyCats.value.filter((c) => c.name.trim())
+  if (!cats.length) {
+    ElMessage.warning('请至少保留一个分类')
+    return
+  }
+  localStorage.setItem(WEEKLY_KEY, JSON.stringify(cats))
   const result = await post('/adminGetActivityLogs', {
     action: 'weekly',
     venueId: localStorage.getItem('venue_id') || '',
     startDate: startDate.value,
     endDate: endDate.value,
-    categories: cats.map((c) => ({ name: c.name.trim(), keywords: c.keywords.split(/[,，]/).map((s) => s.trim()).filter(Boolean) }))
+    categories: cats.map((c) => ({
+      name: c.name.trim(),
+      keywords: String(c.keywords || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+      byUse: !!c.byUse
+    }))
   })
   if (!result.ok) {
     ElMessage.error(result.msg || '导出失败，请部署 adminGetActivityLogs')
@@ -375,12 +431,13 @@ async function exportWeekly() {
     ElMessage.error('云函数还是旧版，请重新部署 adminGetActivityLogs')
     return
   }
-  const colors = { 卡券: '#1a5c3a', 课程: '#1e4870', 体验课: '#b26a00', 订场: '#7a1f1f' }
+  const colors = { 卡券: '#1a5c3a', 课程: '#1e4870', 体验课: '#b26a00', 订场: '#7a1f1f', 双11: '#c0392b', 其他: '#666' }
+  const palette = ['#1a5c3a', '#1e4870', '#b26a00', '#7a1f1f', '#c0392b', '#6c3483', '#1a5276', '#666']
   let grandAmt = 0
   let grandCnt = 0
   let body = ''
-  ;(result.sections || []).forEach((sec) => {
-    const c = colors[sec.title] || '#333'
+  ;(result.sections || []).forEach((sec, idx) => {
+    const c = colors[sec.title] || palette[idx % palette.length]
     body += `<tr><td colspan="3" style="background:${c};color:#fff;font-weight:bold;padding:8px">${sec.title}</td></tr>`
     body += '<tr style="background:#f4f4f4"><td style="padding:6px;font-weight:bold">卡券</td><td style="padding:6px;font-weight:bold">金额</td><td style="padding:6px;font-weight:bold">次数</td></tr>'
     ;(sec.rows || []).forEach((r) => {
@@ -459,4 +516,6 @@ h2 { margin: 0 0 4px; font-size: 20px; color: #1a5c3a; }
 }
 .sum-bar b { font-size: 18px; margin-left: 4px; }
 .muted { color: #999; }
+.hint-box { background: #f7f7f7; border-radius: 6px; padding: 8px; margin-top: 4px; }
+.hint-title { font-size: 12px; color: #888; margin-bottom: 4px; }
 </style>
