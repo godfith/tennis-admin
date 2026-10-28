@@ -22,9 +22,12 @@
 
     <div class="legend">
       <span class="lg free">可约</span>
-      <span class="lg booked">已预约</span>
+      <span class="lg cash">现金订场</span>
+      <span class="lg times">次卡</span>
+      <span class="lg coach">教练卡</span>
+      <span class="lg time">时间卡</span>
       <span class="lg locked">锁场</span>
-      <span class="lg group">团课（仅团课卡）</span>
+      <span class="lg group">团课</span>
     </div>
 
     <div class="grid-wrap" v-loading="loading">
@@ -44,18 +47,23 @@
             @click="onCellClick(c.name, t)"
           >
             <template v-if="getGroupClass(c.name, t)">
-              <div class="booked-user">{{ getGroupClass(c.name, t).name || '团课' }}</div>
-              <div class="booked-status">
-                团课 {{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }}
-                · {{ getGroupClass(c.name, t).coachName || '' }}
-              </div>
+              <div class="bk-name group-name">{{ getGroupClass(c.name, t).name || '团课' }}</div>
+              <div class="bk-card group">团课 {{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }}</div>
+              <div v-if="getGroupClass(c.name, t).coachName" class="bk-coach">教练 {{ getGroupClass(c.name, t).coachName }}</div>
             </template>
             <template v-else-if="getBooking(c.name, t)">
-              <div class="booked-user">
+              <div class="bk-name">
                 {{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
               </div>
-              <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
-              <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).phone" class="booked-phone">{{ getBooking(c.name, t).phone }}</div>
+              <div v-if="isLockBooking(getBooking(c.name, t))" class="bk-lock">{{ getBooking(c.name, t).remark || '不可约' }}</div>
+              <template v-else>
+                <div class="bk-card" :class="bookKind(getBooking(c.name, t))">{{ cardLine(getBooking(c.name, t)) }}</div>
+                <div v-if="getBooking(c.name, t).coachName" class="bk-coach">教练 {{ getBooking(c.name, t).coachName }}</div>
+                <div class="bk-meta">
+                  <span v-if="getBooking(c.name, t).phone" class="bk-phone">{{ getBooking(c.name, t).phone }}</span>
+                  <span v-if="Number(getBooking(c.name, t).amount) > 0" class="bk-amt">¥{{ Number(getBooking(c.name, t).amount).toFixed(0) }}</span>
+                </div>
+              </template>
             </template>
             <template v-else>
               <div class="free-text">可约</div>
@@ -623,12 +631,35 @@ function getPrice(courtName, time) {
   const v = priceMap.value[key]
   return v != null ? Number(v) : 0
 }
+function bookKind(b) {
+  if (!b) return 'cash'
+  if (isLockBooking(b)) return 'locked'
+  if (String(b.remark || '').indexOf('匹克') >= 0) return 'pickle'
+  const type = b.cardType || b.card_type || ''
+  if (type === 'coach') return 'coach'
+  if (type === 'time') return 'time'
+  if (type === 'group') return 'group'
+  if (type === 'times' || b.cardName || b.card_name) return 'times'
+  return 'cash'
+}
+function cardLine(b) {
+  if (!b) return ''
+  if (!b.cardName && !b.card_name) return String(b.remark || '').indexOf('匹克') >= 0 ? '匹克球' : '现金'
+  const name = b.cardName || b.card_name
+  const type = b.cardType || b.card_type || ''
+  const isTimes = type === 'times' || type === 'coach' || type === 'group'
+  const left = b.cardRemaining != null ? b.cardRemaining : b.remainingTimes
+  const total = b.cardTotal != null ? b.cardTotal : b.totalTimes
+  let text = name
+  if (isTimes && left != null && left !== '') text += total != null && total !== '' ? ` ${left}/${total}` : ` 剩${left}`
+  return text
+}
 function cellClass(courtName, time) {
   if (getGroupClass(courtName, time)) return 'group'
   const b = getBooking(courtName, time)
-  if (b && isLockBooking(b)) return 'locked'
-  if (b) return 'booked'
-  return 'free'
+  if (!b) return 'free'
+  if (isLockBooking(b)) return 'locked'
+  return 'booked ' + bookKind(b)
 }
 
 function onCellClick(courtName, time) {
@@ -1340,7 +1371,10 @@ h2 { margin: 0; font-size: 20px; }
   content: ''; width: 12px; height: 12px; border-radius: 3px;
 }
 .lg.free::before { background: #f0f9f4; border: 1px solid #67c23a; }
-.lg.booked::before { background: #fff3e0; border: 1px solid #e6a23c; }
+.lg.cash::before { background: #fff3e0; border: 1px solid #ef6c00; }
+.lg.times::before { background: #e3f2fd; border: 1px solid #1565c0; }
+.lg.coach::before { background: #f3e5f5; border: 1px solid #6a1b9a; }
+.lg.time::before { background: #e8f5e9; border: 1px solid #2e7d32; }
 .lg.locked::before { background: #eceff1; border: 1px solid #78909c; }
 .lg.group::before { background: #fce4ec; border: 1px solid #ec407a; }
 .grid-wrap {
@@ -1360,10 +1394,29 @@ h2 { margin: 0; font-size: 20px; }
 .slot { cursor: pointer; transition: background 0.15s; }
 .slot.free { background: #f0f9f4; color: #67c23a; }
 .slot.free:hover { background: #d8f3e4; }
-.slot.booked { background: #fff3e0; color: #e6a23c; }
-.slot.booked:hover { background: #ffe0b2; }
+.slot.booked { background: #fff8f0; }
+.slot.booked:hover { filter: brightness(0.97); }
+.slot.booked.cash { background: #fff3e0; }
+.slot.booked.times { background: #e3f2fd; }
+.slot.booked.coach { background: #f3e5f5; }
+.slot.booked.time { background: #e8f5e9; }
+.slot.booked.pickle { background: #e0f7fa; }
 .slot.locked { background: #eceff1; color: #546e7a; }
 .slot.locked:hover { background: #cfd8dc; }
+.bk-name { font-size: 15px; font-weight: 700; color: #1a1a1a; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-name.group-name { color: #ad1457; }
+.bk-card { font-size: 12px; margin-top: 3px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-card.cash { color: #ef6c00; }
+.bk-card.times { color: #1565c0; }
+.bk-card.coach { color: #6a1b9a; }
+.bk-card.time { color: #2e7d32; }
+.bk-card.group { color: #c2185b; }
+.bk-card.pickle { color: #00838f; }
+.bk-coach { font-size: 11px; color: #6a1b9a; margin-top: 2px; }
+.bk-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 3px; gap: 4px; }
+.bk-phone { font-size: 11px; color: #78909c; letter-spacing: 0.2px; }
+.bk-amt { font-size: 13px; font-weight: 700; color: #c62828; }
+.bk-lock { font-size: 12px; color: #78909c; margin-top: 3px; }
 .mode-switch { margin-bottom: 12px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
 .phone-text { user-select: text; margin-right: 8px; }
