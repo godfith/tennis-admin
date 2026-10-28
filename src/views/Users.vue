@@ -1877,9 +1877,16 @@ onMounted(async () => {
   loadTemplates()
   await loadData()
   if (route.query.open === '1' && list.value.length) {
-    const phone = String(route.query.q || '')
-    const hit = list.value.find((u) => String(u.phone || '') === phone) || list.value[0]
-    openDetail(hit)
+    const q = String(route.query.q || '').trim()
+    const isPhone = /^1\d{10}$/.test(q)
+    let hit = null
+    if (isPhone) {
+      hit = list.value.find((u) => String(u.phone || '').replace(/\D/g, '').slice(-11) === q)
+    }
+    if (!hit) {
+      hit = list.value.find((u) => String(u.phone || '') === q || String(u.userId || '') === q) || list.value[0]
+    }
+    if (hit) openDetail(hit)
   }
 })
 </script>

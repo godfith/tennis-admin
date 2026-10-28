@@ -1043,7 +1043,9 @@ function copyPhone(phone) {
   navigator.clipboard.writeText(text).then(() => ElMessage.success('已复制 ' + text)).catch(() => ElMessage.warning('复制失败，请手动选中'))
 }
 function goUser(b) {
-  const q = b.memberId || b.userId || b.phone || b.userName || ''
+  // 优先用手机号精确搜用户，避免旧 memberId/userId 对到错人
+  const phone = String((b && b.phone) || detailPhone.value || '').trim()
+  const q = phone || (b && (b.memberId || b.userId || b.userName)) || ''
   if (!q) { ElMessage.warning('没有客户信息'); return }
   router.push({ path: '/users', query: { q: String(q), open: '1', from: 'bookings' } })
 }
