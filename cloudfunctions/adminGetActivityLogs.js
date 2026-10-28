@@ -18,7 +18,7 @@ function isImportedIssuer(name) {
   return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
 }
 
-const FN_VER = 'activity-20261012e'
+const FN_VER = 'activity-20261028a'
 
 const LABELS = {
   register: '用户注册',
@@ -66,7 +66,7 @@ function parseAmount(detail) {
 
 function parseCardName(detail) {
   const s = String(detail || '')
-  let m = s.match(/卡券-([^，,；;\n]+)/)
+  let m = s.match(/卡券-([^\uff0c,\uff1b;\n]+)/)
   if (m) return ('卡券-' + m[1]).trim()
   m = s.match(/发卡\s+(.+?)(?:\s+收款|$)/)
   if (m) return m[1].trim()
@@ -295,7 +295,18 @@ exports.main = async (event) => {
       seenId.add(String(r.id))
       const detail = r.detail || ''
       const parsedCard = r.card_name || parseCardName(detail)
-      const parsedAmt = realAmount(r)
+      // 金额优先级：日志里存的 amount → 发卡匹配 member_cards → 从详情文字解析
+      let parsedAmt = null
+      if (r.amount != null && r.amount !== '' && Number.isFinite(Number(r.amount))) {
+        parsedAmt = money(r.amount)
+      }
+      if ((parsedAmt == null || parsedAmt === 0) && r.type === 'issue_card') {
+        const fromCard = realAmount(r)
+        if (fromCard != null) parsedAmt = fromCard
+      }
+      if (parsedAmt == null) {
+        parsedAmt = parseAmount(detail)
+      }
       list.push({
         id: String(r.id),
         type: r.type,
