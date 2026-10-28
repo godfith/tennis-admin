@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'getFinance-20261012b'
+const FN_VER = 'getFinance-20261028a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -339,6 +339,11 @@ exports.main = async (raw) => {
           unit = importedCard ? 0 : cardTimeUnit(card)
         }
         incomeCard += unit
+        // 用卡同时又有实收现金：现金单独计入订场营业额，避免漏账
+        if (storedAmt > 0) {
+          incomeCourt += storedAmt
+          turnoverCourtBook += storedAmt
+        }
         const cardTitle = b.card_name || (card && card.card_name) || ''
         consumeList.push({
           date: day,
@@ -408,7 +413,9 @@ exports.main = async (raw) => {
       })
     }
 
-    const turnoverCourt = wxCourt > 0 ? wxCourt : turnoverCourtBook
+    // 订场营业额 = 无卡未取消的 bookings.amount（微信 payNotify 会回写 amount，后台现金也在这里）
+    // 不再「有微信就只计微信」，否则后台现金订场会被漏掉
+    const turnoverCourt = turnoverCourtBook
 
     const dayMap = {}
     function addDay(date, field, amt) {
@@ -422,8 +429,8 @@ exports.main = async (raw) => {
       else if (r.imported) addDay(r.dateRaw, 'issueImport', r.amount)
       else addDay(r.dateRaw, 'turnover', r.amount)
     })
-    if (wxCourt > 0) courtPayList.forEach((r) => addDay(r.dateRaw, 'turnover', r.amount))
-    else consumeList.filter((r) => r.type === 'court').forEach((r) => addDay(r.dateRaw, 'turnover', r.amount))
+    // 按日营业额的订场部分与汇总口径一致：无卡 bookings.amount
+    consumeList.filter((r) => r.type === 'court').forEach((r) => addDay(r.dateRaw, 'turnover', r.amount))
     consumeList.forEach((r) => addDay(r.dateRaw, 'income', r.amount))
 
     function byTimeDesc(a, b) {

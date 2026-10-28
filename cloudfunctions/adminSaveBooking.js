@@ -635,7 +635,7 @@ exports.main = async (event) => {
       })
 
       let ledgerError = null
-      if (cash > 0 && !cardIdVal) {
+      if (cash > 0) {
         ledgerError = await writeLedger(conn, {
           bizDate: dateYmd,
           type: 'court_pay',
