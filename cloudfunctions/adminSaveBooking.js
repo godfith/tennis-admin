@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261029f'
+const FN_VER = 'saveBooking-20261029g'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -249,13 +249,37 @@ exports.main = async (event) => {
           [refundCardId]
         )
         const card = cards[0]
-        if (card && (card.type === 'times' || card.type === 'coach' || card.type === 'group') && card.status !== 'deleted' && card.status !== 'refunded') {
-          const left = (Number(card.remaining_times) || 0) + 1
-          const total = Number(card.total_times) || left
-          await conn.query(
-            `UPDATE member_cards SET remaining_times=?, status='active', updated_at=NOW() WHERE id=?`,
-            [Math.min(left, total), card.id]
-          )
+        const refundWhole = !!(data && data.refundIssuedCard)
+        if (card && card.status !== 'deleted' && card.status !== 'refunded') {
+          if (refundWhole) {
+            await conn.query(
+              `UPDATE member_cards SET status='refunded', updated_at=NOW() WHERE id=?`,
+              [card.id]
+            )
+            const back = money(card.price)
+            if (back > 0) {
+              await writeLedger(conn, {
+                bizDate: fmtDate(b.date) || fmtDate(new Date()),
+                type: 'refund_card',
+                amount: -back,
+                venueId: b.venue_id || '',
+                venueName: b.venue_name || '',
+                userId: b.user_id || null,
+                userName: b.user_name || '',
+                operatorName: (data && data.operatorName) || '管理员',
+                cardId: card.id,
+                bookingId: b.id,
+                remark: '取消预约连卡退 ' + (card.card_name || '')
+              })
+            }
+          } else if (card.type === 'times' || card.type === 'coach' || card.type === 'group') {
+            const left = (Number(card.remaining_times) || 0) + 1
+            const total = Number(card.total_times) || left
+            await conn.query(
+              `UPDATE member_cards SET remaining_times=?, status='active', updated_at=NOW() WHERE id=?`,
+              [Math.min(left, total), card.id]
+            )
+          }
         }
       }
 

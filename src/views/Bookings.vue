@@ -870,6 +870,7 @@ function onEditCardChange(id) {
 }
 function onCardChange() {
   bookForm.value.coachId = ''
+  if (bookForm.value.cardId) bookForm.value.payAmount = 0
   if (needCoachOnBook.value) loadCoaches()
 }
 function onIssueTplChange() {
@@ -1175,6 +1176,20 @@ async function submitBook() {
         return
       }
     }
+    const usingCard = !!(bookForm.value.cardId || bookForm.value.issueTpl)
+    const extraCash = Number(bookForm.value.payAmount) || 0
+    if (usingCard && extraCash > 0 && !bookForm.value.issueTpl) {
+      try {
+        await ElMessageBox.confirm(
+          `这场已选会员卡，本场又收了现金 ¥${extraCash.toFixed(2)}。确认现金另计、卡另扣 1 次？`,
+          '用卡又收款',
+          { type: 'warning', confirmButtonText: '确认另收现金' }
+        )
+      } catch (e) {
+        if (e === 'cancel' || e === 'close') return
+        return
+      }
+    }
     if (bookForm.value.issueTpl) {
       const tpl = templates.value.find((t) => String(t._id) === String(bookForm.value.issueTpl))
       const issueAmt = Number(bookForm.value.issuePrice) || 0
@@ -1283,11 +1298,28 @@ async function cancelBook() {
     await ElMessageBox.confirm(
       isLockBooking(current.value)
         ? '确定解锁该时段？'
-        : ('确定取消该预约？' + (current.value.cardId ? '（将退还次数）' : '')),
-      '提示',
-      { type: 'warning' }
+        : ('确定取消该预约？将退本场现金' + (Number(current.value.amount) > 0 ? ' ¥' + Number(current.value.amount).toFixed(2) : '') + (current.value.cardId ? '，并退回用掉的 1 次。卖卡不自动退。' : '。')),
+      '取消预约',
+      { type: 'warning', confirmButtonText: '确认取消' }
     )
-    const result = await post('/adminSaveBooking', { action: 'cancel', id: current.value._id })
+    let refundIssuedCard = false
+    if (current.value.cardId && !isLockBooking(current.value)) {
+      try {
+        await ElMessageBox.confirm(
+          '这场用的卡要一起退掉吗？只退场会退回 1 次；连卡退会把卖卡金额也退掉。',
+          '是否退卡',
+          { type: 'warning', confirmButtonText: '连卡一起退', cancelButtonText: '只退场' }
+        )
+        refundIssuedCard = true
+      } catch (e) {
+        if (e !== 'cancel' && e !== 'close') throw e
+      }
+    }
+    const result = await post('/adminSaveBooking', {
+      action: 'cancel',
+      id: current.value._id,
+      data: { refundIssuedCard, operatorName: localStorage.getItem('admin_name') || '管理员' }
+    })
     if (!result.ok) {
       ElMessage.error(result.msg || '取消失败')
       return
