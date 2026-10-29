@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261029c'
+const FN_VER = 'saveBooking-20261029d'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -678,6 +678,25 @@ exports.main = async (event) => {
         ledgerError,
         fnVer: FN_VER
       }
+    }
+
+    if (action === 'deleteLedger') {
+      const ledgerId = data && data.ledgerId
+      if (!ledgerId) return { ok: false, msg: '缺少流水', fnVer: FN_VER }
+      const [rows] = await conn.query('SELECT * FROM finance_ledger WHERE id=? LIMIT 1', [ledgerId])
+      const row = rows[0]
+      if (!row) return { ok: false, msg: '流水不存在', fnVer: FN_VER }
+      await conn.query('DELETE FROM finance_ledger WHERE id=?', [ledgerId])
+      try {
+        await conn.query(
+          `DELETE FROM activity_logs
+            WHERE type='issue_card' AND user_name=? AND amount=? AND DATE(created_at)=?
+              AND detail LIKE '%闲时 1 小时发球机%'
+            ORDER BY id ASC LIMIT 1`,
+          [row.user_name || '', row.amount, row.biz_date]
+        )
+      } catch (e) {}
+      return { ok: true, fnVer: FN_VER, deleted: ledgerId, amount: row.amount, remark: row.remark }
     }
 
     if (action === 'repairUseCard') {
