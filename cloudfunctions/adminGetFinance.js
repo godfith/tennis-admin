@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'getFinance-20261028c'
+const FN_VER = 'getFinance-20261029a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -340,11 +340,7 @@ exports.main = async (raw) => {
           unit = importedCard ? 0 : cardTimeUnit(card)
         }
         incomeCard += unit
-        // 用卡同时又有实收现金：现金单独计入订场营业额，避免漏账
-        if (storedAmt > 0) {
-          incomeCourt += storedAmt
-          turnoverCourtBook += storedAmt
-        }
+        // 用卡订场的 amount 是核销单价，不进营业额。营业额只计无卡现金订场。
         const cardTitle = b.card_name || (card && card.card_name) || ''
         consumeList.push({
           date: day,

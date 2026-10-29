@@ -18,7 +18,7 @@ function isImportedIssuer(name) {
   return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
 }
 
-const FN_VER = 'activity-20261029a'
+const FN_VER = 'activity-20261029b'
 
 const LABELS = {
   register: '用户注册',
@@ -140,8 +140,7 @@ exports.main = async (event) => {
       const [ws] = await pool.query(wq, wp)
       ;(ws || []).forEach((c) => {
         if (isImportedIssuer(c.issuer_name)) return
-        const cat = matchCat(c.card_name, c.type)
-        if (!cat || cat.byUse) return
+        const cat = matchCat(c.card_name, c.type) || { name: '其他' }
         addRow(cat.name, c.card_name || '未命名', c.price, 1)
       })
       let uq = `SELECT c.card_name, c.type, c.price, c.total_times, b.date
@@ -152,12 +151,7 @@ exports.main = async (event) => {
       const up = [startDate, endDate]
       if (venueId) { uq += ' AND b.venue_id=?'; up.push(venueId) }
       const [us] = await pool.query(uq, up)
-      ;(us || []).forEach((r) => {
-        const cat = matchCat(r.card_name, r.type)
-        if (!cat || !cat.byUse) return
-        const unit = (Number(r.total_times) > 0) ? money(money(r.price) / Number(r.total_times)) : money(r.price)
-        addRow(cat.name, r.card_name || cat.name, unit, 1)
-      })
+      // 体验课也按卖卡实收计入营业额，不再按核销单价，避免和发卡金额对不上
       const sections = catOrder.map((c) => {
         const rows = Object.values(groups[c.name] || {}).sort((a, b) => b.amount - a.amount)
         return {

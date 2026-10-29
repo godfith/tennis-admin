@@ -67,7 +67,7 @@
     </div>
 
     <!-- 普通代客订场 -->
-    <el-dialog v-model="bookVisible" :title="bookMode === 'lock' ? '锁场' : '代客订场'" width="500px" destroy-on-close>
+    <el-dialog v-model="bookVisible" :title="bookMode === 'lock' ? '锁场' : '代客订场'" width="500px" destroy-on-close class="book-dialog">
       <div class="mode-switch">
         <el-button-group>
           <el-button :type="bookMode === 'book' ? 'primary' : ''" @click="bookMode = 'book'">预约</el-button>
@@ -161,6 +161,11 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <div v-if="bookMode !== 'lock'" class="pay-total">
+          <div>这次一共收</div>
+          <b>¥{{ (Number(bookForm.payAmount||0) + Number(bookForm.issueTpl ? bookForm.issuePrice : 0)).toFixed(2) }}</b>
+          <span>本场 ¥{{ Number(bookForm.payAmount||0).toFixed(2) }} + 卖卡 ¥{{ Number(bookForm.issueTpl ? bookForm.issuePrice : 0).toFixed(2) }}</span>
+        </div>
         <el-button @click="bookVisible = false">取消</el-button>
         <el-button v-if="bookMode === 'lock'" type="warning" :loading="saving" @click="submitLock">确认锁场</el-button>
         <el-button v-else type="primary" :loading="saving" @click="submitBook">确认订场</el-button>
@@ -1496,4 +1501,8 @@ h2 { margin: 0; font-size: 20px; }
 .amt-title { font-weight: 700; color: #1a5c3a; margin-bottom: 6px; }
 .amt-title span { font-weight: 400; color: #888; font-size: 12px; margin-left: 6px; }
 .amt-sum { background: #fff; border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; font-size: 13px; color: #333; font-weight: 600; }
+.pay-total { display: flex; align-items: baseline; gap: 8px; margin-right: auto; background: #1a5c3a; color: #fff; border-radius: 8px; padding: 8px 12px; }
+.pay-total b { font-size: 22px; }
+.pay-total span { font-size: 12px; opacity: .85; }
+.book-dialog .el-dialog__footer { display: flex; align-items: center; gap: 8px; }
 </style>

@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'dashboard-20261028a'
+const FN_VER = 'dashboard-20261029a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -136,7 +136,8 @@ exports.main = async (event) => {
         const books = await q(
           `SELECT COALESCE(SUM(amount),0) AS n FROM bookings
             WHERE date>=? AND date<=? AND status NOT IN ('cancelled','locked')
-              AND IFNULL(amount,0) > 0 ${venueSql}`,
+              AND IFNULL(amount,0) > 0
+              AND (card_id IS NULL OR card_id=0) ${venueSql}`,
           [from, to].concat(vparams)
         )
         court = money(books[0] && books[0].n)
