@@ -1161,17 +1161,24 @@ async function submitBook() {
   try {
     if (bookForm.value.convertLockId) {
       const unlocked = await post('/adminSaveBooking', { action: 'cancel', id: bookForm.value.convertLockId })
-      if (!unlocked.ok) { ElMessage.error(unlocked.msg || '解锁失败'); return }
+      if (!unlocked.ok && unlocked.msg !== '已取消') {
+        ElMessage.error(unlocked.msg || '解锁失败')
+        return
+      }
     }
     if (bookForm.value.issueTpl) {
-      const tpl = templates.value.find((t) => t._id === bookForm.value.issueTpl)
+      const tpl = templates.value.find((t) => String(t._id) === String(bookForm.value.issueTpl))
+      const issueAmt = Number(bookForm.value.issuePrice) || 0
       try {
         await ElMessageBox.confirm(
-          `确认给 ${bookForm.value.userName} 发放「${tpl ? tpl.name : '会员卡'}」，实收 ¥${Number(bookForm.value.payAmount || 0).toFixed(2)}？`,
+          `确认给 ${bookForm.value.userName} 发放「${tpl ? tpl.name : '会员卡'}」，发卡实收 ¥${issueAmt.toFixed(2)}？本场不自动用这张卡。`,
           '发卡确认',
-          { type: 'warning', confirmButtonText: '确认发卡' }
+          { type: 'warning', confirmButtonText: '确认发卡并订场' }
         )
-      } catch (e) { return }
+      } catch (e) {
+        if (e === 'cancel' || e === 'close') return
+        return
+      }
     }
     const result = await post('/adminSaveBooking', {
       action: 'add',
@@ -1195,6 +1202,8 @@ async function submitBook() {
         amount: Number(bookForm.value.payAmount) || 0,
         issueTemplateId: bookForm.value.issueTpl || '',
         issuePrice: bookForm.value.issueTpl ? (Number(bookForm.value.issuePrice) || 0) : (Number(bookForm.value.payAmount) || 0),
+        useIssuedCard: false,
+        phone: (memberOptions.value.find((x) => x._id === bookForm.value.memberKey) || {}).phone || '',
         payMeituan: Number(bookForm.value.payMeituan) || 0,
         payDouyin: Number(bookForm.value.payDouyin) || 0,
         payOffline: Number(bookForm.value.payOffline) || 0,
@@ -1202,7 +1211,7 @@ async function submitBook() {
       }
     })
     if (!result.ok) {
-      ElMessage.error(result.msg || '订场失败')
+      ElMessage.error((result.msg || '订场失败') + (result.fnVer ? ' [' + result.fnVer + ']' : ''))
       return
     }
     ElMessage.success('订场成功')

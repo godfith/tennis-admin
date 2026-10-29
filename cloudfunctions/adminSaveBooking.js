@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261028a'
+const FN_VER = 'saveBooking-20261029a'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -222,7 +222,7 @@ exports.main = async (event) => {
       }
       if (b.status === 'cancelled') {
         await conn.rollback()
-        return { ok: false, msg: '已取消' }
+        return { ok: true, msg: '已取消', already: true }
       }
 
       await conn.query(
@@ -389,7 +389,7 @@ exports.main = async (event) => {
             payPrice
           ]
         )
-        if (!data.cardId) data.cardId = issued.insertId
+        if (!data.cardId && data.useIssuedCard) data.cardId = issued.insertId
         if (payPrice > 0) {
           await writeLedger(conn, {
             bizDate: dateYmd,
