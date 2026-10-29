@@ -521,7 +521,7 @@ exports.main = async (event) => {
                 IFNULL(u.balance,0) AS balance, IFNULL(u.points,0) AS points,
                 (SELECT COUNT(*) FROM member_cards c WHERE c.user_id=u.id AND c.status='active') AS card_count,
                 (SELECT COALESCE(SUM(amount),0) FROM finance_ledger f
-                  WHERE f.user_id=u.id AND f.amount>0 AND f.type IN ('court_pay','card_issue')) AS total_spend,
+                  WHERE f.user_id=u.id AND f.type IN ('court_pay','card_issue','issue_card','refund_card','court_cancel','court_refund')) AS total_spend,
                 (SELECT DATE_FORMAT(MAX(date), '%Y-%m-%d') FROM bookings b WHERE b.user_id=u.id AND b.status='booked') AS last_visit
            FROM users u WHERE u.id=? LIMIT 1`,
         [userId]
@@ -625,7 +625,7 @@ exports.main = async (event) => {
                 IFNULL(u.balance,0) AS balance, IFNULL(u.points,0) AS points,
                       (SELECT COUNT(*) FROM member_cards c WHERE c.user_id=u.id AND c.status='active') AS card_count,
                       (SELECT COALESCE(SUM(amount),0) FROM finance_ledger f
-                        WHERE f.user_id=u.id AND f.amount>0 AND f.type IN ('court_pay','card_issue')) AS total_spend,
+                        WHERE f.user_id=u.id AND f.type IN ('court_pay','card_issue','issue_card','refund_card','court_cancel','court_refund')) AS total_spend,
                       (SELECT DATE_FORMAT(MAX(date), '%Y-%m-%d') FROM bookings b WHERE b.user_id=u.id AND b.status='booked') AS last_visit
                  FROM users u WHERE 1=1`
     const params = []
