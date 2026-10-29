@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261029e'
+const FN_VER = 'saveBooking-20261029f'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -678,6 +678,28 @@ exports.main = async (event) => {
         ledgerError,
         fnVer: FN_VER
       }
+    }
+
+    if (action === 'fixCardCashDup') {
+      const [rows] = await conn.query(
+        `SELECT b.id, b.amount, b.card_id, c.price
+           FROM bookings b
+           JOIN member_cards c ON c.id = b.card_id
+          WHERE b.status <> 'cancelled' AND b.card_id IS NOT NULL AND b.amount >= 1
+            AND ABS(b.amount - c.price) < 0.02`
+      )
+      let n = 0
+      const ids = []
+      for (const r of rows) {
+        await conn.query('UPDATE bookings SET amount=0 WHERE id=?', [r.id])
+        await conn.query(
+          `DELETE FROM finance_ledger WHERE booking_id=? AND type='court_pay' AND ABS(amount-?)<0.02`,
+          [r.id, r.amount]
+        )
+        ids.push(r.id)
+        n += 1
+      }
+      return { ok: true, fnVer: FN_VER, fixed: n, ids }
     }
 
     if (action === 'repairUser6168') {
