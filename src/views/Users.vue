@@ -277,7 +277,7 @@
             </el-table-column>
             <el-table-column prop="cardName" label="用卡" min-width="120" show-overflow-tooltip />
             <el-table-column label="金额" width="80">
-              <template #default="{ row }">{{ row.amount ? '¥' + money(row.amount) : '-' }}</template>
+              <template #default="{ row }">{{ row.cardName ? (row.amount ? '¥' + money(row.amount) : '用卡') : (row.amount ? '¥' + money(row.amount) : '¥0') }}</template>
             </el-table-column>
             <el-table-column label="" width="70">
               <template #default="{ row }">

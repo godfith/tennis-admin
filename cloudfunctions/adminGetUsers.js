@@ -14,7 +14,7 @@ const pool = mysql.createPool({
   charset: 'utf8mb4'
 })
 
-const FN_VER = 'getUsers-20260929b'
+const FN_VER = 'getUsers-20261029a'
 
 function fmtYmd(v) {
   if (!v) return ''
@@ -96,7 +96,7 @@ async function loadSpendByUsers(ids) {
               SUM(amount) AS amount
          FROM finance_ledger
         WHERE user_id IN (${ids.map(() => '?').join(',')})
-          AND amount > 0 AND type IN ('court_pay','card_issue')
+          AND type IN ('court_pay','card_issue','issue_card','refund_card','court_cancel','court_refund')
         GROUP BY user_id, venue_id, venue_name`,
       ids
     )
@@ -116,9 +116,7 @@ async function loadSpendByUsers(ids) {
 function attachSpend(list, spendMap) {
   list.forEach((u) => {
     u.spendByVenue = spendMap[u._id] || []
-    if (!u.totalSpend) {
-      u.totalSpend = u.spendByVenue.reduce((s, x) => s + (Number(x.amount) || 0), 0)
-    }
+    u.totalSpend = Math.round(u.spendByVenue.reduce((s, x) => s + (Number(x.amount) || 0), 0) * 100) / 100
   })
   return list
 }

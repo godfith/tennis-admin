@@ -18,7 +18,7 @@ function isImportedIssuer(name) {
   return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
 }
 
-const FN_VER = 'activity-20261028b'
+const FN_VER = 'activity-20261029a'
 
 const LABELS = {
   register: '用户注册',
@@ -305,7 +305,10 @@ exports.main = async (event) => {
       const parsedCard = r.card_name || parseCardName(detail)
       // 金额优先级：日志里存的 amount → 发卡匹配 member_cards → 从详情文字解析
       let parsedAmt = null
-      if (r.amount != null && r.amount !== '' && Number.isFinite(Number(r.amount))) {
+      if (r.type === 'issue_card' || r.type === 'card_refund' || r.type === 'refund_card') {
+        parsedAmt = parseAmount(detail)
+      }
+      if (parsedAmt == null && r.amount != null && r.amount !== '' && Number.isFinite(Number(r.amount))) {
         parsedAmt = money(r.amount)
       }
       if ((parsedAmt == null || parsedAmt === 0) && r.type === 'issue_card') {
