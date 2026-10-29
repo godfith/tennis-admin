@@ -276,12 +276,12 @@
         </el-form-item>
         <el-form-item label="使用卡">
           <div class="row-edit">
-            <el-select v-if="editField==='card' && !isBookingDone(current)" v-model="editForm.cardId" clearable placeholder="不使用卡" style="flex:1" :loading="cardLoading" @change="onEditCardChange">
+            <el-select v-if="editField==='card'" v-model="editForm.cardId" clearable placeholder="不使用卡" style="flex:1" :loading="cardLoading" @change="onEditCardChange">
               <el-option label="不使用卡" value="" />
               <el-option v-for="c in memberCards" :key="c._id" :label="cardOptionLabel(c)" :value="c._id" />
             </el-select>
             <span v-else>{{ editForm.cardName || '未使用卡' }}</span>
-            <el-button v-if="!isBookingDone(current)" link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
+            <el-button link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
           </div>
         </el-form-item>
         <el-form-item v-if="editNeedCoach && !isBookingDone(current)" label="教练">
@@ -297,7 +297,7 @@
             <el-input-number v-if="editField==='amount'" v-model="editForm.amount" :min="0" :precision="2" :step="10" />
             <span v-else>¥{{ Number(editForm.amount || 0).toFixed(2) }}</span>
             <span v-if="editForm.cardId && Number(editForm.amount) > 0" class="warn" style="margin-left:8px;color:#e6a23c">用卡又有实收：现金另计订场，卡核销另计</span>
-            <el-button v-if="!isBookingDone(current)" link type="primary" @click="editField = editField==='amount' ? '' : 'amount'">{{ editField==='amount' ? '完成' : '修改金额' }}</el-button>
+            <el-button link type="primary" @click="editField = editField==='amount' ? '' : 'amount'">{{ editField==='amount' ? '完成' : '修改金额' }}</el-button>
           </div>
         </el-form-item>
         <el-form-item label="备注">
@@ -966,8 +966,8 @@ async function toggleEditCard() {
 }
 async function saveDetail() {
   if (!current.value || !(current.value._id || current.value.id)) return
-  if (isBookingDone(current.value)) {
-    ElMessage.warning('已开始或已结束的预约不能改')
+  if (isBookingDone(current.value) && (editForm.value.court !== current.value.court || editForm.value.time !== current.value.time || shortDate(editForm.value.date) !== shortDate(current.value.date))) {
+    ElMessage.warning('已开始的预约不能改场地和时段，可以改用卡和金额')
     return
   }
   const issueTpl = templates.value.find((t) => String(t._id) === String(editForm.value.issueTpl))

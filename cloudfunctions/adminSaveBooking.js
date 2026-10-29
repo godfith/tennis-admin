@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261029b'
+const FN_VER = 'saveBooking-20261029c'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -680,6 +680,42 @@ exports.main = async (event) => {
       }
     }
 
+    if (action === 'repairUseCard') {
+      const bookingId = data && data.bookingId
+      const cardId = data && data.cardId
+      if (!bookingId || !cardId) return { ok: false, msg: '缺少预约或卡', fnVer: FN_VER }
+      await conn.beginTransaction()
+      const [brows] = await conn.query('SELECT * FROM bookings WHERE id=? FOR UPDATE', [bookingId])
+      const b = brows[0]
+      if (!b) { await conn.rollback(); return { ok: false, msg: '预约不存在', fnVer: FN_VER } }
+      const [crows] = await conn.query('SELECT * FROM member_cards WHERE id=? FOR UPDATE', [cardId])
+      const card = crows[0]
+      if (!card) { await conn.rollback(); return { ok: false, msg: '卡不存在', fnVer: FN_VER } }
+      const left = Math.max(0, (Number(card.remaining_times) || 0) - 1)
+      await conn.query(
+        `UPDATE member_cards SET remaining_times=?, status=?, updated_at=NOW() WHERE id=?`,
+        [left, left <= 0 ? 'used_up' : 'active', card.id]
+      )
+      await conn.query(
+        `UPDATE bookings SET card_id=?, card_name=?, card_type=?, amount=0, updated_at=NOW() WHERE id=?`,
+        [card.id, card.card_name || '', card.type || '', b.id]
+      )
+      const unit = (Number(card.total_times) > 0) ? money(money(card.price) / Number(card.total_times)) : money(card.price)
+      await writeLedger(conn, {
+        bizDate: fmtDate(b.date), type: 'card_use', amount: unit,
+        venueId: b.venue_id, venueName: b.venue_name, userId: b.user_id, userName: b.user_name,
+        operatorName: '管理员补扣', cardId: card.id, bookingId: b.id,
+        remark: '补扣 ' + (card.card_name || '')
+      })
+      await writeLog(conn, {
+        type: 'booking_add', userName: b.user_name, operatorName: '管理员补扣', phone: b.phone,
+        detail: '补扣用卡 ' + (card.card_name || '') + ' ' + (b.court || '') + ' ' + (b.time || ''),
+        venueId: b.venue_id, venueName: b.venue_name, amount: 0, cardName: card.card_name || ''
+      })
+      await conn.commit()
+      return { ok: true, fnVer: FN_VER, bookingId: b.id, cardId: card.id, remaining: left }
+    }
+
     if (action === 'update') {
       if (!id) return { ok: false, msg: '缺少预约ID', fnVer: FN_VER }
       await conn.beginTransaction()
@@ -695,15 +731,16 @@ exports.main = async (event) => {
       }
       const startHm = String(b.time || '').split('-')[0] || '00:00'
       const startAt = new Date(String(fmtDate(b.date)).replace(/-/g, '/') + ' ' + startHm)
-      if (!Number.isNaN(startAt.getTime()) && startAt.getTime() <= Date.now()) {
-        await conn.rollback()
-        return { ok: false, msg: '已开始的预约不能改详情', fnVer: FN_VER }
-      }
+      const started = !Number.isNaN(startAt.getTime()) && startAt.getTime() <= Date.now()
       const court = (data && data.court) || b.court
       const dateYmd = fmtDate((data && data.date) || b.date) || b.date
       const time = (data && data.time) || b.time
       const remark = data && data.remark != null ? data.remark : b.remark
       const amount = data && data.amount != null ? money(data.amount) : money(b.amount)
+      if (started && (court !== b.court || String(dateYmd) !== String(fmtDate(b.date)) || time !== b.time)) {
+        await conn.rollback()
+        return { ok: false, msg: '已开始的预约不能改场地和时段，可以改用卡和金额', fnVer: FN_VER }
+      }
       if (court !== b.court || String(dateYmd) !== String(fmtDate(b.date)) || time !== b.time) {
         const [busy] = await conn.query(
           `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND court=? AND status IN ('booked','locked') AND id<>? LIMIT 1`,
@@ -732,7 +769,7 @@ exports.main = async (event) => {
         if (data.cardId) {
           const [newRows] = await conn.query('SELECT * FROM member_cards WHERE id=? FOR UPDATE', [data.cardId])
           const neu = newRows[0]
-          if (!neu || neu.status !== 'active') {
+          if (!neu || (neu.status !== 'active' && neu.status !== 'disabled')) {
             await conn.rollback()
             return { ok: false, msg: '新卡不可用', fnVer: FN_VER }
           }
