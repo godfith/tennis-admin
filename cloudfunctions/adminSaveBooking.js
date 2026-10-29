@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261029d'
+const FN_VER = 'saveBooking-20261029e'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -678,6 +678,41 @@ exports.main = async (event) => {
         ledgerError,
         fnVer: FN_VER
       }
+    }
+
+    if (action === 'repairUser6168') {
+      await conn.beginTransaction()
+      // 1. 删掉重复的第一笔 31.9 发卡，以及对应的退卡，净值不变
+      await conn.query('DELETE FROM finance_ledger WHERE id IN (2097, 2101)')
+      await conn.query("DELETE FROM activity_logs WHERE id IN (2275, 2280, 2281)")
+      // 2. 34.9 那张卡挂到 15:00 发球机1号场
+      await conn.query(
+        `UPDATE bookings SET card_id=2196, card_name='闲时 1 小时发球机', card_type='times', amount=0 WHERE id=1386`
+      )
+      await conn.query(
+        `UPDATE member_cards SET remaining_times=0, status='used_up' WHERE id=2196`
+      )
+      // 3. 补 34.9 和 46.9 的用卡流水（没有才补）
+      const uses = [
+        [2196, 34.9, 1386, '发球机1号场 15:00-16:00 · 闲时 1 小时发球机'],
+        [2197, 46.9, 1389, '发球机1号场 20:00-21:00 · 全时段 1 小时发球机']
+      ]
+      for (const u of uses) {
+        const [ex] = await conn.query(
+          `SELECT id FROM finance_ledger WHERE type='card_use' AND card_id=? AND booking_id=? LIMIT 1`,
+          [u[0], u[2]]
+        )
+        if (!ex.length) {
+          await conn.query(
+            `INSERT INTO finance_ledger
+              (biz_date, type, amount, venue_id, venue_name, user_id, user_name, operator_name, card_id, booking_id, remark)
+             VALUES ('2026-10-29','card_use',?,'venue_chenjiaci','GotGoat网球馆（陈家祠店）',12814,'13773716150_6168','管理员补扣',?,?,?)`,
+            [u[1], u[0], u[2], u[3]]
+          )
+        }
+      }
+      await conn.commit()
+      return { ok: true, fnVer: FN_VER, fixed: ['del 2097+2101', 'link 2196->1386', 'card_use 34.9/46.9'] }
     }
 
     if (action === 'deleteLedger') {
