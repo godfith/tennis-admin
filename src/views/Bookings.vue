@@ -102,21 +102,29 @@
             <el-button @click="openReg('book')">注册新用户</el-button>
           </div>
         </el-form-item>
-        <el-form-item label="收款金额">
-          <el-input-number v-model="bookForm.payAmount" :min="0" :precision="2" :step="10" />
-          <span class="price-hint">实收现金，记入本场金额和流水</span>
-        </el-form-item>
-        <el-form-item label="同时发卡">
-          <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不发卡，只订场" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
-            <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="bookForm.issueTpl" label="发卡来源">
-          <div class="pay-row"><span>美团</span><el-input-number v-model="bookForm.payMeituan" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
-          <div class="pay-row"><span>抖音核销</span><el-input-number v-model="bookForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
-          <div class="pay-row"><span>线下金额</span><el-input-number v-model="bookForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
-          <div class="price-hint" style="margin-top:4px">发卡实收 ¥{{ Number(bookForm.issuePrice||0).toFixed(2) }}（自动加总）</div>
-        </el-form-item>
+        <div class="amt-box">
+          <div class="amt-title">① 本场订场 <span>只填这场场地收的钱</span></div>
+          <el-form-item label="本场收款">
+            <el-input-number v-model="bookForm.payAmount" :min="0" :precision="2" :step="10" />
+            <span class="price-hint">用卡订场通常填 0；现金订场填实收</span>
+          </el-form-item>
+        </div>
+        <div class="amt-box">
+          <div class="amt-title">② 同时卖卡 <span>不卖卡就留空，卖卡的钱只填下面</span></div>
+          <el-form-item label="选择卡">
+            <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不卖卡，只订场" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
+              <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+            </el-select>
+          </el-form-item>
+          <template v-if="bookForm.issueTpl">
+            <el-form-item label="卖卡收款">
+              <div class="pay-row"><span>美团</span><el-input-number v-model="bookForm.payMeituan" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
+              <div class="pay-row"><span>抖音</span><el-input-number v-model="bookForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
+              <div class="pay-row"><span>线下</span><el-input-number v-model="bookForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
+            </el-form-item>
+            <div class="amt-sum">卖卡合计 ¥{{ Number(bookForm.issuePrice||0).toFixed(2) }} · 本场 ¥{{ Number(bookForm.payAmount||0).toFixed(2) }} · 这次一共收 ¥{{ (Number(bookForm.issuePrice||0) + Number(bookForm.payAmount||0)).toFixed(2) }}</div>
+          </template>
+        </div>
         <el-form-item label="使用会员卡">
           <el-select
             v-model="bookForm.cardId"
@@ -1451,4 +1459,8 @@ h2 { margin: 0; font-size: 20px; }
 }
 .pay-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .pay-row span { width: 64px; color: #666; font-size: 13px; }
+.amt-box { background: #f7faf8; border: 1px solid #e3eee6; border-radius: 8px; padding: 8px 10px 2px; margin-bottom: 10px; }
+.amt-title { font-weight: 700; color: #1a5c3a; margin-bottom: 6px; }
+.amt-title span { font-weight: 400; color: #888; font-size: 12px; margin-left: 6px; }
+.amt-sum { background: #fff; border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; font-size: 13px; color: #333; font-weight: 600; }
 </style>
