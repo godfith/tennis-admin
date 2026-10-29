@@ -110,7 +110,7 @@
           </el-form-item>
         </div>
         <div class="amt-box">
-          <div class="amt-title">② 同时卖卡 <span>不卖卡就留空，卖卡的钱只填下面</span></div>
+          <div class="amt-title">② 同时卖卡并用来订这场 <span>选了卡会自动扣 1 次，本场不用再填钱</span></div>
           <el-form-item label="选择卡">
             <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不卖卡，只订场" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
               <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
@@ -122,7 +122,8 @@
               <div class="pay-row"><span>抖音</span><el-input-number v-model="bookForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
               <div class="pay-row"><span>线下</span><el-input-number v-model="bookForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumBookIssue" /></div>
             </el-form-item>
-            <div class="amt-sum">卖卡合计 ¥{{ Number(bookForm.issuePrice||0).toFixed(2) }} · 本场 ¥{{ Number(bookForm.payAmount||0).toFixed(2) }} · 这次一共收 ¥{{ (Number(bookForm.issuePrice||0) + Number(bookForm.payAmount||0)).toFixed(2) }}</div>
+            <div class="amt-sum">卖卡合计 ¥{{ Number(bookForm.issuePrice||0).toFixed(2) }}，订这场自动扣 1 次，本场不再另收</div>
+              <div class="card-tip">过期格子也一样扣次。钱只填卖卡收款，不要填到本场收款。</div>
           </template>
         </div>
         <el-form-item label="使用会员卡">
@@ -1179,9 +1180,9 @@ async function submitBook() {
       const issueAmt = Number(bookForm.value.issuePrice) || 0
       try {
         await ElMessageBox.confirm(
-          `确认给 ${bookForm.value.userName} 发放「${tpl ? tpl.name : '会员卡'}」，发卡实收 ¥${issueAmt.toFixed(2)}？本场不自动用这张卡。`,
+          `确认给 ${bookForm.value.userName} 发放「${tpl ? tpl.name : '会员卡'}」，实收 ¥${issueAmt.toFixed(2)}，并用这张卡订本场（扣 1 次）？`,
           '发卡确认',
-          { type: 'warning', confirmButtonText: '确认发卡并订场' }
+          { type: 'warning', confirmButtonText: '确认发卡并扣次' }
         )
       } catch (e) {
         if (e === 'cancel' || e === 'close') return
@@ -1207,10 +1208,10 @@ async function submitBook() {
         cardType: selCard ? selCard.type : '',
         coachId: bookForm.value.coachId || '',
         coachName,
-        amount: Number(bookForm.value.payAmount) || 0,
+        amount: (bookForm.value.issueTpl && !selCard) ? 0 : (Number(bookForm.value.payAmount) || 0),
         issueTemplateId: bookForm.value.issueTpl || '',
         issuePrice: bookForm.value.issueTpl ? (Number(bookForm.value.issuePrice) || 0) : (Number(bookForm.value.payAmount) || 0),
-        useIssuedCard: false,
+        useIssuedCard: !!(bookForm.value.issueTpl && !selCard),
         phone: (memberOptions.value.find((x) => x._id === bookForm.value.memberKey) || {}).phone || '',
         payMeituan: Number(bookForm.value.payMeituan) || 0,
         payDouyin: Number(bookForm.value.payDouyin) || 0,
