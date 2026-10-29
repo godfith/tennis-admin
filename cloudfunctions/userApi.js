@@ -188,7 +188,7 @@ async function writeLedger(conn, row) {
     console.warn('finance_ledger write skip:', e.message)
   }
 }
-const FN_VER = 'userApi-20261012b'
+const FN_VER = 'userApi-20261029a'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -545,7 +545,7 @@ exports.main = async (rawEvent) => {
           const [cardNow] = await conn.query('SELECT * FROM member_cards WHERE id=? LIMIT 1', [cardIdVal])
           ledgerType = 'card_use'
           ledgerAmt = cardUnit(cardNow[0])
-          bookAmount = ledgerAmt
+          bookAmount = 0
         }
         let payOrderId = null
         const tradeNo = data.outTradeNo || data.payOrderNo || ''

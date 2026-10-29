@@ -102,13 +102,14 @@
             <el-button @click="openReg('book')">注册新用户</el-button>
           </div>
         </el-form-item>
-        <div class="amt-box">
-          <div class="amt-title">① 本场订场 <span>只填这场场地收的钱</span></div>
+        <div v-if="!bookForm.cardId && !bookForm.issueTpl" class="amt-box">
+          <div class="amt-title">本场收款 <span>现金订场，默认场地价 75 / 90</span></div>
           <el-form-item label="本场收款">
             <el-input-number v-model="bookForm.payAmount" :min="0" :precision="2" :step="10" />
-            <span class="price-hint">用卡订场通常填 0；现金订场填实收</span>
+            <span class="price-hint">改价提交时会再确认一次</span>
           </el-form-item>
         </div>
+        <div v-else class="amt-sum">已选会员卡，本场不收现金</div>
         <div class="amt-box">
           <div class="amt-title">② 同时卖卡并用来订这场 <span>选了卡会自动扣 1 次，本场不用再填钱</span></div>
           <el-form-item label="选择卡">
@@ -126,7 +127,7 @@
               <div class="card-tip">过期格子也一样扣次。钱只填卖卡收款，不要填到本场收款。</div>
           </template>
         </div>
-        <el-form-item label="使用会员卡">
+        <el-form-item v-if="!bookForm.issueTpl" label="使用会员卡">
           <el-select
             v-model="bookForm.cardId"
             placeholder="不使用卡（现金/其他）"
@@ -1182,7 +1183,20 @@ async function submitBook() {
       }
     }
     const usingCard = !!(bookForm.value.cardId || bookForm.value.issueTpl)
+    const slotPrice = getPrice(bookForm.value.court, bookForm.value.time) || 0
     const extraCash = Number(bookForm.value.payAmount) || 0
+    if (!usingCard && slotPrice > 0 && Math.abs(extraCash - slotPrice) > 0.01) {
+      try {
+        await ElMessageBox.confirm(
+          `场地标价是 ¥${slotPrice.toFixed(2)}，你改成了 ¥${extraCash.toFixed(2)}。确认按改后的价格收款？`,
+          '改价确认',
+          { type: 'warning', confirmButtonText: '确认改价' }
+        )
+      } catch (e) {
+        if (e === 'cancel' || e === 'close') return
+        return
+      }
+    }
     if (usingCard && extraCash > 0 && !bookForm.value.issueTpl) {
       try {
         await ElMessageBox.confirm(
@@ -1228,7 +1242,7 @@ async function submitBook() {
         cardType: selCard ? selCard.type : '',
         coachId: bookForm.value.coachId || '',
         coachName,
-        amount: (bookForm.value.issueTpl && !selCard) ? 0 : (Number(bookForm.value.payAmount) || 0),
+        amount: usingCard ? 0 : (Number(bookForm.value.payAmount) || 0),
         issueTemplateId: bookForm.value.issueTpl || '',
         issuePrice: bookForm.value.issueTpl ? (Number(bookForm.value.issuePrice) || 0) : (Number(bookForm.value.payAmount) || 0),
         useIssuedCard: !!(bookForm.value.issueTpl && !selCard),
