@@ -298,14 +298,6 @@
         <el-form-item v-else-if="current && (current.coachName || current.coachId)" label="教练">
           <span>{{ current.coachName || current.coachId }}</span>
         </el-form-item>
-        <el-form-item label="本次实收">
-          <div class="row-edit">
-            <el-input-number v-if="editField==='amount'" v-model="editForm.amount" :min="0" :precision="2" :step="10" />
-            <span v-else>¥{{ Number(editForm.amount || 0).toFixed(2) }}</span>
-            <span v-if="editForm.cardId && Number(editForm.amount) > 0" class="warn" style="margin-left:8px;color:#e6a23c">用卡又有实收：现金另计订场，卡核销另计</span>
-            <el-button link type="primary" @click="editField = editField==='amount' ? '' : 'amount'">{{ editField==='amount' ? '完成' : '修改金额' }}</el-button>
-          </div>
-        </el-form-item>
         <el-form-item label="备注">
           <div class="row-edit">
             <el-input v-if="editField==='remark'" v-model="editForm.remark" type="textarea" :rows="2" />
@@ -322,7 +314,11 @@
           <div class="pay-row"><span>美团</span><el-input-number v-model="editForm.payMeituan" :min="0" :precision="2" :step="10" size="small" @change="sumEditIssue" /></div>
           <div class="pay-row"><span>抖音核销</span><el-input-number v-model="editForm.payDouyin" :min="0" :precision="2" :step="10" size="small" @change="sumEditIssue" /></div>
           <div class="pay-row"><span>线下金额</span><el-input-number v-model="editForm.payOffline" :min="0" :precision="2" :step="10" size="small" @change="sumEditIssue" /></div>
-          <div class="price-hint" style="margin-top:4px">发卡实收 ¥{{ Number(editForm.issuePrice||0).toFixed(2) }}</div>
+          <div class="pay-total edit-total">
+            <div>这次一共收</div>
+            <b>¥{{ Number(editForm.issuePrice||0).toFixed(2) }}</b>
+            <span>美团 ¥{{ Number(editForm.payMeituan||0).toFixed(2) }} + 抖音 ¥{{ Number(editForm.payDouyin||0).toFixed(2) }} + 线下 ¥{{ Number(editForm.payOffline||0).toFixed(2) }}</span>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1506,4 +1502,5 @@ h2 { margin: 0; font-size: 20px; }
 .pay-total b { font-size: 22px; }
 .pay-total span { font-size: 12px; opacity: .85; }
 .book-dialog .el-dialog__footer { display: flex; align-items: center; gap: 8px; }
+.edit-total { margin-top: 8px; }
 </style>
