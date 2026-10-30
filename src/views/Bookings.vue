@@ -54,6 +54,7 @@
               <div class="booked-user">{{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}</div>
               <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
               <div v-if="!isLockBooking(getBooking(c.name, t))" class="booked-amt">{{ bookingMoneyText(getBooking(c.name, t)) }}</div>
+              <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).remark" class="booked-remark">{{ getBooking(c.name, t).remark }}</div>
               <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).phone" class="booked-phone">{{ getBooking(c.name, t).phone }}</div>
             </template>
             <template v-else>
@@ -293,7 +294,7 @@
         </el-form-item>
         <el-form-item v-if="current && !isLockBooking(current)" label="收款">
           <span>{{ bookingMoneyText(current) }}</span>
-          <span class="price-hint" style="margin-left:8px">用卡的钱记在卡上，本场不另收</span>
+          <span class="price-hint" style="margin-left:8px">单次 / 整卡，钱记在卡上</span>
         </el-form-item>
         <el-form-item v-if="editNeedCoach && !isBookingDone(current)" label="教练">
           <el-select v-model="editForm.coachId" placeholder="请选择教练" style="width:100%" :loading="coachLoading">
@@ -536,11 +537,14 @@ function cardOptionLabel(c) {
 function bookingMoneyText(b) {
   if (!b) return ''
   const cash = Number(b.amount) || 0
-  if (cash > 0) return '本场现金 ¥' + cash.toFixed(2)
   if (b.cardId || b.cardName) {
-    const p = Number(b.cardPrice)
-    return p > 0 ? ('用卡，卖卡 ¥' + p.toFixed(2)) : '用卡，本场不收现金'
+    const total = Number(b.cardPrice) || 0
+    const times = Number(b.cardTotal) || 0
+    const unit = times > 0 ? Math.round((total / times) * 100) / 100 : total
+    if (total > 0) return '用卡 ¥' + unit.toFixed(2) + ' / ¥' + total.toFixed(2)
+    return '用卡，本场不收现金'
   }
+  if (cash > 0) return '本场现金 ¥' + cash.toFixed(2)
   return '本场 ¥0.00'
 }
 function formatCardStatus(b) {
@@ -1519,4 +1523,5 @@ h2 { margin: 0; font-size: 20px; }
 .book-dialog .el-dialog__footer { display: flex; align-items: center; gap: 8px; }
 .edit-total { margin-top: 8px; }
 .booked-amt { font-size: 12px; color: #1a5c3a; font-weight: 700; margin-top: 2px; }
+.booked-remark { font-size: 11px; color: #8a5a00; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
