@@ -12,7 +12,7 @@ const pool = mysql.createPool({
   dateStrings: true
 })
 
-const FN_VER = 'getBookings-20260928b'
+const FN_VER = 'getBookings-20261030a'
 
 function parseEvent(event) {
   let body = event || {}
@@ -62,6 +62,7 @@ function mapRow(r) {
     coachId: r.coach_id ? String(r.coach_id) : '',
     coachName: r.coach_name || '',
     amount: money(r.amount),
+    cardPrice: r.card_price != null ? money(r.card_price) : null,
     remark: r.remark || '',
     source: r.source || '',
     operatorName: r.operator_name || ''
@@ -80,7 +81,7 @@ exports.main = async (event) => {
               IFNULL(NULLIF(u.phone,''), b.phone) AS user_phone,
               b.card_id, b.card_name, b.card_type, b.coach_id, b.coach_name,
               b.amount, b.remark, b.source, b.operator_name,
-              c.remaining_times AS card_remaining, c.total_times AS card_total
+              c.remaining_times AS card_remaining, c.total_times AS card_total, c.price AS card_price
          FROM bookings b
          LEFT JOIN users u ON u.id = b.user_id
          LEFT JOIN member_cards c ON c.id = b.card_id
@@ -92,7 +93,7 @@ exports.main = async (event) => {
   } catch (e) {
     try {
       const [rows] = await pool.query(
-        `SELECT b.*, c.remaining_times AS card_remaining, c.total_times AS card_total
+        `SELECT b.*, c.remaining_times AS card_remaining, c.total_times AS card_total, c.price AS card_price
            FROM bookings b LEFT JOIN member_cards c ON c.id = b.card_id
           WHERE b.venue_id=? AND b.date=? AND b.status IN ('booked','locked') ORDER BY b.time, b.court`,
         [venueId, date]

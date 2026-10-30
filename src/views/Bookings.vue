@@ -53,6 +53,7 @@
             <template v-else-if="getBooking(c.name, t)">
               <div class="booked-user">{{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}</div>
               <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
+              <div v-if="!isLockBooking(getBooking(c.name, t))" class="booked-amt">{{ bookingMoneyText(getBooking(c.name, t)) }}</div>
               <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).phone" class="booked-phone">{{ getBooking(c.name, t).phone }}</div>
             </template>
             <template v-else>
@@ -289,6 +290,10 @@
             <span v-else>{{ editForm.cardName || '未使用卡' }}</span>
             <el-button link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
           </div>
+        </el-form-item>
+        <el-form-item v-if="current && !isLockBooking(current)" label="收款">
+          <span>{{ bookingMoneyText(current) }}</span>
+          <span class="price-hint" style="margin-left:8px">用卡的钱记在卡上，本场不另收</span>
         </el-form-item>
         <el-form-item v-if="editNeedCoach && !isBookingDone(current)" label="教练">
           <el-select v-model="editForm.coachId" placeholder="请选择教练" style="width:100%" :loading="coachLoading">
@@ -527,6 +532,16 @@ function cardOptionLabel(c) {
     return `${c.cardName}（${type} 剩${c.remainingTimes}次）`
   }
   return `${c.cardName}（${type}）`
+}
+function bookingMoneyText(b) {
+  if (!b) return ''
+  const cash = Number(b.amount) || 0
+  if (cash > 0) return '本场现金 ¥' + cash.toFixed(2)
+  if (b.cardId || b.cardName) {
+    const p = Number(b.cardPrice)
+    return p > 0 ? ('用卡，卖卡 ¥' + p.toFixed(2)) : '用卡，本场不收现金'
+  }
+  return '本场 ¥0.00'
 }
 function formatCardStatus(b) {
   if (!b || !b.cardName) return String(b && b.remark || '').indexOf('匹克') >= 0 ? '匹克球' : '已预约'
@@ -1503,4 +1518,5 @@ h2 { margin: 0; font-size: 20px; }
 .pay-total span { font-size: 12px; opacity: .85; }
 .book-dialog .el-dialog__footer { display: flex; align-items: center; gap: 8px; }
 .edit-total { margin-top: 8px; }
+.booked-amt { font-size: 12px; color: #1a5c3a; font-weight: 700; margin-top: 2px; }
 </style>
