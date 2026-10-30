@@ -1321,23 +1321,10 @@ async function cancelBook() {
       '取消预约',
       { type: 'warning', confirmButtonText: '确认取消' }
     )
-    let refundIssuedCard = false
-    if (current.value.cardId && !isLockBooking(current.value)) {
-      try {
-        await ElMessageBox.confirm(
-          '这场用的卡要一起退掉吗？只退场会退回 1 次；连卡退会把卖卡金额也退掉。',
-          '是否退卡',
-          { type: 'warning', confirmButtonText: '连卡一起退', cancelButtonText: '只退场' }
-        )
-        refundIssuedCard = true
-      } catch (e) {
-        if (e !== 'cancel' && e !== 'close') throw e
-      }
-    }
     const result = await post('/adminSaveBooking', {
       action: 'cancel',
       id: current.value._id,
-      data: { refundIssuedCard, operatorName: localStorage.getItem('admin_name') || '管理员' }
+      data: { operatorName: localStorage.getItem('admin_name') || '管理员' }
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '取消失败')
