@@ -25,6 +25,7 @@
       <span class="lg free">绿色 = 未预约，可以订</span>
       <span class="lg booked">橙色 = 已预约，还没到点</span>
       <span class="lg past">灰色 = 已过期</span>
+      <span class="lg backfill">紫色 = 补录，客人迟到后补记</span>
       <span class="lg locked">浅灰 = 锁场，不可约</span>
       <span class="lg group">粉色 = 团课</span>
       <span class="lg phone">蓝色数字 = 手机号</span>
@@ -51,14 +52,17 @@
               <div class="booked-status">团课 {{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }} · {{ getGroupClass(c.name, t).coachName || '' }}</div>
             </template>
             <template v-else-if="getBooking(c.name, t)">
-              <div class="booked-user">{{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}</div>
+              <div class="booked-user">
+                <span v-if="isBackfill(getBooking(c.name, t))" class="bf-tag">补录</span>
+                {{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
+              </div>
               <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
               <div v-if="!isLockBooking(getBooking(c.name, t))" class="booked-amt">{{ bookingMoneyText(getBooking(c.name, t)) }}</div>
               <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).remark" class="booked-remark">{{ getBooking(c.name, t).remark }}</div>
               <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).phone" class="booked-phone">{{ getBooking(c.name, t).phone }}</div>
             </template>
             <template v-else>
-              <div class="free-text">可约</div>
+              <div class="free-text">{{ slotPast(t) ? '可补录' : '可约' }}</div>
               <div class="slot-price" v-if="getPrice(c.name, t) > 0">¥{{ getPrice(c.name, t) }}</div>
               <div class="slot-price muted" v-else>未定价</div>
             </template>
@@ -69,13 +73,14 @@
     </div>
 
     <!-- 普通代客订场 -->
-    <el-dialog v-model="bookVisible" :title="bookMode === 'lock' ? '锁场' : '代客订场'" width="500px" destroy-on-close class="book-dialog">
+    <el-dialog v-model="bookVisible" :title="bookMode === 'lock' ? '锁场' : (bookForm.backfill ? '补录订场' : '代客订场')" width="500px" destroy-on-close class="book-dialog">
       <div class="mode-switch">
         <el-button-group>
           <el-button :type="bookMode === 'book' ? 'primary' : ''" @click="bookMode = 'book'">预约</el-button>
           <el-button :type="bookMode === 'lock' ? 'warning' : ''" @click="bookMode = 'lock'">锁场</el-button>
         </el-button-group>
       </div>
+      <div v-if="bookForm.backfill && bookMode !== 'lock'" class="backfill-tip">这是补录。时段已过，保存后格子会标成紫色「补录」。</div>
       <el-form label-width="96px" v-if="bookMode === 'lock'">
         <el-form-item label="场馆"><el-input :model-value="venueName" disabled /></el-form-item>
         <el-form-item label="场地"><el-input v-model="bookForm.court" disabled /></el-form-item>
@@ -292,6 +297,10 @@
             <el-button link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
           </div>
         </el-form-item>
+        <el-form-item v-if="current && isBackfill(current)" label="类型">
+          <el-tag type="warning">补录</el-tag>
+          <span class="price-hint" style="margin-left:8px">客人迟到后补记</span>
+        </el-form-item>
         <el-form-item v-if="current && !isLockBooking(current)" label="收款">
           <span>{{ bookingMoneyText(current) }}</span>
           <span class="price-hint" style="margin-left:8px">单次 / 整卡，钱记在卡上</span>
@@ -427,7 +436,7 @@ const detailPhone = ref('')
 const currentGroup = ref(null)
 
 const bookForm = ref({
-  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0
+  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0, backfill: false
 })
 const templates = ref([])
 const tplLoading = ref(false)
@@ -677,6 +686,10 @@ function cardLine(b) {
   if (isTimes && left != null && left !== '') text += total != null && total !== '' ? ` ${left}/${total}` : ` 剩${left}`
   return text
 }
+function isBackfill(b) {
+  if (!b) return false
+  return b.source === 'backfill' || String(b.remark || '').indexOf('[补录]') === 0
+}
 function slotPast(time) {
   const day = currentDate.value
   const start = String(time || '').split('-')[0] || '00:00'
@@ -688,6 +701,7 @@ function cellClass(courtName, time) {
   const b = getBooking(courtName, time)
   if (!b) return 'free'
   if (isLockBooking(b)) return 'locked'
+  if (isBackfill(b)) return 'backfill'
   return slotPast(time) ? 'past' : 'booked'
 }
 
@@ -743,7 +757,8 @@ function onCellClick(courtName, time) {
     coachId: '',
     remark: '',
     payAmount: getPrice(courtName, time) || 0,
-    issueTpl: ''
+    issueTpl: '',
+    backfill: slotPast(time)
   }
   bookMode.value = 'book'
   memberOptions.value = []
@@ -1246,7 +1261,10 @@ async function submitBook() {
         date: bookForm.value.date,
         time: bookForm.value.time,
         userName: bookForm.value.userName,
-        remark: bookForm.value.remark || '',
+        remark: bookForm.value.backfill
+          ? ('[补录]' + (bookForm.value.remark ? ' ' + bookForm.value.remark : ''))
+          : (bookForm.value.remark || ''),
+        backfill: !!bookForm.value.backfill,
         status: 'booked',
         venueId: venueId(),
         venueName: venueName.value,
@@ -1524,4 +1542,9 @@ h2 { margin: 0; font-size: 20px; }
 .edit-total { margin-top: 8px; }
 .booked-amt { font-size: 12px; color: #1a5c3a; font-weight: 700; margin-top: 2px; }
 .booked-remark { font-size: 11px; color: #8a5a00; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lg.backfill::before { background: #f3e5f5; border: 1px solid #8e24aa; }
+.slot.backfill { background: #f3e5f5; color: #6a1b9a; border: 1px dashed #8e24aa; }
+.slot.backfill:hover { background: #e1bee7; }
+.bf-tag { display: inline-block; background: #8e24aa; color: #fff; font-size: 11px; border-radius: 4px; padding: 0 5px; margin-right: 4px; vertical-align: 1px; }
+.backfill-tip { background: #f3e5f5; color: #6a1b9a; border-radius: 6px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
 </style>

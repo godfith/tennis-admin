@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261030a'
+const FN_VER = 'saveBooking-20261031a'
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -600,7 +600,7 @@ exports.main = async (event) => {
           user_id, openid, user_name, phone, status,
           card_id, card_name, card_type, coach_id, coach_name,
           source, operator_name, remark, amount
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ?, ?, 'admin', ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           data.venueId,
           data.venueName || '',
@@ -616,13 +616,18 @@ exports.main = async (event) => {
           cardType,
           coachIdVal,
           data.coachName || '',
+          data.backfill ? 'backfill' : 'admin',
           data.operatorName || '管理员',
-          data.remark || data.orderNo || '',
+          (function () {
+            const r = data.remark || data.orderNo || ''
+            if (!data.backfill) return r
+            return String(r).indexOf('[补录]') === 0 ? r : ('[补录] ' + r)
+          })(),
           bookAmount
         ]
       )
 
-      let detail = '预约 ' + (data.court || '') + ' ' + fmtDateCn(dateYmd) + ' ' + (data.time || '')
+      let detail = (data.backfill ? '补录 ' : '预约 ') + (data.court || '') + ' ' + fmtDateCn(dateYmd) + ' ' + (data.time || '')
       if (data.coachName) detail += ' · 教练' + data.coachName
       if (cardName) detail += ' · ' + cardName
       const phoneVal = await resolvePhone(conn, data.phone, userIdVal, data.userName)
