@@ -42,6 +42,7 @@ export const ALLOWED = {
     '/occupancy',
     '/coach-attendance',
     '/bookings',
+    '/batch-lock',
     '/coach-schedule',
     '/group-classes',
     '/courts',

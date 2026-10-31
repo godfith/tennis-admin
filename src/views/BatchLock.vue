@@ -3,14 +3,14 @@
     <div class="page-header">
       <div>
         <h2>批量锁场</h2>
-        <p class="sub">按场馆、场地、日期范围、时段批量锁定。已预约或已锁的时段会跳过。</p>
+        <p class="sub">店长只能锁自己管理的场馆。已预约或已锁的时段会跳过。</p>
       </div>
     </div>
 
     <div class="card">
       <el-form label-width="100px">
         <el-form-item label="场馆">
-          <el-select v-model="form.venueId" placeholder="选择场馆" style="width: 280px" @change="loadCourts">
+          <el-select v-model="form.venueId" placeholder="选择场馆" style="width: 280px" @change="onVenue">
             <el-option v-for="v in venues" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
         </el-form-item>
@@ -46,6 +46,19 @@
       </el-form>
     </div>
 
+    <div class="card">
+      <h3>锁场记录</h3>
+      <p class="sub">谁锁的、哪块场、什么时候锁的。</p>
+      <el-table :data="locks" size="small" max-height="420" v-loading="loadingLocks">
+        <el-table-column prop="date" label="日期" width="110" />
+        <el-table-column prop="time" label="时段" width="110" />
+        <el-table-column prop="court" label="场地" width="120" />
+        <el-table-column prop="operatorName" label="操作人" width="120" />
+        <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="timeText" label="操作时间" width="170" />
+      </el-table>
+    </div>
+
     <div class="card" v-if="result">
       <h3>结果</h3>
       <p>成功 {{ result.ok }} 个，跳过 {{ result.skip }} 个，失败 {{ result.fail }} 个</p>
@@ -68,6 +81,8 @@ const venues = ref([])
 const courts = ref([])
 const saving = ref(false)
 const result = ref(null)
+const locks = ref([])
+const loadingLocks = ref(false)
 
 const form = ref({
   venueId: '',
@@ -120,9 +135,32 @@ async function post(path, body) {
 
 async function loadVenues() {
   const r = await post('/adminGetVenues', {})
-  venues.value = r.list || []
+  let list = r.list || []
+  const own = localStorage.getItem('admin_venue_id') || ''
+  const canAll = localStorage.getItem('admin_role') === 'admin' || !own
+  if (!canAll && own) list = list.filter((v) => (v.venueId || v._id) === own)
+  venues.value = list
+  if (!form.value.venueId && list[0]) {
+    form.value.venueId = list[0].venueId || list[0]._id
+    await loadCourts()
+    await loadLocks()
+  }
+}
+async function loadLocks() {
+  if (!form.value.venueId) { locks.value = []; return }
+  loadingLocks.value = true
+  try {
+    const r = await post('/adminSaveBooking', { action: 'listLocks', data: { venueId: form.value.venueId } })
+    locks.value = r.list || []
+  } finally {
+    loadingLocks.value = false
+  }
 }
 
+async function onVenue() {
+  await loadCourts()
+  await loadLocks()
+}
 async function loadCourts() {
   if (!form.value.venueId) { courts.value = []; return }
   const r = await post('/adminGetCourts', { venueId: form.value.venueId })
@@ -174,6 +212,7 @@ async function doLock() {
   }
   saving.value = false
   ElMessage.success(`完成：成功 ${result.value.ok}，跳过 ${result.value.skip}`)
+  await loadLocks()
 }
 
 onMounted(loadVenues)

@@ -54,7 +54,7 @@
             <template v-else-if="getBooking(c.name, t)">
               <div class="booked-user">
                 <span v-if="isBackfill(getBooking(c.name, t))" class="bf-tag">补录</span>
-                {{ isLockBooking(getBooking(c.name, t)) ? '锁场' : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
+                {{ isLockBooking(getBooking(c.name, t)) ? ('锁场' + (getBooking(c.name, t).operatorName ? ' · ' + getBooking(c.name, t).operatorName : '')) : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
               </div>
               <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
               <div v-if="!isLockBooking(getBooking(c.name, t))" class="booked-amt">{{ bookingMoneyText(getBooking(c.name, t)) }}</div>
@@ -296,6 +296,9 @@
             <span v-else>{{ editForm.cardName || '未使用卡' }}</span>
             <el-button link type="primary" @click="toggleEditCard">{{ editField==='card' ? '完成' : '更改卡券' }}</el-button>
           </div>
+        </el-form-item>
+        <el-form-item v-if="current && isLockBooking(current)" label="锁场人">
+          <span>{{ current.operatorName || '未记录' }}</span>
         </el-form-item>
         <el-form-item v-if="current && isBackfill(current)" label="类型">
           <el-tag type="warning">补录</el-tag>

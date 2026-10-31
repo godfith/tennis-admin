@@ -200,7 +200,33 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261031a'
+const FN_VER = 'saveBooking-20261031b'
+
+
+async function assertOwnVenue(conn, operatorName, venueId) {
+  const name = String(operatorName || '').trim()
+  if (!name || !venueId) return
+  let rows = []
+  try {
+    const [r] = await conn.query(
+      'SELECT role, venue_id FROM admins WHERE name=? OR username=? LIMIT 1',
+      [name, name]
+    )
+    rows = r || []
+  } catch (e) {
+    return
+  }
+  if (!rows.length) return
+  const role = String(rows[0].role || '')
+  const own = String(rows[0].venue_id || '')
+  if (!own) return
+  if (['admin', 'super', 'superadmin', '超级管理员'].includes(role)) return
+  if (own !== venueId) {
+    const err = new Error('只能锁自己管理的场馆')
+    err.code = 'VENUE'
+    throw err
+  }
+}
 
 exports.main = async (event) => {
   const conn = await pool.getConnection()
@@ -1128,9 +1154,43 @@ exports.main = async (event) => {
       return { ok: true, remaining: remain, fnVer: FN_VER }
     }
 
+    if (action === 'listLocks') {
+      const venueId = (data && data.venueId) || body.venueId || ''
+      if (!venueId) return { ok: false, msg: '缺少场馆', fnVer: FN_VER, list: [] }
+      const [rows] = await conn.query(
+        `SELECT id, venue_name, court, date, time, operator_name, remark, status, created_at
+           FROM bookings
+          WHERE venue_id=? AND (source='lock' OR status='locked' OR user_name='锁场')
+            AND status <> 'cancelled'
+          ORDER BY date DESC, time DESC, id DESC
+          LIMIT 300`,
+        [venueId]
+      )
+      return {
+        ok: true,
+        fnVer: FN_VER,
+        list: (rows || []).map((r) => ({
+          id: String(r.id),
+          venueName: r.venue_name || '',
+          court: r.court || '',
+          date: fmtDate(r.date),
+          time: r.time || '',
+          operatorName: r.operator_name || '',
+          remark: r.remark || '',
+          status: r.status || '',
+          timeText: r.created_at
+        }))
+      }
+    }
+
     if (action === 'lock') {
       if (!data || !data.venueId || !data.court || !data.date || !data.time) {
         return { ok: false, msg: '参数不完整', fnVer: FN_VER }
+      }
+      try {
+        await assertOwnVenue(conn, data.operatorName, data.venueId)
+      } catch (e) {
+        return { ok: false, msg: e.message || '只能锁自己管理的场馆', fnVer: FN_VER }
       }
       await conn.beginTransaction()
       const dateYmd = fmtDate(data.date) || data.date
@@ -1173,6 +1233,14 @@ exports.main = async (event) => {
         )
         res = r
       }
+      await writeLog(conn, {
+        type: 'lock',
+        userName: '锁场',
+        operatorName: data.operatorName || '管理员',
+        detail: '锁场 ' + (data.court || '') + ' ' + dateYmd + ' ' + (data.time || '') + (data.remark ? ' · ' + data.remark : ''),
+        venueId: data.venueId,
+        venueName: data.venueName || ''
+      })
       await conn.commit()
       return { ok: true, id: String(res.insertId), status: 'locked', fnVer: FN_VER }
     }
