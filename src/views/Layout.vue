@@ -1,6 +1,6 @@
 <template>
   <el-container class="layout">
-    <el-aside width="220px" class="aside">
+    <el-aside v-if="!isMobile" width="220px" class="aside">
       <div class="logo">
         <span class="logo-text">山羊Goat</span>
         <span class="logo-sub">{{ roleText }}</span>
@@ -43,9 +43,31 @@
         </el-sub-menu>
       </el-menu>
     </el-aside>
+    <el-drawer v-model="drawer" direction="ltr" size="240px" :with-header="false" class="mobile-drawer">
+      <div class="logo">
+        <span class="logo-text">山羊Goat</span>
+        <span class="logo-sub">{{ roleText }}</span>
+      </div>
+      <el-menu :default-active="activeMenu" background-color="#1a5c3a" text-color="#c8e6d0" active-text-color="#ffffff" router class="side-menu" @select="drawer = false">
+        <el-menu-item v-if="ok('/dashboard')" index="/dashboard">数据看板</el-menu-item>
+        <el-menu-item v-if="ok('/activity')" index="/activity">业务动态</el-menu-item>
+        <el-menu-item v-if="ok('/finance')" index="/finance">财务报表</el-menu-item>
+        <el-menu-item v-if="ok('/bookings')" index="/bookings">预约管理</el-menu-item>
+        <el-menu-item v-if="ok('/batch-lock')" index="/batch-lock">批量锁场</el-menu-item>
+        <el-menu-item v-if="ok('/users')" index="/users">用户管理</el-menu-item>
+        <el-menu-item v-if="ok('/cards')" index="/cards">卡模板</el-menu-item>
+        <el-menu-item v-if="ok('/coaches')" index="/coaches">教练管理</el-menu-item>
+        <el-menu-item v-if="ok('/courts')" index="/courts">场地管理</el-menu-item>
+        <el-menu-item v-if="ok('/staff')" index="/staff">员工管理</el-menu-item>
+        <el-menu-item v-if="ok('/gift') && canGift" index="/gift">体验发放</el-menu-item>
+      </el-menu>
+    </el-drawer>
     <el-container>
       <el-header class="header">
         <div class="header-left">
+          <el-button v-if="isMobile" class="menu-btn" text @click="drawer = true">
+            <el-icon :size="22"><Menu /></el-icon>
+          </el-button>
           <el-dropdown v-if="canSwitchVenue" trigger="click" @command="onVenueCommand">
             <span class="venue-switch">{{ currentVenueName }}<el-icon><ArrowDown /></el-icon></span>
             <template #dropdown>
@@ -69,7 +91,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { DataAnalysis, Calendar, Grid, User, ArrowDown, Ticket } from '@element-plus/icons-vue'
+import { DataAnalysis, Calendar, Grid, User, ArrowDown, Ticket, Menu } from '@element-plus/icons-vue'
 import { canAccess, can, roleLabel } from '../utils/auth'
 const route = useRoute()
 const router = useRouter()
@@ -77,6 +99,10 @@ const adminName = localStorage.getItem('admin_name') || '管理员'
 const roleText = roleLabel()
 const canSwitchVenue = can('switchVenue')
 const canGift = can('gift')
+const isMobile = ref(window.innerWidth < 768)
+const drawer = ref(false)
+function onResize() { isMobile.value = window.innerWidth < 768 }
+
 const activeMenu = computed(() => route.path)
 const defaultOpeneds = ['grp-overview', 'grp-booking', 'grp-venue', 'grp-people', 'grp-card']
 const venueList = ref([])
@@ -132,7 +158,7 @@ function logout() {
   ;['admin_token', 'admin_name', 'admin_role', 'admin_venue_id', 'admin_venue_name', 'venue_id', 'venue_name'].forEach((k) => localStorage.removeItem(k))
   router.push('/login')
 }
-onMounted(loadVenues)
+onMounted(() => { loadVenues(); window.addEventListener('resize', onResize) })
 </script>
 <style scoped>
 .layout { height: 100vh; }
@@ -153,4 +179,12 @@ onMounted(loadVenues)
 .main { background: #f5f7fa; min-height: calc(100vh - 60px); }
 .venue-switch { cursor: pointer; font-size: 16px; font-weight: 600; color: #1a5c3a; display: inline-flex; align-items: center; gap: 4px; }
 .venue-switch.locked { cursor: default; }
+.menu-btn { margin-right: 4px; color: #1a5c3a; }
+@media (max-width: 767px) {
+  .header { height: 52px; padding: 0 8px; }
+  .admin-name { display: none; }
+  .header-left { min-width: 0; }
+  .venue-switch { font-size: 14px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .main { padding: 8px; min-height: calc(100vh - 52px); }
+}
 </style>

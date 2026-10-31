@@ -1,0 +1,18 @@
+
+@media (max-width: 767px) {
+  .page-header, .toolbar, .toolbar-left { flex-wrap: wrap; gap: 8px; }
+  .page-header h2, .toolbar h2 { font-size: 18px; margin: 0; }
+  .el-dialog { width: 94vw !important; margin: 2vh auto !important; }
+  .el-dialog__body { padding: 12px; max-height: 70vh; overflow: auto; }
+  .el-form-item { margin-bottom: 12px; }
+  .el-table { font-size: 13px; }
+  .el-table .cell { padding: 6px 4px; }
+  .el-button { min-height: 36px; }
+  .el-input-number { width: 120px; }
+  .card, .panel { padding: 10px; }
+  .legend { gap: 6px 10px; font-size: 12px; }
+  .schedule-page .grid { min-width: 520px; }
+  .schedule-page .slot { min-height: 72px; padding: 4px; }
+  .schedule-page .booked-user { font-size: 13px; }
+  .schedule-page .booked-phone { font-size: 13px; }
+}
