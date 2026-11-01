@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'getFinance-20261029a'
+const FN_VER = 'getFinance-20261101a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -323,7 +323,8 @@ exports.main = async (raw) => {
         ? priceMap[b.court + '_' + wd + '_' + b.time] || 0
         : priceMap[b.venue_id + '_' + b.court + '_' + wd + '_' + b.time] || 0
       const storedAmt = money(b.amount)
-      const slotPrice = storedAmt > 0 ? storedAmt : livePrice
+      // 营业额只计库里实收。金额为 0 不再用场地标价补，避免和业务动态对不上。
+      const slotPrice = storedAmt
       const phone = b.phone || b.user_phone || ''
       const card = b.card_id ? cardMap[String(b.card_id)] : null
       const importedCard = card ? isImportedIssuer(card.issuer_name) : false
