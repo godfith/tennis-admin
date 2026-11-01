@@ -612,7 +612,14 @@
             <el-radio :label="false">不自动复卡</el-radio>
             <el-radio :label="true">自动复卡</el-radio>
           </el-radio-group>
-          <el-date-picker v-if="pauseForm.autoResume" v-model="pauseForm.resumeDate" type="date" value-format="YYYY-MM-DD" style="margin-left:8px" />
+        </el-form-item>
+        <el-form-item v-if="pauseForm.autoResume" label="冻结天数">
+          <el-input-number v-model="pauseForm.days" :min="1" :max="365" @change="syncResumeDate" />
+          <span class="price-hint" style="margin-left:8px">天，不用看日历</span>
+        </el-form-item>
+        <el-form-item v-if="pauseForm.autoResume" label="复卡日期">
+          <el-date-picker v-model="pauseForm.resumeDate" type="date" value-format="YYYY-MM-DD" @change="syncDays" />
+          <span class="price-hint" style="margin-left:8px">{{ pauseForm.resumeDate || '填天数后自动算' }}</span>
         </el-form-item>
         <el-form-item label="顺延有效期">
           <el-radio-group v-model="pauseForm.extendValidity">
@@ -840,15 +847,34 @@ const templates = ref([])
 const pauseVisible = ref(false)
 const pauseSaving = ref(false)
 const pauseCard = ref(null)
-const pauseForm = ref({ pauseFrom: '', autoResume: true, resumeDate: '', extendValidity: true })
+const pauseForm = ref({ pauseFrom: '', autoResume: true, resumeDate: '', days: 7, extendValidity: true })
 const extendVisible = ref(false)
 function openPause(row) {
   pauseCard.value = row
   const today = new Date()
   const p = (n) => (n < 10 ? '0' + n : '' + n)
   const ymdNow = today.getFullYear() + '-' + p(today.getMonth() + 1) + '-' + p(today.getDate())
-  pauseForm.value = { pauseFrom: ymdNow, autoResume: true, resumeDate: '', extendValidity: true }
+  pauseForm.value = { pauseFrom: ymdNow, autoResume: true, resumeDate: '', days: 7, extendValidity: true }
+  syncResumeDate()
   pauseVisible.value = true
+}
+function addDays(ymd, n) {
+  const d = new Date(String(ymd).replace(/-/g, '/') + ' 00:00:00')
+  if (Number.isNaN(d.getTime())) return ''
+  d.setDate(d.getDate() + Number(n || 0))
+  const p = (x) => (x < 10 ? '0' + x : '' + x)
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+function syncResumeDate() {
+  if (!pauseForm.value.autoResume || !pauseForm.value.pauseFrom) return
+  pauseForm.value.resumeDate = addDays(pauseForm.value.pauseFrom, pauseForm.value.days || 0)
+}
+function syncDays() {
+  if (!pauseForm.value.pauseFrom || !pauseForm.value.resumeDate) return
+  const a = new Date(pauseForm.value.pauseFrom.replace(/-/g, '/') + ' 00:00:00')
+  const b = new Date(pauseForm.value.resumeDate.replace(/-/g, '/') + ' 00:00:00')
+  const days = Math.round((b - a) / 86400000)
+  if (days > 0) pauseForm.value.days = days
 }
 async function submitPause() {
   if (!pauseCard.value) return
