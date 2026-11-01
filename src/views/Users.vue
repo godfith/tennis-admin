@@ -446,7 +446,7 @@
       <el-form label-width="96px" class="batch-card-form">
         <el-form-item label="发卡场馆" required>
           <el-select v-model="issueForm.venueId" placeholder="请选择场馆" style="width: 280px" @change="onVenuePick">
-            <el-option v-for="v in venueList" :key="v._id || v.venueId" :label="v.name" :value="v.venueId || v._id" />
+            <el-option v-for="v in issueVenues" :key="v._id || v.venueId" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
         </el-form-item>
         <el-form-item label="选择卡券" required>
@@ -481,7 +481,7 @@
         </el-form-item>
         <el-form-item label="可用门店">
           <el-select v-model="issueForm.allowedVenueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 360px">
-            <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+            <el-option v-for="v in issueVenues" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
         </el-form-item>
         <el-form-item label="备注">
@@ -553,7 +553,7 @@
         </el-form-item>
         <el-form-item label="发卡场馆" required>
           <el-select v-model="issueForm.venueId" placeholder="请选择场馆" style="width: 100%" @change="onVenuePick">
-            <el-option v-for="v in venueList" :key="v._id || v.venueId" :label="v.name" :value="v.venueId || v._id" />
+            <el-option v-for="v in issueVenues" :key="v._id || v.venueId" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
         </el-form-item>
         <el-form-item label="发卡人" required>
@@ -588,7 +588,7 @@
         </el-form-item>
         <el-form-item label="可用门店">
           <el-select v-model="issueForm.allowedVenueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 100%">
-            <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+            <el-option v-for="v in issueVenues" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
           <div class="hint">默认不限制。选了之后这张卡只能在这些店用。</div>
         </el-form-item>
@@ -680,7 +680,7 @@
         </el-form-item>
         <el-form-item label="可用门店">
           <el-select v-model="cardForm.timeRule.venueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 100%">
-            <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+            <el-option v-for="v in issueVenues" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="cardForm.type !== 'group'" label="可用规则">
@@ -790,6 +790,12 @@ const regSaving = ref(false)
 const regForm = ref({ phone: '', nickName: '' })
 const currentUser = ref(null)
 const venueList = ref([])
+const issueVenues = computed(() => {
+  const own = localStorage.getItem('admin_venue_id') || ''
+  const role = localStorage.getItem('admin_role') || ''
+  if (own && role !== 'admin' && role !== 'super') return venueList.value.filter((v) => (v.venueId || v._id) === own)
+  return venueList.value
+})
 const disableVisible = ref(false)
 const disableLoading = ref(false)
 const disableSaving = ref(false)

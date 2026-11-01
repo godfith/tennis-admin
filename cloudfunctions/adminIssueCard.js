@@ -44,6 +44,18 @@ exports.main = async (event) => {
     if (!issuerName) {
       return { ok: false, msg: '请填写发卡人' }
     }
+    try {
+      const [admins] = await pool.query(
+        'SELECT role, venue_id FROM admins WHERE name=? OR username=? LIMIT 1',
+        [issuerName, issuerName]
+      )
+      const admin = admins && admins[0]
+      if (admin && admin.venue_id && !['admin', 'super', 'superadmin', '超级管理员'].includes(String(admin.role || ''))) {
+        if (String(admin.venue_id) !== String(venueId)) {
+          return { ok: false, msg: '店长只能给自己管理的门店发卡' }
+        }
+      }
+    } catch (e) {}
 
     const [tplRows] = await pool.query(
       'SELECT * FROM card_templates WHERE id = ? LIMIT 1',
