@@ -111,10 +111,15 @@
         </el-form-item>
         <div v-if="!bookForm.cardId && !bookForm.issueTpl" class="amt-box">
           <div class="amt-title">本场收款 <span>现金订场，默认场地价 75 / 90</span></div>
-          <el-form-item label="本场收款">
+          <el-form-item v-if="memberBalance > 0" label="用余额">
+            <el-checkbox v-model="bookForm.useBalance">用余额抵扣本场</el-checkbox>
+            <span class="price-hint">余额 ¥{{ memberBalance.toFixed(2) }}，只能订场，不能买卡，不进营业额</span>
+          </el-form-item>
+          <el-form-item v-if="!bookForm.useBalance" label="本场收款">
             <el-input-number v-model="bookForm.payAmount" :min="0" :precision="2" :step="10" />
             <span class="price-hint">改价提交时会再确认一次</span>
           </el-form-item>
+          <div v-else class="amt-sum">本场用余额抵扣，不另收现金</div>
         </div>
         <div v-else class="amt-sum">已选会员卡，本场不收现金</div>
         <div class="amt-box">
@@ -422,6 +427,7 @@ const bookings = ref([])
 const groupClasses = ref([])
 const memberOptions = ref([])
 const memberCards = ref([])
+const memberBalance = ref(0)
 const coachList = ref([])
 const currentDate = ref(formatDate(new Date()))
 const dateObj = ref(currentDate.value)
@@ -439,7 +445,7 @@ const detailPhone = ref('')
 const currentGroup = ref(null)
 
 const bookForm = ref({
-  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0, backfill: false
+  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0, backfill: false, useBalance: false
 })
 const templates = ref([])
 const tplLoading = ref(false)
@@ -854,6 +860,11 @@ async function onMemberChange(id) {
   if (m) {
     bookForm.value.userName = m.nickName || m.nickname || m.name || m.userId || ''
     bookForm.value.userOpenid = m._openid || ''
+    memberBalance.value = Number(m.balance) || 0
+    bookForm.value.useBalance = false
+    post('/adminGetUsers', { action: 'detail', userId: m._id }).then((d) => {
+      memberBalance.value = Number(d.user && d.user.balance) || memberBalance.value
+    }).catch(() => {})
     cardLoading.value = true
     try {
       const result = await post('/adminGetMemberCards', { userId: m._id, openid: m._openid || '' })
@@ -1278,7 +1289,8 @@ async function submitBook() {
         cardType: selCard ? selCard.type : '',
         coachId: bookForm.value.coachId || '',
         coachName,
-        amount: usingCard ? 0 : (Number(bookForm.value.payAmount) || 0),
+        amount: usingCard || bookForm.value.useBalance ? 0 : (Number(bookForm.value.payAmount) || 0),
+        useBalance: !!(bookForm.value.useBalance && !usingCard),
         issueTemplateId: bookForm.value.issueTpl || '',
         issuePrice: bookForm.value.issueTpl ? (Number(bookForm.value.issuePrice) || 0) : (Number(bookForm.value.payAmount) || 0),
         useIssuedCard: !!(bookForm.value.issueTpl && !selCard),

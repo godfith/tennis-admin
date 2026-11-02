@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261031b'
+const FN_VER = 'saveBooking-20261102a'
 
 
 async function assertOwnVenue(conn, operatorName, venueId) {
@@ -303,6 +303,29 @@ exports.main = async (event) => {
         venueId: b.venue_id || '',
         venueName: b.venue_name || ''
       })
+
+      try {
+        const [bled] = await conn.query(
+          "SELECT amount FROM finance_ledger WHERE booking_id=? AND type='balance_out' ORDER BY id DESC LIMIT 1",
+          [b.id]
+        )
+        const back = money(bled[0] && bled[0].amount)
+        if (back > 0 && b.user_id) {
+          await conn.query('UPDATE users SET balance=IFNULL(balance,0)+?, updated_at=NOW() WHERE id=?', [back, b.user_id])
+          await writeLedger(conn, {
+            bizDate: fmtDate(b.date) || fmtDate(new Date()),
+            type: 'balance_in',
+            amount: back,
+            venueId: b.venue_id || '',
+            venueName: b.venue_name || '',
+            userId: b.user_id,
+            userName: b.user_name || '',
+            operatorName: (data && data.operatorName) || '管理员',
+            bookingId: b.id,
+            remark: '取消订场退回余额'
+          })
+        }
+      } catch (e) {}
 
       const ledgerError = await writeLedger(conn, {
         bizDate: fmtDate(b.date) || fmtDate(new Date()),
@@ -618,6 +641,28 @@ exports.main = async (event) => {
       } else {
         bookAmount = slotPrice
       }
+      let balanceUsed = 0
+      if (data.useBalance && !cardIdVal) {
+        if (!userIdVal) {
+          await conn.rollback()
+          return { ok: false, msg: '用余额订场要先选会员', fnVer: FN_VER }
+        }
+        const [us] = await conn.query('SELECT IFNULL(balance,0) AS balance FROM users WHERE id=? FOR UPDATE', [userIdVal])
+        const bal = money(us[0] && us[0].balance)
+        const need = bookAmount > 0 ? bookAmount : slotPrice
+        if (need <= 0) {
+          await conn.rollback()
+          return { ok: false, msg: '本场没有可扣的金额', fnVer: FN_VER }
+        }
+        if (bal < need) {
+          await conn.rollback()
+          return { ok: false, msg: '余额不足，还差' + money(need - bal) + '元', fnVer: FN_VER }
+        }
+        await conn.query('UPDATE users SET balance=IFNULL(balance,0)-?, updated_at=NOW() WHERE id=?', [need, userIdVal])
+        balanceUsed = need
+        bookAmount = 0
+        data.remark = (data.remark || '') + ' [余额抵扣' + need + ']'
+      }
       const cash = bookAmount
 
       const [res] = await conn.query(
@@ -670,6 +715,20 @@ exports.main = async (event) => {
       })
 
       let ledgerError = null
+      if (balanceUsed > 0) {
+        ledgerError = await writeLedger(conn, {
+          bizDate: dateYmd,
+          type: 'balance_out',
+          amount: balanceUsed,
+          venueId: data.venueId,
+          venueName: data.venueName || '',
+          userId: userIdVal,
+          userName: data.userName || '',
+          operatorName: data.operatorName || '管理员',
+          bookingId: res.insertId,
+          remark: '余额订场 ' + (data.court || '') + ' ' + (data.time || '') + ' 不计营业额'
+        })
+      }
       if (cash > 0) {
         ledgerError = await writeLedger(conn, {
           bizDate: dateYmd,

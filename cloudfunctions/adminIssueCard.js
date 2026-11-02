@@ -44,6 +44,9 @@ exports.main = async (event) => {
     if (!issuerName) {
       return { ok: false, msg: '请填写发卡人' }
     }
+    if (body.useBalance) {
+      return { ok: false, msg: '余额只能订场，不能买卡' }
+    }
     try {
       const [admins] = await pool.query(
         'SELECT role, venue_id FROM admins WHERE name=? OR username=? LIMIT 1',
