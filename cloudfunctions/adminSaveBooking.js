@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261102a'
+const FN_VER = 'saveBooking-20261103a'
 
 
 async function assertOwnVenue(conn, operatorName, venueId) {
@@ -1282,15 +1282,8 @@ exports.main = async (event) => {
         )
         res = r
       } catch (e) {
-        const [r] = await conn.query(
-          `INSERT INTO bookings (
-            venue_id, venue_name, court, date, time,
-            user_id, openid, user_name, phone, status,
-            source, operator_name, remark, amount
-          ) VALUES (?, ?, ?, ?, ?, NULL, '', '锁场', '', 'booked', 'lock', ?, ?, 0)`,
-          [data.venueId, data.venueName || '', data.court, dateYmd, data.time, data.operatorName || '管理员', remark]
-        )
-        res = r
+        await conn.rollback()
+        return { ok: false, msg: '锁场失败：' + (e.message || '状态写不进去'), fnVer: FN_VER }
       }
       await writeLog(conn, {
         type: 'lock',
