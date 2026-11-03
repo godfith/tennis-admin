@@ -200,7 +200,7 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261103a'
+const FN_VER = 'saveBooking-20261103b'
 
 
 async function assertOwnVenue(conn, operatorName, venueId) {
@@ -348,6 +348,11 @@ exports.main = async (event) => {
     if (action === 'add') {
       if (!data || !data.venueId || !data.court || !data.date || !data.time || !data.userName) {
         return { ok: false, msg: '参数不完整' }
+      }
+      // 防止锁场被写成普通预约
+      const isLockIntent = data.userName === '锁场' || data.source === 'lock' || String(data.remark || '').startsWith('[锁场]')
+      if (isLockIntent) {
+        return { ok: false, msg: '锁场请使用 lock 动作，不能用普通预约', fnVer: FN_VER }
       }
       await conn.beginTransaction()
       const dateYmd = fmtDate(data.date) || data.date
