@@ -39,6 +39,7 @@
           <el-menu-item v-if="ok('/evaluations')" index="/evaluations">学员评测</el-menu-item>
           <el-menu-item v-if="ok('/activities')" index="/activities">活动管理</el-menu-item>
           <el-menu-item v-if="ok('/banners')" index="/banners">轮播图</el-menu-item>
+          <el-menu-item v-if="ok('/notices')" index="/notices">注意事项</el-menu-item>
           <el-menu-item v-if="ok('/gift') && canGift" index="/gift">体验发放</el-menu-item>
         </el-sub-menu>
       </el-menu>
