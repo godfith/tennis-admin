@@ -27,6 +27,7 @@ const routes = [
       { path: 'evaluations', name: 'Evaluations', component: () => import('../views/Evaluations.vue') },
       { path: 'activities', name: 'Activities', component: () => import('../views/Activities.vue') },
       { path: 'banners', name: 'Banners', component: () => import('../views/Banners.vue') },
+      { path: 'notices', name: 'Notices', component: () => import('../views/Notices.vue') },
       { path: 'gift', name: 'Gift', component: () => import('../views/Gift.vue') }
     ]
   }
