@@ -188,7 +188,7 @@ async function writeLedger(conn, row) {
     console.warn('finance_ledger write skip:', e.message)
   }
 }
-const FN_VER = 'userApi-20261103c'
+const FN_VER = 'userApi-20261103d'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -1190,6 +1190,23 @@ exports.main = async (rawEvent) => {
         [userId]
       )
       return { ok: true, list: rows || [] }
+    }
+    if (action === 'getNotice') {
+      const venueId = event.venueId || ''
+      try {
+        let sql = "SELECT id, title, content FROM notice_templates WHERE status='active'"
+        const params = []
+        if (venueId) {
+          sql += ' AND (venue_id=? OR venue_id=\'\')'
+          params.push(venueId)
+        }
+        sql += ' ORDER BY (venue_id=?) DESC, id DESC LIMIT 1'
+        params.push(venueId || '')
+        const [rows] = await pool.query(sql, params)
+        return { ok: true, notice: rows[0] || null, fnVer: FN_VER }
+      } catch (e) {
+        return { ok: true, notice: null, fnVer: FN_VER }
+      }
     }
     return { ok: false, msg: '未知 action' }
   } catch (e) {
