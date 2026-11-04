@@ -11,7 +11,7 @@ const pool = mysql.createPool({
   dateStrings: true,
   timezone: '+08:00'
 })
-const FN_VER = 'notices-20261103a'
+const FN_VER = 'notices-20261104a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -36,6 +36,21 @@ async function ensureTable() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notify_scripts (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      type VARCHAR(20) NOT NULL,
+      content TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_type (type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `)
+  await pool.query(`
+    INSERT INTO notify_scripts (type, content) VALUES
+    ('normal', '如取消或改期需提前2小时告知'),
+    ('coach', '请准时到场，如需取消请提前告知教练')
+    ON DUPLICATE KEY UPDATE content = content
   `)
 }
 
@@ -93,6 +108,22 @@ exports.main = async (rawEvent) => {
       return { ok: true, fnVer: FN_VER, notice: row }
     }
 
+    if (action === 'getScripts') {
+      const [rows] = await pool.query('SELECT type, content FROM notify_scripts')
+      const map = {}
+      ;(rows || []).forEach(r => { map[r.type] = r.content || '' })
+      return { ok: true, fnVer: FN_VER, scripts: map }
+    }
+    if (action === 'saveScript') {
+      const type = event.type || 'normal'
+      const contentText = event.content || ''
+      if (!['normal', 'coach'].includes(type)) return { ok: false, msg: '类型错误', fnVer: FN_VER }
+      await pool.query(
+        'INSERT INTO notify_scripts (type, content) VALUES (?, ?) ON DUPLICATE KEY UPDATE content=?, updated_at=NOW()',
+        [type, contentText, contentText]
+      )
+      return { ok: true, fnVer: FN_VER }
+    }
     return { ok: false, msg: '未知操作', fnVer: FN_VER }
   } catch (e) {
     console.error(e)
