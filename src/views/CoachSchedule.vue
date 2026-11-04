@@ -73,7 +73,7 @@
         </el-form-item>
         <el-form-item label="同时发卡">
           <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不另发卡，使用已有教练卡" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
-            <el-option v-for="t in templates" :key="t._id" :label="t.name + ' · ' + (t.type==='coach'?'教练卡':t.type)" :value="t._id" />
+            <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
         </el-form-item>
         <template v-if="bookForm.issueTpl">
@@ -191,6 +191,12 @@ async function loadTemplates() {
     const r = await post('/adminGetCardTemplates', {})
     templates.value = (r.list || []).filter(t => t.type === 'coach' || t.type === 'times')
   } finally { tplLoading.value = false }
+}
+function tplLabel(t) {
+  const tag = t.type === 'coach' ? '教练卡' : t.type === 'times' ? '次卡' : t.type
+  const times = Number(t.totalTimes || t.total_times || 0)
+  const timesStr = times > 0 ? ' ' + times + '次' : ''
+  return t.name + '（' + tag + timesStr + '）'
 }
 function onIssueTplChange(id) {
   const t = templates.value.find(x => String(x._id) === String(id))
