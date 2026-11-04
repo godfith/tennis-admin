@@ -188,7 +188,37 @@ async function writeLedger(conn, row) {
     console.warn('finance_ledger write skip:', e.message)
   }
 }
-const FN_VER = 'userApi-20261103d'
+
+function normCourt(c) {
+  return String(c || '').trim().replace(/场$/u, '')
+}
+
+function slotLockName(venueId, dateYmd, time, court) {
+  const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
+  if (raw.length <= 64) return raw
+  const crypto = require('crypto')
+  return 'book:' + crypto.createHash('sha1').update(raw).digest('hex')
+}
+
+async function acquireSlotLock(conn, venueId, dateYmd, time, court) {
+  const name = slotLockName(venueId, dateYmd, time, court)
+  const [rows] = await conn.query('SELECT GET_LOCK(?, 10) AS ok', [name])
+  if (!rows[0] || Number(rows[0].ok) !== 1) {
+    const err = new Error('系统繁忙，请稍后重试')
+    err.code = 'SLOT_LOCK'
+    throw err
+  }
+  return name
+}
+
+async function releaseSlotLock(conn, name) {
+  if (!name) return
+  try {
+    await conn.query('SELECT RELEASE_LOCK(?)', [name])
+  } catch (e) {}
+}
+
+const FN_VER = 'userApi-20261104a'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -307,7 +337,17 @@ exports.main = async (rawEvent) => {
       }
       const conn = await pool.getConnection()
       try {
+        const dateYmd = fmtDate(data.date) || data.date
+        const courtNorm = normCourt(data.court)
+        let slotLock = null
+        try {
         await conn.beginTransaction()
+        try {
+          slotLock = await acquireSlotLock(conn, data.venueId, dateYmd, data.time, courtNorm)
+        } catch (e) {
+          await conn.rollback()
+          return { ok: false, msg: e.message || '系统繁忙，请稍后重试', fnVer: FN_VER }
+        }
         let userIdVal = null
         if (data.userId != null && String(data.userId).trim() !== '') {
           const s = String(data.userId).trim()
@@ -318,11 +358,10 @@ exports.main = async (rawEvent) => {
         if (data.coachId != null && /^\d+$/.test(String(data.coachId))) {
           coachIdVal = Number(data.coachId)
         }
-        const dateYmd = fmtDate(data.date) || data.date
         const [gc] = await conn.query(
           `SELECT id FROM group_classes
-           WHERE venue_id=? AND date=? AND time=? AND court=? AND status='open' LIMIT 1`,
-          [data.venueId, dateYmd, data.time, data.court]
+           WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status='open' LIMIT 1`,
+          [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
         )
         if (gc.length) {
           await conn.rollback()
@@ -330,8 +369,8 @@ exports.main = async (rawEvent) => {
         }
         const [busy] = await conn.query(
           `SELECT id, status FROM bookings
-           WHERE venue_id=? AND date=? AND time=? AND court=? AND status IN ('booked','locked') LIMIT 1`,
-          [data.venueId, dateYmd, data.time, data.court]
+           WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') LIMIT 1`,
+          [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
         )
         if (busy.length) {
           await conn.rollback()
@@ -571,7 +610,7 @@ exports.main = async (rawEvent) => {
           [
             data.venueId,
             venueName,
-            data.court,
+            courtNorm,
             dateYmd,
             data.time,
             userIdVal,
@@ -625,6 +664,9 @@ exports.main = async (rawEvent) => {
         })
         await conn.commit()
         return { ok: true, id: String(res.insertId), cardRemaining: remainingAfter, fnVer: FN_VER }
+        } finally {
+          await releaseSlotLock(conn, slotLock)
+        }
       } catch (e) {
         try {
           await conn.rollback()
