@@ -51,15 +51,18 @@
               <div class="booked-user">{{ getGroupClass(c.name, t).name || '团课' }}</div>
               <div class="booked-status">团课 {{ getGroupClass(c.name, t).enrolled || 0 }}/{{ getGroupClass(c.name, t).capacity || '-' }} · {{ getGroupClass(c.name, t).coachName || '' }}</div>
             </template>
-            <template v-else-if="getBooking(c.name, t)">
-              <div class="booked-user">
-                <span v-if="isBackfill(getBooking(c.name, t))" class="bf-tag">补录</span>
-                {{ isLockBooking(getBooking(c.name, t)) ? ('锁场' + (getBooking(c.name, t).operatorName ? ' · ' + getBooking(c.name, t).operatorName : '')) : (getBooking(c.name, t).userName || getBooking(c.name, t).displayUser || '已预约') }}
-              </div>
-              <div class="booked-status">{{ isLockBooking(getBooking(c.name, t)) ? (getBooking(c.name, t).remark || '不可约') : formatCardStatus(getBooking(c.name, t)) }}</div>
-              <div v-if="!isLockBooking(getBooking(c.name, t))" class="booked-amt">{{ bookingMoneyText(getBooking(c.name, t)) }}</div>
-              <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).remark" class="booked-remark">{{ getBooking(c.name, t).remark }}</div>
-              <div v-if="!isLockBooking(getBooking(c.name, t)) && getBooking(c.name, t).phone" class="booked-phone">{{ getBooking(c.name, t).phone }}</div>
+            <template v-else-if="getBookings(c.name, t).length">
+              <div v-if="getBookings(c.name, t).length > 1" class="conflict-tag">冲突 ×{{ getBookings(c.name, t).length }}</div>
+              <template v-for="(bItem, bIdx) in getBookings(c.name, t)" :key="(bItem.id || bItem._id || bIdx) + '-' + t">
+                <div class="booked-user" :class="{ 'conflict-extra': bIdx > 0 }">
+                  <span v-if="isBackfill(bItem)" class="bf-tag">补录</span>
+                  {{ isLockBooking(bItem) ? ('锁场' + (bItem.operatorName ? ' · ' + bItem.operatorName : '')) : (bItem.userName || bItem.displayUser || '已预约') }}
+                </div>
+                <div class="booked-status">{{ isLockBooking(bItem) ? (bItem.remark || '不可约') : formatCardStatus(bItem) }}</div>
+                <div v-if="!isLockBooking(bItem)" class="booked-amt">{{ bookingMoneyText(bItem) }}</div>
+                <div v-if="!isLockBooking(bItem) && bItem.remark" class="booked-remark">{{ bItem.remark }}</div>
+                <div v-if="!isLockBooking(bItem) && bItem.phone" class="booked-phone">{{ bItem.phone }}</div>
+              </template>
             </template>
             <template v-else>
               <div class="free-text">{{ slotPast(t) ? '可补录' : '可约' }}</div>
@@ -741,13 +744,16 @@ function shortDate(v) {
   return m ? m[1] : s.slice(0, 10)
 }
 function normCourt(name) {
-  return String(name || '').replace(/场$/, '').trim()
+  return String(name || '').trim().replace(/场$/u, '')
 }
-function getBooking(courtName, time) {
+function getBookings(courtName, time) {
   const n = normCourt(courtName)
-  return bookings.value.find(
+  return bookings.value.filter(
     (b) => normCourt(b.court) === n && b.time === time && (b.status === 'booked' || b.status === 'locked') && !b.groupClassId
   )
+}
+function getBooking(courtName, time) {
+  return getBookings(courtName, time)[0]
 }
 function getGroupClass(courtName, time) {
   return groupClasses.value.find(
@@ -804,8 +810,10 @@ function slotPast(time) {
 }
 function cellClass(courtName, time) {
   if (getGroupClass(courtName, time)) return slotPast(time) ? 'group past' : 'group'
-  const b = getBooking(courtName, time)
+  const list = getBookings(courtName, time)
+  const b = list[0]
   if (!b) return 'free'
+  if (list.length > 1) return slotPast(time) ? 'conflict past' : 'conflict'
   if (isLockBooking(b)) return 'locked'
   if (isBackfill(b)) return 'backfill'
   return slotPast(time) ? 'past' : 'booked'
@@ -1652,6 +1660,12 @@ h2 { margin: 0; font-size: 20px; }
 .lg.backfill::before { background: #f3e5f5; border: 1px solid #8e24aa; }
 .slot.backfill { background: #f3e5f5; color: #6a1b9a; border: 1px dashed #8e24aa; }
 .slot.backfill:hover { background: #e1bee7; }
+.slot.conflict { background: #ffcdd2; color: #b71c1c; border: 1px solid #e53935; }
+.slot.conflict:hover { background: #ef9a9a; }
+.slot.conflict.past { background: #ffcdd2; color: #c62828; opacity: 0.9; }
+.conflict-tag { font-size: 11px; font-weight: 800; color: #b71c1c; margin-bottom: 2px; }
+.conflict-extra { margin-top: 6px; padding-top: 4px; border-top: 1px dashed rgba(183,28,28,0.35); }
+
 .bf-tag { display: inline-block; background: #8e24aa; color: #fff; font-size: 11px; border-radius: 4px; padding: 0 5px; margin-right: 4px; vertical-align: 1px; }
 .backfill-tip { background: #f3e5f5; color: #6a1b9a; border-radius: 6px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
 </style>
