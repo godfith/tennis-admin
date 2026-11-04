@@ -1,6 +1,11 @@
 const crypto = require('crypto')
 const mysql = require('mysql2/promise')
 
+function normCourt(c) {
+  return String(c || '').trim().replace(/场$/u, '')
+}
+
+
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
   port: Number(process.env.DB_PORT || 26462),
@@ -105,9 +110,10 @@ exports.main = async (rawEvent) => {
             let bookingId = o.booking_id || null
             if (!bookingId && o.venue_id && o.book_date && o.book_time && o.court) {
               const uid = Number(o.user_id) > 0 ? Number(o.user_id) : null
+              const courtNorm = normCourt(o.court)
               const [bk] = await pool.query(
                 `SELECT id FROM bookings
-                  WHERE venue_id=? AND date=? AND time=? AND court=? AND status='booked'
+                  WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status='booked'
                     AND (pay_order_id IS NULL OR pay_order_id=0)
                     AND (
                       (? <> '' AND openid=?)
@@ -118,7 +124,8 @@ exports.main = async (rawEvent) => {
                   o.venue_id,
                   o.book_date,
                   o.book_time,
-                  o.court,
+                  courtNorm,
+                  courtNorm,
                   o.openid || '',
                   o.openid || '',
                   uid,

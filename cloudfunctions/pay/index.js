@@ -18,6 +18,37 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
+
+function normCourt(c) {
+  return String(c || '').trim().replace(/场$/u, '')
+}
+
+function slotLockName(venueId, dateYmd, time, court) {
+  const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
+  if (raw.length <= 64) return raw
+  const crypto = require('crypto')
+  return 'book:' + crypto.createHash('sha1').update(raw).digest('hex')
+}
+
+async function acquireSlotLock(conn, venueId, dateYmd, time, court) {
+  const name = slotLockName(venueId, dateYmd, time, court)
+  const [rows] = await conn.query('SELECT GET_LOCK(?, 10) AS ok', [name])
+  if (!rows[0] || Number(rows[0].ok) !== 1) {
+    const err = new Error('系统繁忙，请稍后重试')
+    err.code = 'SLOT_LOCK'
+    throw err
+  }
+  return name
+}
+
+async function releaseSlotLock(conn, name) {
+  if (!name) return
+  try {
+    await conn.query('SELECT RELEASE_LOCK(?)', [name])
+  } catch (e) {}
+}
+
+const PAY_FN_VER = 'pay-20261104a'
 const APPID = process.env.WX_APPID || 'wxe2f073ca2e08c355'
 const WX_SECRET = process.env.WX_SECRET || ''
 const NOTIFY_URL =
@@ -288,36 +319,56 @@ exports.main = async (rawEvent) => {
     const amountFen = Math.round(amountYuan * 100)
     if (!amountFen || amountFen < 1) return { ok: false, msg: '金额无效' }
 
-    const court = event.court || ''
+    const courtRaw = event.court || ''
+    const court = normCourt(courtRaw)
     const date = event.date || ''
     const time = event.time || ''
     if (!court || !date || !time) return { ok: false, msg: '请选择场地和时段' }
 
-    const no = outTradeNo()
-    const desc = '订场 ' + (event.venueName || '') + ' ' + court + ' ' + date + ' ' + time
-    const privateKey = normalizePem(mch.keyPem)
+    const conn = await pool.getConnection()
+    let slotLock = null
+    let no
+    let desc
+    try {
+      try {
+        slotLock = await acquireSlotLock(conn, venueId, date, time, court)
+      } catch (e) {
+        return { ok: false, msg: e.message || '系统繁忙，请稍后重试' }
+      }
+      const [busy] = await conn.query(
+        `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') LIMIT 1`,
+        [venueId, date, time, court, court]
+      )
+      if (busy.length) return { ok: false, msg: '该时段已被预约或锁场' }
 
-    await pool.query(
-      `INSERT INTO pay_orders (
-        out_trade_no, venue_id, venue_name, court, book_date, book_time,
-        user_id, openid, user_name, phone, mchid, amount_fen, status, description
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      [
-        no,
-        venueId,
-        event.venueName || '',
-        court,
-        date,
-        time,
-        event.userId || '',
-        openid,
-        event.userName || '',
-        event.phone || '',
-        mch.mchid,
-        amountFen,
-        desc
-      ]
-    )
+      no = outTradeNo()
+      desc = '订场 ' + (event.venueName || '') + ' ' + court + ' ' + date + ' ' + time
+      await conn.query(
+        `INSERT INTO pay_orders (
+          out_trade_no, venue_id, venue_name, court, book_date, book_time,
+          user_id, openid, user_name, phone, mchid, amount_fen, status, description
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        [
+          no,
+          venueId,
+          event.venueName || '',
+          court,
+          date,
+          time,
+          event.userId || '',
+          openid,
+          event.userName || '',
+          event.phone || '',
+          mch.mchid,
+          amountFen,
+          desc
+        ]
+      )
+    } finally {
+      await releaseSlotLock(conn, slotLock)
+      conn.release()
+    }
+    const privateKey = normalizePem(mch.keyPem)
 
     const wxBodyObj = {
       appid: APPID,

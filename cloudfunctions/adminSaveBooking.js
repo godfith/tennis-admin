@@ -200,7 +200,37 @@ async function writeLedger(conn, row) {
   }
 }
 
-const FN_VER = 'saveBooking-20261103b'
+
+function normCourt(c) {
+  return String(c || '').trim().replace(/场$/u, '')
+}
+
+function slotLockName(venueId, dateYmd, time, court) {
+  const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
+  if (raw.length <= 64) return raw
+  const crypto = require('crypto')
+  return 'book:' + crypto.createHash('sha1').update(raw).digest('hex')
+}
+
+async function acquireSlotLock(conn, venueId, dateYmd, time, court) {
+  const name = slotLockName(venueId, dateYmd, time, court)
+  const [rows] = await conn.query('SELECT GET_LOCK(?, 10) AS ok', [name])
+  if (!rows[0] || Number(rows[0].ok) !== 1) {
+    const err = new Error('系统繁忙，请稍后重试')
+    err.code = 'SLOT_LOCK'
+    throw err
+  }
+  return name
+}
+
+async function releaseSlotLock(conn, name) {
+  if (!name) return
+  try {
+    await conn.query('SELECT RELEASE_LOCK(?)', [name])
+  } catch (e) {}
+}
+
+const FN_VER = 'saveBooking-20261104a'
 
 
 async function assertOwnVenue(conn, operatorName, venueId) {
@@ -354,13 +384,22 @@ exports.main = async (event) => {
       if (isLockIntent) {
         return { ok: false, msg: '锁场请使用 lock 动作，不能用普通预约', fnVer: FN_VER }
       }
-      await conn.beginTransaction()
       const dateYmd = fmtDate(data.date) || data.date
+      const courtNorm = normCourt(data.court)
+      let slotLock = null
+      try {
+      await conn.beginTransaction()
+      try {
+        slotLock = await acquireSlotLock(conn, data.venueId, dateYmd, data.time, courtNorm)
+      } catch (e) {
+        await conn.rollback()
+        return { ok: false, msg: e.message || '系统繁忙，请稍后重试', fnVer: FN_VER }
+      }
 
       const [gc] = await conn.query(
         `SELECT id FROM group_classes
-          WHERE venue_id=? AND date=? AND time=? AND court=? AND status='open' LIMIT 1`,
-        [data.venueId, dateYmd, data.time, data.court]
+          WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status='open' LIMIT 1`,
+        [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
       )
       if (gc.length) {
         await conn.rollback()
@@ -369,8 +408,8 @@ exports.main = async (event) => {
 
       const [busy] = await conn.query(
         `SELECT id FROM bookings
-          WHERE venue_id=? AND date=? AND time=? AND court=? AND status IN ('booked','locked') LIMIT 1`,
-        [data.venueId, dateYmd, data.time, data.court]
+          WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') LIMIT 1`,
+        [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
       )
       if (busy.length) {
         await conn.rollback()
@@ -680,7 +719,7 @@ exports.main = async (event) => {
         [
           data.venueId,
           data.venueName || '',
-          data.court,
+          courtNorm,
           dateYmd,
           data.time,
           userIdVal,
@@ -774,6 +813,9 @@ exports.main = async (event) => {
         cardRemaining,
         ledgerError,
         fnVer: FN_VER
+      }
+      } finally {
+        await releaseSlotLock(conn, slotLock)
       }
     }
 
@@ -905,19 +947,28 @@ exports.main = async (event) => {
       const startHm = String(b.time || '').split('-')[0] || '00:00'
       const startAt = new Date(String(fmtDate(b.date)).replace(/-/g, '/') + ' ' + startHm)
       const started = !Number.isNaN(startAt.getTime()) && startAt.getTime() <= Date.now()
-      const court = (data && data.court) || b.court
+      const court = normCourt((data && data.court) || b.court)
       const dateYmd = fmtDate((data && data.date) || b.date) || b.date
       const time = (data && data.time) || b.time
       const remark = data && data.remark != null ? data.remark : b.remark
       const amount = data && data.amount != null ? money(data.amount) : money(b.amount)
-      if (started && (court !== b.court || String(dateYmd) !== String(fmtDate(b.date)) || time !== b.time)) {
+      const slotChanged = court !== normCourt(b.court) || String(dateYmd) !== String(fmtDate(b.date)) || time !== b.time
+      let slotLock = null
+      try {
+      if (started && slotChanged) {
         await conn.rollback()
         return { ok: false, msg: '已开始的预约不能改场地和时段，可以改用卡和金额', fnVer: FN_VER }
       }
-      if (court !== b.court || String(dateYmd) !== String(fmtDate(b.date)) || time !== b.time) {
+      if (slotChanged) {
+        try {
+          slotLock = await acquireSlotLock(conn, b.venue_id, dateYmd, time, court)
+        } catch (e) {
+          await conn.rollback()
+          return { ok: false, msg: e.message || '系统繁忙，请稍后重试', fnVer: FN_VER }
+        }
         const [busy] = await conn.query(
-          `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND court=? AND status IN ('booked','locked') AND id<>? LIMIT 1`,
-          [b.venue_id, dateYmd, time, court, id]
+          `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') AND id<>? LIMIT 1`,
+          [b.venue_id, dateYmd, time, court, court, id]
         )
         if (busy.length) {
           await conn.rollback()
@@ -1051,6 +1102,9 @@ exports.main = async (event) => {
       }
       await conn.commit()
       return { ok: true, fnVer: FN_VER }
+      } finally {
+        await releaseSlotLock(conn, slotLock)
+      }
     }
 
     if (action === 'refund_cash_keep_card' || action === 'refund_card_keep_cash') {
@@ -1256,19 +1310,28 @@ exports.main = async (event) => {
       } catch (e) {
         return { ok: false, msg: e.message || '只能锁自己管理的场馆', fnVer: FN_VER }
       }
-      await conn.beginTransaction()
       const dateYmd = fmtDate(data.date) || data.date
+      const courtNorm = normCourt(data.court)
+      let slotLock = null
+      try {
+      await conn.beginTransaction()
+      try {
+        slotLock = await acquireSlotLock(conn, data.venueId, dateYmd, data.time, courtNorm)
+      } catch (e) {
+        await conn.rollback()
+        return { ok: false, msg: e.message || '系统繁忙，请稍后重试', fnVer: FN_VER }
+      }
       const [gc] = await conn.query(
-        `SELECT id FROM group_classes WHERE venue_id=? AND date=? AND time=? AND court=? AND status='open' LIMIT 1`,
-        [data.venueId, dateYmd, data.time, data.court]
+        `SELECT id FROM group_classes WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status='open' LIMIT 1`,
+        [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
       )
       if (gc.length) {
         await conn.rollback()
         return { ok: false, msg: '该时段为团课，不能锁场', fnVer: FN_VER }
       }
       const [busy] = await conn.query(
-        `SELECT id, status FROM bookings WHERE venue_id=? AND date=? AND time=? AND court=? AND status IN ('booked','locked') LIMIT 1`,
-        [data.venueId, dateYmd, data.time, data.court]
+        `SELECT id, status FROM bookings WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') LIMIT 1`,
+        [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
       )
       if (busy.length) {
         await conn.rollback()
@@ -1283,7 +1346,7 @@ exports.main = async (event) => {
             user_id, openid, user_name, phone, status,
             source, operator_name, remark, amount
           ) VALUES (?, ?, ?, ?, ?, NULL, '', '锁场', '', 'locked', 'lock', ?, ?, 0)`,
-          [data.venueId, data.venueName || '', data.court, dateYmd, data.time, data.operatorName || '管理员', remark]
+          [data.venueId, data.venueName || '', courtNorm, dateYmd, data.time, data.operatorName || '管理员', remark]
         )
         res = r
       } catch (e) {
@@ -1294,12 +1357,15 @@ exports.main = async (event) => {
         type: 'lock',
         userName: '锁场',
         operatorName: data.operatorName || '管理员',
-        detail: '锁场 ' + (data.court || '') + ' ' + dateYmd + ' ' + (data.time || '') + (data.remark ? ' · ' + data.remark : ''),
+        detail: '锁场 ' + (courtNorm || '') + ' ' + dateYmd + ' ' + (data.time || '') + (data.remark ? ' · ' + data.remark : ''),
         venueId: data.venueId,
         venueName: data.venueName || ''
       })
       await conn.commit()
       return { ok: true, id: String(res.insertId), status: 'locked', fnVer: FN_VER }
+      } finally {
+        await releaseSlotLock(conn, slotLock)
+      }
     }
 
     return { ok: false, msg: '未知操作', fnVer: FN_VER }
