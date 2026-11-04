@@ -57,17 +57,30 @@
           </el-select>
         </el-form-item>
         <el-form-item label="学员" required>
-          <el-select
-            v-model="bookForm.memberKey"
-            filterable remote reserve-keyword placeholder="姓名 / 手机"
-            :remote-method="searchMembers" :loading="memberLoading" style="width: 100%" @change="onPickMember"
-          >
-            <el-option
-              v-for="m in memberOptions" :key="m._id"
-              :label="(m.nickName || m.userName || '') + ' ' + (m.phone || '')" :value="m._id"
-            />
+          <div style="display:flex;gap:8px;width:100%">
+            <el-select
+              v-model="bookForm.memberKey"
+              filterable remote reserve-keyword placeholder="姓名 / 手机"
+              :remote-method="searchMembers" :loading="memberLoading" style="flex:1" @change="onPickMember"
+            >
+              <el-option
+                v-for="m in memberOptions" :key="m._id"
+                :label="(m.nickName || m.userName || '') + ' ' + (m.phone || '')" :value="m._id"
+              />
+            </el-select>
+            <el-button @click="regVisible = true">注册新用户</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="同时发卡">
+          <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不另发卡，使用已有教练卡" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
+            <el-option v-for="t in templates" :key="t._id" :label="t.name + ' · ' + (t.type==='coach'?'教练卡':t.type)" :value="t._id" />
           </el-select>
         </el-form-item>
+        <template v-if="bookForm.issueTpl">
+          <el-form-item label="发卡金额">
+            <el-input-number v-model="bookForm.issuePrice" :min="0" :precision="2" :step="10" />
+          </el-form-item>
+        </template>
         <el-form-item label="教练卡" required>
           <el-select v-model="bookForm.cardId" style="width: 100%" :disabled="!coachCards.length">
             <el-option
@@ -81,6 +94,30 @@
       <template #footer>
         <el-button @click="bookVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submitLesson">确认排课</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="regVisible" title="注册新用户" width="420px" destroy-on-close>
+      <el-form label-width="80px">
+        <el-form-item label="手机号" required><el-input v-model="regForm.phone" maxlength="11" /></el-form-item>
+        <el-form-item label="昵称"><el-input v-model="regForm.nickName" placeholder="可不填" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="regVisible = false">取消</el-button>
+        <el-button type="primary" :loading="regSaving" @click="submitReg">保存并选用</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="notifyVisible" title="排课成功通知" width="480px">
+      <el-input v-model="notifyText" type="textarea" :rows="5" />
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <span style="font-size:13px;color:#999">自定义话术</span>
+        <el-input v-model="notifyCustom" placeholder="如：请准时到场" style="flex:1" />
+        <el-button @click="saveNotifyCustom">保存</el-button>
+      </div>
+      <template #footer>
+        <el-button @click="notifyVisible = false">关闭</el-button>
+        <el-button type="primary" @click="copyNotify">一键复制</el-button>
       </template>
     </el-dialog>
 
@@ -113,6 +150,67 @@ const timeSlots = ref(FALLBACK_SLOTS.slice())
 
 const loading = ref(false)
 const saving = ref(false)
+const regVisible = ref(false)
+const regSaving = ref(false)
+const regForm = ref({ phone: '', nickName: '' })
+const templates = ref([])
+const tplLoading = ref(false)
+const notifyVisible = ref(false)
+const notifyText = ref('')
+const notifyCustom = ref('')
+function showNotify(info) {
+  notifyCustom.value = localStorage.getItem('notify_custom_coach') || '请准时到场，如需取消请提前告知教练'
+  const d = info.date || ''
+  const parts = d.split('-')
+  const dateStr = parts.length === 3 ? (Number(parts[1]) + '月' + Number(parts[2]) + '日') : d
+  const fixed = '已预约' + dateStr + (info.time || '') + (info.court || '') + ' 私教课'
+  notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
+  notifyVisible.value = true
+}
+function saveNotifyCustom() {
+  localStorage.setItem('notify_custom_coach', notifyCustom.value || '')
+  ElMessage.success('话术已保存')
+}
+function copyNotify() {
+  navigator.clipboard.writeText(notifyText.value).then(() => {
+    ElMessage.success('已复制')
+    notifyVisible.value = false
+  }).catch(() => ElMessage.warning('复制失败'))
+}
+async function loadTemplates() {
+  tplLoading.value = true
+  try {
+    const r = await post('/adminGetCardTemplates', {})
+    templates.value = (r.list || []).filter(t => t.type === 'coach' || t.type === 'times')
+  } finally { tplLoading.value = false }
+}
+function onIssueTplChange(id) {
+  const t = templates.value.find(x => String(x._id) === String(id))
+  bookForm.value.issuePrice = t ? (Number(t.price) || 0) : 0
+}
+async function submitReg() {
+  const phone = String(regForm.value.phone || '').replace(/\D/g, '')
+  if (!/^1\d{10}$/.test(phone)) { ElMessage.warning('请填写11位手机号'); return }
+  regSaving.value = true
+  try {
+    const result = await post('/adminRegisterUser', {
+      phone,
+      nickName: (regForm.value.nickName || '').trim(),
+      venueId: venueId(),
+      venueName: venueName.value
+    })
+    if (!result.ok || !result.user) { ElMessage.error(result.msg || '注册失败'); return }
+    const u = result.user
+    if (!memberOptions.value.find((x) => x._id === u._id)) memberOptions.value.unshift(u)
+    bookForm.value.memberKey = u._id
+    bookForm.value.userName = u.nickName || u.userName || phone
+    bookForm.value.userOpenid = u.openid || ''
+    ElMessage.success('已注册并选用')
+    regVisible.value = false
+    regForm.value = { phone: '', nickName: '' }
+  } catch (e) { ElMessage.error(e.message || '注册失败') }
+  finally { regSaving.value = false }
+}
 const dateObj = ref('')
 const currentDate = ref('')
 const coaches = ref([])
@@ -127,7 +225,8 @@ const memberCards = ref([])
 const memberLoading = ref(false)
 const bookForm = ref({
   coachId: '', coachName: '', date: '', time: '', court: '',
-  memberKey: '', userName: '', userOpenid: '', cardId: '', remark: ''
+  memberKey: '', userName: '', userOpenid: '', cardId: '', remark: '',
+  issueTpl: '', issuePrice: 0
 })
 
 const venueId = () => localStorage.getItem('venue_id') || ''
@@ -288,10 +387,30 @@ async function onPickMember(id) {
 async function submitLesson() {
   if (!bookForm.value.court) { ElMessage.warning('请选择场地'); return }
   if (!bookForm.value.memberKey || !bookForm.value.userName) { ElMessage.warning('请选择学员'); return }
-  if (!bookForm.value.cardId) { ElMessage.warning('请选择教练卡'); return }
-  const selCard = coachCards.value.find((c) => c._id === bookForm.value.cardId)
+  if (!bookForm.value.cardId && !bookForm.value.issueTpl) { ElMessage.warning('请选择教练卡或同时发卡'); return }
   saving.value = true
   try {
+    let cardId = bookForm.value.cardId
+    let cardName = ''
+    if (bookForm.value.issueTpl) {
+      const tpl = templates.value.find(t => String(t._id) === String(bookForm.value.issueTpl))
+      const issueRes = await post('/adminIssueCard', {
+        userId: bookForm.value.memberKey,
+        templateId: bookForm.value.issueTpl,
+        price: Number(bookForm.value.issuePrice) || 0,
+        venueId: venueId(),
+        issuerName: localStorage.getItem('admin_name') || '管理员',
+        venueName: venueName.value
+      })
+      if (!issueRes.ok) { ElMessage.error(issueRes.msg || '发卡失败'); return }
+      cardId = issueRes.id
+      cardName = tpl ? tpl.name : '教练卡'
+    } else {
+      const selCard = coachCards.value.find((c) => c._id === bookForm.value.cardId)
+      if (!selCard) { ElMessage.warning('请重新选择教练卡'); return }
+      cardId = selCard._id
+      cardName = selCard.cardName
+    }
     const result = await post('/adminSaveBooking', {
       action: 'add',
       data: {
@@ -306,8 +425,8 @@ async function submitLesson() {
         venueName: venueName.value,
         memberId: bookForm.value.memberKey,
         memberOpenid: bookForm.value.userOpenid,
-        cardId: selCard._id,
-        cardName: selCard.cardName,
+        cardId: cardId,
+        cardName: cardName,
         cardType: 'coach',
         coachId: bookForm.value.coachId,
         coachName: bookForm.value.coachName
@@ -315,6 +434,7 @@ async function submitLesson() {
     })
     if (!result.ok) { ElMessage.error(result.msg || '排课失败'); return }
     ElMessage.success('已排课')
+    showNotify({ date: bookForm.value.date, time: bookForm.value.time, court: bookForm.value.court })
     bookVisible.value = false
     loadAll()
   } catch (e) {
@@ -344,6 +464,7 @@ async function cancelLesson() {
 }
 
 onMounted(() => {
+  loadTemplates()
   goToday()
   window.addEventListener('venue-changed', loadAll)
 })
