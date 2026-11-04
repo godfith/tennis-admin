@@ -218,7 +218,7 @@ async function releaseSlotLock(conn, name) {
   } catch (e) {}
 }
 
-const FN_VER = 'userApi-20261104a'
+const FN_VER = 'userApi-20261104b'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -519,16 +519,23 @@ exports.main = async (rawEvent) => {
             }
           }
           if (card.type === 'times' || card.type === 'coach') {
-            if ((card.remaining_times || 0) <= 0) {
-              await conn.rollback()
-              return { ok: false, msg: '卡次数不足' }
-            }
-            const left = card.remaining_times - 1
-            remainingAfter = left
-            await conn.query(
-              `UPDATE member_cards SET remaining_times=?, status=?, updated_at=NOW() WHERE id=?`,
-              [left, left <= 0 ? 'used_up' : 'active', card.id]
+            const [dec] = await conn.query(
+              `UPDATE member_cards
+                  SET remaining_times = remaining_times - 1,
+                      status = IF(remaining_times - 1 <= 0, 'used_up', status),
+                      updated_at = NOW()
+                WHERE id=? AND IFNULL(remaining_times,0) > 0 AND status='active'`,
+              [card.id]
             )
+            if (!dec || Number(dec.affectedRows) !== 1) {
+              await conn.rollback()
+              return { ok: false, msg: '卡次数不足', fnVer: FN_VER }
+            }
+            const [afterRows] = await conn.query(
+              'SELECT remaining_times FROM member_cards WHERE id=? LIMIT 1',
+              [card.id]
+            )
+            remainingAfter = Number(afterRows[0] && afterRows[0].remaining_times) || 0
           }
           if (card.type === 'time') {
             let tr = card.time_rule
@@ -1132,11 +1139,23 @@ exports.main = async (rawEvent) => {
             Number(enrollAmt) || 0
           ]
         )
-        const left = card.remaining_times - 1
-        await conn.query(
-          `UPDATE member_cards SET remaining_times=?, status=?, updated_at=NOW() WHERE id=?`,
-          [left, left <= 0 ? 'used_up' : 'active', card.id]
+        const [dec] = await conn.query(
+          `UPDATE member_cards
+              SET remaining_times = remaining_times - 1,
+                  status = IF(remaining_times - 1 <= 0, 'used_up', status),
+                  updated_at = NOW()
+            WHERE id=? AND IFNULL(remaining_times,0) > 0 AND status='active'`,
+          [card.id]
         )
+        if (!dec || Number(dec.affectedRows) !== 1) {
+          await conn.rollback()
+          return { ok: false, msg: '卡次数不足', fnVer: FN_VER }
+        }
+        const [afterRows] = await conn.query(
+          'SELECT remaining_times FROM member_cards WHERE id=? LIMIT 1',
+          [card.id]
+        )
+        const left = Number(afterRows[0] && afterRows[0].remaining_times) || 0
         await conn.query(`UPDATE group_classes SET enrolled = enrolled + 1 WHERE id=?`, [
           groupClassId
         ])

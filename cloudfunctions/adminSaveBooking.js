@@ -230,7 +230,7 @@ async function releaseSlotLock(conn, name) {
   } catch (e) {}
 }
 
-const FN_VER = 'saveBooking-20261104a'
+const FN_VER = 'saveBooking-20261104b'
 
 
 async function assertOwnVenue(conn, operatorName, venueId) {
@@ -630,12 +630,6 @@ exports.main = async (event) => {
           }
         }
         if (card.type === 'times' || card.type === 'coach') {
-          if ((card.remaining_times || 0) <= 0) {
-            await conn.rollback()
-            return { ok: false, msg: '卡次数不足' }
-          }
-          const left = card.remaining_times - 1
-          cardRemaining = left
           let activateSql = ''
           const activateParams = []
           let tr = card.time_rule
@@ -648,10 +642,23 @@ exports.main = async (event) => {
             activateSql = ', valid_from=?, valid_to=?'
             activateParams.push(dateYmd, to)
           }
-          await conn.query(
-            `UPDATE member_cards SET remaining_times=?, status=?${activateSql}, updated_at=NOW() WHERE id=?`,
-            [left, left <= 0 ? 'used_up' : 'active'].concat(activateParams, [card.id])
+          const [dec] = await conn.query(
+            `UPDATE member_cards
+                SET remaining_times = remaining_times - 1,
+                    status = IF(remaining_times - 1 <= 0, 'used_up', status)${activateSql},
+                    updated_at = NOW()
+              WHERE id=? AND IFNULL(remaining_times,0) > 0 AND status='active'`,
+            activateParams.concat([card.id])
           )
+          if (!dec || Number(dec.affectedRows) !== 1) {
+            await conn.rollback()
+            return { ok: false, msg: '卡次数不足', fnVer: FN_VER }
+          }
+          const [afterRows] = await conn.query(
+            'SELECT remaining_times FROM member_cards WHERE id=? LIMIT 1',
+            [card.id]
+          )
+          cardRemaining = Number(afterRows[0] && afterRows[0].remaining_times) || 0
         }
         if (card.type === 'time') {
           let tr = card.time_rule
@@ -998,15 +1005,18 @@ exports.main = async (event) => {
             return { ok: false, msg: '新卡不可用', fnVer: FN_VER }
           }
           if (neu.type === 'times' || neu.type === 'coach') {
-            if ((neu.remaining_times || 0) <= 0) {
+            const [dec] = await conn.query(
+              `UPDATE member_cards
+                  SET remaining_times = remaining_times - 1,
+                      status = IF(remaining_times - 1 <= 0, 'used_up', status),
+                      updated_at = NOW()
+                WHERE id=? AND IFNULL(remaining_times,0) > 0 AND status='active'`,
+              [neu.id]
+            )
+            if (!dec || Number(dec.affectedRows) !== 1) {
               await conn.rollback()
               return { ok: false, msg: '新卡次数不足', fnVer: FN_VER }
             }
-            const left = neu.remaining_times - 1
-            await conn.query(
-              `UPDATE member_cards SET remaining_times=?, status=?, updated_at=NOW() WHERE id=?`,
-              [left, left <= 0 ? 'used_up' : 'active', neu.id]
-            )
           }
           cardId = neu.id
           cardName = neu.card_name
@@ -1246,9 +1256,20 @@ exports.main = async (event) => {
       if (card.type === 'coach' && !(data && data.coachId)) { await conn.rollback(); return { ok: false, msg: '教练卡请选择教练', fnVer: FN_VER } }
       let remain = null
       if (card.type === 'times' || card.type === 'coach' || card.type === 'group') {
-        remain = Number(card.remaining_times || 0) - 1
-        if (remain < 0) { await conn.rollback(); return { ok: false, msg: '卡次数不足', fnVer: FN_VER } }
-        await conn.query(`UPDATE member_cards SET remaining_times=?, status=?, updated_at=NOW() WHERE id=?`, [remain, remain <= 0 ? 'used_up' : 'active', card.id])
+        const [dec] = await conn.query(
+          `UPDATE member_cards
+              SET remaining_times = remaining_times - 1,
+                  status = IF(remaining_times - 1 <= 0, 'used_up', status),
+                  updated_at = NOW()
+            WHERE id=? AND IFNULL(remaining_times,0) > 0 AND status='active'`,
+          [card.id]
+        )
+        if (!dec || Number(dec.affectedRows) !== 1) {
+          await conn.rollback()
+          return { ok: false, msg: '卡次数不足', fnVer: FN_VER }
+        }
+        const [afterRows] = await conn.query('SELECT remaining_times FROM member_cards WHERE id=? LIMIT 1', [card.id])
+        remain = Number(afterRows[0] && afterRows[0].remaining_times) || 0
       }
       const refundAmt = money(b.amount)
       await conn.query(

@@ -669,7 +669,7 @@ function formatCardStatus(b) {
   const left = b.cardRemaining != null ? b.cardRemaining : b.remainingTimes
   const total = b.cardTotal != null ? b.cardTotal : b.totalTimes
   if (isTimes && left != null && left !== '') {
-    text += total != null && total !== '' ? ` 剩${left}/${total}次` : ` 剩${left}次`
+    text += total != null && total !== '' ? ` 卡现剩${left}/${total}次` : ` 卡现剩${left}次`
   }
   if (String(b.remark || '').indexOf('匹克') >= 0) text = '匹克球 ' + text
   if (b.coachName) text += ` ·${b.coachName}`
@@ -795,7 +795,7 @@ function cardLine(b) {
   const left = b.cardRemaining != null ? b.cardRemaining : b.remainingTimes
   const total = b.cardTotal != null ? b.cardTotal : b.totalTimes
   let text = name
-  if (isTimes && left != null && left !== '') text += total != null && total !== '' ? ` ${left}/${total}` : ` 剩${left}`
+  if (isTimes && left != null && left !== '') text += total != null && total !== '' ? ` 现剩${left}/${total}` : ` 现剩${left}`
   return text
 }
 function isBackfill(b) {
