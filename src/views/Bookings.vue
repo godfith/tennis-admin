@@ -471,10 +471,14 @@ const notifyVisible = ref(false)
 const notifyText = ref('')
 const notifyCustom = ref('')
 const notifyType = ref('normal')
-function showNotify(info) {
+async function showNotify(info) {
   notifyType.value = info.type || 'normal'
-  const key = 'notify_custom_' + notifyType.value
-  notifyCustom.value = localStorage.getItem(key) || (notifyType.value === 'coach' ? '请准时到场，如需取消请提前告知教练' : '如取消或改期需提前2小时告知')
+  let custom = notifyType.value === 'coach' ? '请准时到场，如需取消请提前告知教练' : '如取消或改期需提前2小时告知'
+  try {
+    const r = await post('/adminNotices', { action: 'getScripts' })
+    if (r.ok && r.scripts && r.scripts[notifyType.value]) custom = r.scripts[notifyType.value]
+  } catch (e) {}
+  notifyCustom.value = custom
   const d = info.date || ''
   const parts = d.split('-')
   const dateStr = parts.length === 3 ? (Number(parts[1]) + '月' + Number(parts[2]) + '日') : d
@@ -482,12 +486,15 @@ function showNotify(info) {
   notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
   notifyVisible.value = true
 }
-function saveNotifyCustom() {
-  localStorage.setItem('notify_custom_' + notifyType.value, notifyCustom.value || '')
-  const lines = notifyText.value.split('，')
-  const fixed = lines[0] || notifyText.value
-  notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
-  ElMessage.success('话术已保存')
+async function saveNotifyCustom() {
+  try {
+    const r = await post('/adminNotices', { action: 'saveScript', type: notifyType.value, content: notifyCustom.value || '' })
+    if (!r.ok) { ElMessage.error(r.msg || '保存失败'); return }
+    const lines = notifyText.value.split('，')
+    const fixed = lines[0] || notifyText.value
+    notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
+    ElMessage.success('话术已保存')
+  } catch (e) { ElMessage.error('保存失败') }
 }
 function copyNotify() {
   navigator.clipboard.writeText(notifyText.value).then(() => {
