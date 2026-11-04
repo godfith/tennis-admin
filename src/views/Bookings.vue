@@ -256,6 +256,20 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="notifyVisible" title="预约成功通知" width="480px">
+      <div style="margin-bottom:12px;color:#666;font-size:13px">固定话术已按实际预约生成，自定义话术可修改后保存</div>
+      <el-input v-model="notifyText" type="textarea" :rows="6" />
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <span style="font-size:13px;color:#999">自定义话术（{{ notifyType === 'coach' ? '教练课' : '普通订场' }}）</span>
+        <el-input v-model="notifyCustom" placeholder="如：如取消或改期需提前2小时告知" style="flex:1" />
+        <el-button @click="saveNotifyCustom">保存话术</el-button>
+      </div>
+      <template #footer>
+        <el-button @click="notifyVisible = false">关闭</el-button>
+        <el-button type="primary" @click="copyNotify">一键复制</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 普通预约详情 -->
     <el-dialog v-model="detailVisible" title="预约详情" width="480px">
       <el-form v-if="current" label-width="88px">
@@ -453,6 +467,34 @@ const regVisible = ref(false)
 const regSaving = ref(false)
 const regTarget = ref('book')
 const regForm = ref({ phone: '', nickName: '' })
+const notifyVisible = ref(false)
+const notifyText = ref('')
+const notifyCustom = ref('')
+const notifyType = ref('normal')
+function showNotify(info) {
+  notifyType.value = info.type || 'normal'
+  const key = 'notify_custom_' + notifyType.value
+  notifyCustom.value = localStorage.getItem(key) || (notifyType.value === 'coach' ? '请准时到场，如需取消请提前告知教练' : '如取消或改期需提前2小时告知')
+  const d = info.date || ''
+  const parts = d.split('-')
+  const dateStr = parts.length === 3 ? (Number(parts[1]) + '月' + Number(parts[2]) + '日') : d
+  const fixed = '已预约' + dateStr + (info.time || '') + (info.court || '')
+  notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
+  notifyVisible.value = true
+}
+function saveNotifyCustom() {
+  localStorage.setItem('notify_custom_' + notifyType.value, notifyCustom.value || '')
+  const lines = notifyText.value.split('，')
+  const fixed = lines[0] || notifyText.value
+  notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
+  ElMessage.success('话术已保存')
+}
+function copyNotify() {
+  navigator.clipboard.writeText(notifyText.value).then(() => {
+    ElMessage.success('已复制')
+    notifyVisible.value = false
+  }).catch(() => ElMessage.warning('复制失败，请手动选中'))
+}
 const groupForm = ref({
   memberKey: '', userName: '', userOpenid: '', cardId: '', remark: ''
 })
@@ -555,12 +597,17 @@ function cardOptionLabel(c) {
 function bookingMoneyText(b) {
   if (!b) return ''
   const cash = Number(b.amount) || 0
+  const src = String(b.source || '')
   if (b.cardId || b.cardName) {
     const total = Number(b.cardPrice) || 0
     const times = Number(b.cardTotal) || 0
     const unit = times > 0 ? Math.round((total / times) * 100) / 100 : total
     if (total > 0) return '用卡 ¥' + unit.toFixed(2) + ' / ¥' + total.toFixed(2)
     return '用卡，本场不收现金'
+  }
+  if (src === 'user') {
+    if (cash > 0) return '小程序支付 ¥' + cash.toFixed(2)
+    return '小程序原价支付'
   }
   if (cash > 0) return '本场现金 ¥' + cash.toFixed(2)
   return '本场 ¥0.00'
@@ -1298,6 +1345,12 @@ async function submitBook() {
       return
     }
     ElMessage.success('订场成功')
+    showNotify({
+      date: bookForm.value.date,
+      time: bookForm.value.time,
+      court: bookForm.value.court,
+      type: (selCard && selCard.type === 'coach') || (issueTpl && issueTpl.type === 'coach') ? 'coach' : 'normal'
+    })
     bookVisible.value = false
     loadAll()
   } catch (e) {
