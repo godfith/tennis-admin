@@ -168,7 +168,7 @@ async function showNotify(info) {
   const d = info.date || ''
   const parts = d.split('-')
   const dateStr = parts.length === 3 ? (Number(parts[1]) + '月' + Number(parts[2]) + '日') : d
-  const fixed = '已预约' + dateStr + (info.time || '') + (info.court || '') + ' 私教课'
+  const fixed = '已预约 ' + dateStr + ' ' + (info.time || '') + ' 时 ' + (info.court || '') + ' 私教课'
   notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
   notifyVisible.value = true
 }
