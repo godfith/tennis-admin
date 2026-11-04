@@ -205,6 +205,24 @@ function normCourt(c) {
   return String(c || '').trim().replace(/场$/u, '')
 }
 
+async function resolveCourtName(conn, venueId, court) {
+  const raw = String(court || '').trim()
+  if (!raw) return ''
+  const n = normCourt(raw)
+  try {
+    const [rows] = await conn.query(
+      `SELECT name FROM courts
+        WHERE venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用')
+          AND (name=? OR name=? OR TRIM(TRAILING '场' FROM name)=?)
+        ORDER BY (name=?) DESC, (name=?) DESC, id ASC LIMIT 1`,
+      [venueId, raw, n + '场', n, raw, n + '场']
+    )
+    if (rows && rows[0] && rows[0].name) return String(rows[0].name)
+  } catch (e) {}
+  return raw
+}
+
+
 function slotLockName(venueId, dateYmd, time, court) {
   const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
   if (raw.length <= 64) return raw
@@ -230,7 +248,7 @@ async function releaseSlotLock(conn, name) {
   } catch (e) {}
 }
 
-const FN_VER = 'saveBooking-20261104b'
+const FN_VER = 'saveBooking-20261104c'
 
 
 async function assertOwnVenue(conn, operatorName, venueId) {
@@ -386,6 +404,7 @@ exports.main = async (event) => {
       }
       const dateYmd = fmtDate(data.date) || data.date
       const courtNorm = normCourt(data.court)
+      const courtName = await resolveCourtName(conn, data.venueId, data.court)
       let slotLock = null
       try {
       await conn.beginTransaction()
@@ -726,7 +745,7 @@ exports.main = async (event) => {
         [
           data.venueId,
           data.venueName || '',
-          courtNorm,
+          courtName,
           dateYmd,
           data.time,
           userIdVal,
@@ -954,12 +973,13 @@ exports.main = async (event) => {
       const startHm = String(b.time || '').split('-')[0] || '00:00'
       const startAt = new Date(String(fmtDate(b.date)).replace(/-/g, '/') + ' ' + startHm)
       const started = !Number.isNaN(startAt.getTime()) && startAt.getTime() <= Date.now()
-      const court = normCourt((data && data.court) || b.court)
+      const courtNorm = normCourt((data && data.court) || b.court)
+      const court = await resolveCourtName(conn, b.venue_id, (data && data.court) || b.court)
       const dateYmd = fmtDate((data && data.date) || b.date) || b.date
       const time = (data && data.time) || b.time
       const remark = data && data.remark != null ? data.remark : b.remark
       const amount = data && data.amount != null ? money(data.amount) : money(b.amount)
-      const slotChanged = court !== normCourt(b.court) || String(dateYmd) !== String(fmtDate(b.date)) || time !== b.time
+      const slotChanged = courtNorm !== normCourt(b.court) || String(dateYmd) !== String(fmtDate(b.date)) || time !== b.time
       let slotLock = null
       try {
       if (started && slotChanged) {
@@ -968,14 +988,14 @@ exports.main = async (event) => {
       }
       if (slotChanged) {
         try {
-          slotLock = await acquireSlotLock(conn, b.venue_id, dateYmd, time, court)
+          slotLock = await acquireSlotLock(conn, b.venue_id, dateYmd, time, courtNorm)
         } catch (e) {
           await conn.rollback()
           return { ok: false, msg: e.message || '系统繁忙，请稍后重试', fnVer: FN_VER }
         }
         const [busy] = await conn.query(
           `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') AND id<>? LIMIT 1`,
-          [b.venue_id, dateYmd, time, court, court, id]
+          [b.venue_id, dateYmd, time, courtNorm, courtNorm, id]
         )
         if (busy.length) {
           await conn.rollback()
@@ -1333,6 +1353,7 @@ exports.main = async (event) => {
       }
       const dateYmd = fmtDate(data.date) || data.date
       const courtNorm = normCourt(data.court)
+      const courtName = await resolveCourtName(conn, data.venueId, data.court)
       let slotLock = null
       try {
       await conn.beginTransaction()
@@ -1367,7 +1388,7 @@ exports.main = async (event) => {
             user_id, openid, user_name, phone, status,
             source, operator_name, remark, amount
           ) VALUES (?, ?, ?, ?, ?, NULL, '', '锁场', '', 'locked', 'lock', ?, ?, 0)`,
-          [data.venueId, data.venueName || '', courtNorm, dateYmd, data.time, data.operatorName || '管理员', remark]
+          [data.venueId, data.venueName || '', courtName, dateYmd, data.time, data.operatorName || '管理员', remark]
         )
         res = r
       } catch (e) {

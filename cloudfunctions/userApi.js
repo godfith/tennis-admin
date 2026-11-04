@@ -193,6 +193,24 @@ function normCourt(c) {
   return String(c || '').trim().replace(/场$/u, '')
 }
 
+async function resolveCourtName(conn, venueId, court) {
+  const raw = String(court || '').trim()
+  if (!raw) return ''
+  const n = normCourt(raw)
+  try {
+    const [rows] = await conn.query(
+      `SELECT name FROM courts
+        WHERE venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用')
+          AND (name=? OR name=? OR TRIM(TRAILING '场' FROM name)=?)
+        ORDER BY (name=?) DESC, (name=?) DESC, id ASC LIMIT 1`,
+      [venueId, raw, n + '场', n, raw, n + '场']
+    )
+    if (rows && rows[0] && rows[0].name) return String(rows[0].name)
+  } catch (e) {}
+  return raw
+}
+
+
 function slotLockName(venueId, dateYmd, time, court) {
   const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
   if (raw.length <= 64) return raw
@@ -218,7 +236,7 @@ async function releaseSlotLock(conn, name) {
   } catch (e) {}
 }
 
-const FN_VER = 'userApi-20261104b'
+const FN_VER = 'userApi-20261104c'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -339,6 +357,7 @@ exports.main = async (rawEvent) => {
       try {
         const dateYmd = fmtDate(data.date) || data.date
         const courtNorm = normCourt(data.court)
+        const courtName = await resolveCourtName(conn, data.venueId, data.court)
         let slotLock = null
         try {
         await conn.beginTransaction()
@@ -617,7 +636,7 @@ exports.main = async (rawEvent) => {
           [
             data.venueId,
             venueName,
-            courtNorm,
+            courtName,
             dateYmd,
             data.time,
             userIdVal,

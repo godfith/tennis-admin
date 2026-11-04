@@ -23,6 +23,24 @@ function normCourt(c) {
   return String(c || '').trim().replace(/场$/u, '')
 }
 
+async function resolveCourtName(conn, venueId, court) {
+  const raw = String(court || '').trim()
+  if (!raw) return ''
+  const n = normCourt(raw)
+  try {
+    const [rows] = await conn.query(
+      `SELECT name FROM courts
+        WHERE venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用')
+          AND (name=? OR name=? OR TRIM(TRAILING '场' FROM name)=?)
+        ORDER BY (name=?) DESC, (name=?) DESC, id ASC LIMIT 1`,
+      [venueId, raw, n + '场', n, raw, n + '场']
+    )
+    if (rows && rows[0] && rows[0].name) return String(rows[0].name)
+  } catch (e) {}
+  return raw
+}
+
+
 function slotLockName(venueId, dateYmd, time, court) {
   const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
   if (raw.length <= 64) return raw
@@ -48,7 +66,7 @@ async function releaseSlotLock(conn, name) {
   } catch (e) {}
 }
 
-const PAY_FN_VER = 'pay-20261104a'
+const PAY_FN_VER = 'pay-20261104b'
 const APPID = process.env.WX_APPID || 'wxe2f073ca2e08c355'
 const WX_SECRET = process.env.WX_SECRET || ''
 const NOTIFY_URL =
@@ -326,24 +344,26 @@ exports.main = async (rawEvent) => {
     if (!amountFen || amountFen < 1) return { ok: false, msg: '金额无效' }
 
     const courtRaw = event.court || ''
-    const court = normCourt(courtRaw)
+    const courtNorm = normCourt(courtRaw)
     const date = event.date || ''
     const time = event.time || ''
-    if (!court || !date || !time) return { ok: false, msg: '请选择场地和时段' }
+    if (!courtNorm || !date || !time) return { ok: false, msg: '请选择场地和时段' }
 
     const conn = await pool.getConnection()
     let slotLock = null
     let no
     let desc
+    let court
     try {
+      court = await resolveCourtName(conn, venueId, courtRaw)
       try {
-        slotLock = await acquireSlotLock(conn, venueId, date, time, court)
+        slotLock = await acquireSlotLock(conn, venueId, date, time, courtNorm)
       } catch (e) {
         return { ok: false, msg: e.message || '系统繁忙，请稍后重试' }
       }
       const [busy] = await conn.query(
         `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') LIMIT 1`,
-        [venueId, date, time, court, court]
+        [venueId, date, time, courtNorm, courtNorm]
       )
       if (busy.length) return { ok: false, msg: '该时段已被预约或锁场' }
 
