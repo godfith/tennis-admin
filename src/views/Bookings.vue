@@ -176,8 +176,10 @@
       <template #footer>
         <div v-if="bookMode !== 'lock'" class="pay-total">
           <div>这次一共收</div>
-          <b>¥{{ (Number(bookForm.payAmount||0) + Number(bookForm.issueTpl ? bookForm.issuePrice : 0)).toFixed(2) }}</b>
-          <span>本场 ¥{{ Number(bookForm.payAmount||0).toFixed(2) }} + 卖卡 ¥{{ Number(bookForm.issueTpl ? bookForm.issuePrice : 0).toFixed(2) }}</span>
+          <b>¥{{ bookCollectTotal.toFixed(2) }}</b>
+          <span v-if="bookForm.issueTpl">卖卡 ¥{{ Number(bookForm.issuePrice||0).toFixed(2) }}（本场用卡不另收）</span>
+          <span v-else-if="bookForm.cardId">本场用卡，不收现金</span>
+          <span v-else>本场 ¥{{ Number(bookForm.payAmount||0).toFixed(2) }}</span>
         </div>
         <el-button @click="bookVisible = false">取消</el-button>
         <el-button v-if="bookMode === 'lock'" type="warning" :loading="saving" @click="submitLock">确认锁场</el-button>
@@ -482,7 +484,8 @@ async function showNotify(info) {
   const d = info.date || ''
   const parts = d.split('-')
   const dateStr = parts.length === 3 ? (Number(parts[1]) + '月' + Number(parts[2]) + '日') : d
-  const fixed = '已预约' + dateStr + (info.time || '') + (info.court || '')
+  const court = info.court || ''
+  const fixed = '已预约 ' + dateStr + ' ' + (info.time || '') + ' 时 ' + court
   notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
   notifyVisible.value = true
 }
@@ -490,8 +493,8 @@ async function saveNotifyCustom() {
   try {
     const r = await post('/adminNotices', { action: 'saveScript', type: notifyType.value, content: notifyCustom.value || '' })
     if (!r.ok) { ElMessage.error(r.msg || '保存失败'); return }
-    const lines = notifyText.value.split('，')
-    const fixed = lines[0] || notifyText.value
+    const idx = notifyText.value.indexOf('，')
+    const fixed = idx >= 0 ? notifyText.value.slice(0, idx) : notifyText.value
     notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
     ElMessage.success('话术已保存')
   } catch (e) { ElMessage.error('保存失败') }
@@ -522,6 +525,11 @@ const weekLabel = computed(() => {
 const selectedCard = computed(() => memberCards.value.find((c) => c._id === bookForm.value.cardId))
 const isCoachCard = computed(() => selectedCard.value?.type === 'coach')
 const selectedIssueTpl = computed(() => templates.value.find((t) => String(t._id) === String(bookForm.value.issueTpl)))
+const bookCollectTotal = computed(() => {
+  if (bookForm.value.issueTpl) return Number(bookForm.value.issuePrice) || 0
+  if (bookForm.value.cardId) return 0
+  return Number(bookForm.value.payAmount) || 0
+})
 const needCoachOnBook = computed(() => isCoachCard.value || selectedIssueTpl.value?.type === 'coach')
 function bookingAmount(b) {
   const n = Number(b && b.amount)
@@ -547,7 +555,9 @@ const convertNeedCoach = ref(false)
 const convertForm = ref({ issueTpl: '', issuePrice: 0, coachId: '', cashAmount: 0, payMeituan: 0, payDouyin: 0, payOffline: 0 })
 function tplLabel(t) {
   const tag = t.type === 'coach' ? '教练卡' : t.type === 'times' ? '次卡' : t.type === 'time' ? '时间卡' : t.type === 'group' ? '团课卡' : ''
-  return tag ? `${t.name}（${tag}）` : (t.name || '')
+  const times = Number(t.totalTimes || t.total_times || 0)
+  const timesStr = (t.type === 'times' || t.type === 'coach' || t.type === 'group') && times > 0 ? ` ${times}次` : ''
+  return tag ? `${t.name}（${tag}${timesStr}）` : (t.name || '')
 }
 
 // 普通订场不用团课卡
