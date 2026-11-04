@@ -158,8 +158,13 @@ const tplLoading = ref(false)
 const notifyVisible = ref(false)
 const notifyText = ref('')
 const notifyCustom = ref('')
-function showNotify(info) {
-  notifyCustom.value = localStorage.getItem('notify_custom_coach') || '请准时到场，如需取消请提前告知教练'
+async function showNotify(info) {
+  let custom = '请准时到场，如需取消请提前告知教练'
+  try {
+    const r = await post('/adminNotices', { action: 'getScripts' })
+    if (r.ok && r.scripts && r.scripts.coach) custom = r.scripts.coach
+  } catch (e) {}
+  notifyCustom.value = custom
   const d = info.date || ''
   const parts = d.split('-')
   const dateStr = parts.length === 3 ? (Number(parts[1]) + '月' + Number(parts[2]) + '日') : d
@@ -167,9 +172,12 @@ function showNotify(info) {
   notifyText.value = fixed + (notifyCustom.value ? '，' + notifyCustom.value : '')
   notifyVisible.value = true
 }
-function saveNotifyCustom() {
-  localStorage.setItem('notify_custom_coach', notifyCustom.value || '')
-  ElMessage.success('话术已保存')
+async function saveNotifyCustom() {
+  try {
+    const r = await post('/adminNotices', { action: 'saveScript', type: 'coach', content: notifyCustom.value || '' })
+    if (!r.ok) { ElMessage.error(r.msg || '保存失败'); return }
+    ElMessage.success('话术已保存')
+  } catch (e) { ElMessage.error('保存失败') }
 }
 function copyNotify() {
   navigator.clipboard.writeText(notifyText.value).then(() => {
