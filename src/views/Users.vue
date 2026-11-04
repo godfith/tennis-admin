@@ -451,7 +451,7 @@
         </el-form-item>
         <el-form-item label="选择卡券" required>
           <el-select v-model="issueForm.templateId" filterable placeholder="先选一张要发的卡" style="width: 360px" @change="onTemplateChange">
-            <el-option v-for="t in activeTemplates" :key="t._id" :label="`${t.name}（${typeLabel(t.type)}）`" :value="t._id" />
+            <el-option v-for="t in activeTemplates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
           <el-tag v-if="selectedTemplate" :type="typeTag(selectedTemplate.type)" size="small" style="margin-left:8px">{{ typeLabel(selectedTemplate.type) }}</el-tag>
         </el-form-item>
@@ -967,6 +967,12 @@ function friendlyMsg(msg) {
 }
 function isTimesLike(t) {
   return t === 'times' || t === 'coach' || t === 'group'
+}
+function tplLabel(t) {
+  const tag = typeLabel(t.type)
+  const times = Number(t.totalTimes || t.total_times || 0)
+  const timesStr = (t.type === 'times' || t.type === 'coach' || t.type === 'group') && times > 0 ? ' ' + times + '次' : ''
+  return t.name + '（' + tag + timesStr + '）'
 }
 function typeLabel(t) {
   return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡', stored: '储值卡' }[t] || t
