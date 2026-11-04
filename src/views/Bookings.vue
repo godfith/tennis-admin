@@ -734,9 +734,13 @@ function shortDate(v) {
   const m = s.match(/^(\d{4}-\d{2}-\d{2})/)
   return m ? m[1] : s.slice(0, 10)
 }
+function normCourt(name) {
+  return String(name || '').replace(/场$/, '').trim()
+}
 function getBooking(courtName, time) {
+  const n = normCourt(courtName)
   return bookings.value.find(
-    (b) => b.court === courtName && b.time === time && (b.status === 'booked' || b.status === 'locked') && !b.groupClassId
+    (b) => normCourt(b.court) === n && b.time === time && (b.status === 'booked' || b.status === 'locked') && !b.groupClassId
   )
 }
 function getGroupClass(courtName, time) {
