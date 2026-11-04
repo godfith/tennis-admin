@@ -1,3 +1,8 @@
+-- NOTE (2026-11-04): Production now prefers courts.name WITH trailing 场 (e.g. 1号场)
+-- for mini-program display matching. Do NOT strip trailing 场 in production.
+-- Use sql/restore_booking_court_names.sql to backfill display names instead.
+-- The UPDATE below that strips 场 is historical / emergency-only.
+
 -- Optional: normalize historical booking.court values (strip trailing 场)
 -- Safe to preview first. Do NOT rely on a partial unique index alone for race safety;
 -- application uses GET_LOCK('book:venue:date:time:court') around busy-check + insert.
