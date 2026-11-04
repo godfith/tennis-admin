@@ -500,10 +500,33 @@ async function saveNotifyCustom() {
   } catch (e) { ElMessage.error('保存失败') }
 }
 function copyNotify() {
-  navigator.clipboard.writeText(notifyText.value).then(() => {
+  const text = notifyText.value || ''
+  if (!text) { ElMessage.warning('没有可复制的内容'); return }
+  const done = () => {
     ElMessage.success('已复制')
-    notifyVisible.value = false
-  }).catch(() => ElMessage.warning('复制失败，请手动选中'))
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => {
+      fallbackCopy(text)
+    })
+  } else {
+    fallbackCopy(text)
+  }
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.left = '-9999px'
+  document.body.appendChild(ta)
+  ta.select()
+  try {
+    document.execCommand('copy')
+    ElMessage.success('已复制')
+  } catch (e) {
+    ElMessage.warning('复制失败，请手动选中复制')
+  }
+  document.body.removeChild(ta)
 }
 const groupForm = ref({
   memberKey: '', userName: '', userOpenid: '', cardId: '', remark: ''
@@ -1362,14 +1385,14 @@ async function submitBook() {
       return
     }
     ElMessage.success('订场成功')
+    bookVisible.value = false
     showNotify({
       date: bookForm.value.date,
       time: bookForm.value.time,
       court: bookForm.value.court,
       type: (selCard && selCard.type === 'coach') || (issueTpl && issueTpl.type === 'coach') ? 'coach' : 'normal'
     })
-    bookVisible.value = false
-    loadAll()
+    setTimeout(() => loadAll(), 300)
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
   } finally {
@@ -1470,9 +1493,6 @@ function onDatePick(val) {
 async function loadAll() {
   venueName.value = localStorage.getItem('venue_name') || ''
   if (!venueId()) {
-    courts.value = []
-    bookings.value = []
-    groupClasses.value = []
     ElMessage.warning('请先在顶部选择场馆')
     return
   }
