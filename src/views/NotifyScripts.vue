@@ -4,6 +4,8 @@
       <h2>预约通知话术</h2>
     </div>
     <p class="tip">订场/排课成功后弹出的通知，固定部分由系统按实际时间生成，这里只编辑后面的自定义话术。所有人共用。</p>
+    <el-alert type="warning" :closable="false" style="margin-bottom:16px"
+      title="注意：前面的「已预约11月4日15:00-16:00 1号场」是系统自动生成的，不用写进话术里。这里只填后面那句即可。" />
 
     <el-card shadow="never" style="margin-bottom:16px">
       <template #header>普通订场话术</template>
