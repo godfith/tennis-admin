@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.tcb_tmp/
+tcb-debug-input.json

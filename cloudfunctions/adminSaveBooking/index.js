@@ -122,10 +122,14 @@ async function getSlotPrice(conn, venueId, court, dateStr, timeStr) {
   const wd = weekdayMon1(dateStr)
   if (!venueId || !court || !wd || !timeStr) return 0
   try {
+    const raw = String(court || '').trim()
+    const n = typeof normCourt === 'function' ? normCourt(raw) : raw.replace(/场$/u, '')
     const [rows] = await conn.query(
       `SELECT price FROM court_prices
-        WHERE venue_id=? AND court=? AND weekday=? AND time_slot=? LIMIT 1`,
-      [venueId, court, wd, timeStr]
+        WHERE venue_id=? AND weekday=? AND time_slot=?
+          AND (court=? OR court=? OR court=CONCAT(?,'场'))
+        LIMIT 1`,
+      [venueId, wd, timeStr, raw, n, n]
     )
     return money(rows[0] && rows[0].price)
   } catch (e) {
@@ -248,7 +252,7 @@ async function releaseSlotLock(conn, name) {
   } catch (e) {}
 }
 
-const FN_VER = 'saveBooking-20261104c'
+const FN_VER = 'saveBooking-20261105a'
 
 
 async function assertOwnVenue(conn, operatorName, venueId) {
@@ -700,7 +704,7 @@ exports.main = async (event) => {
       const rawAmt = data.amount != null ? data.amount : (data.payAmount != null ? data.payAmount : body.amount)
       const hasTyped = rawAmt != null && rawAmt !== ''
       const typedCash = hasTyped ? money(rawAmt) : null
-      const slotPrice = await getSlotPrice(conn, data.venueId, data.court, dateYmd, data.time)
+      const slotPrice = await getSlotPrice(conn, data.venueId, courtName, dateYmd, data.time)
       let bookAmount
       if (data.useIssuedCard || (data.issueTemplateId && cardIdVal && !data.cardId)) {
         bookAmount = 0
