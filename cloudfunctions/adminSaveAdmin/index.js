@@ -13,8 +13,8 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'saveAdmin-20260926c'
-const ROLES = ['admin', 'manager', 'front', 'service']
+const FN_VER = 'saveAdmin-20261119a'
+const ROLES = ['admin', 'manager', 'front', 'service', 'partner']
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -30,9 +30,25 @@ function normRole(r) {
   const s = String(r || '').trim().toLowerCase()
   if (['admin', 'super', 'superadmin', '超级管理员'].includes(s)) return 'admin'
   if (['manager', '店长'].includes(s)) return 'manager'
+  if (['partner', '联营', '联营人'].includes(s)) return 'partner'
   if (['service', '客服'].includes(s)) return 'service'
   if (['front', 'staff', '前台', '店员'].includes(s)) return 'front'
   return 'front'
+}
+
+function parsePerms(raw) {
+  if (Array.isArray(raw)) return raw
+  try { return JSON.parse(raw || '[]') } catch (e) { return [] }
+}
+
+function accountVenueIds(row) {
+  const ids = parsePerms(row.permissions)
+    .filter((p) => String(p).startsWith('venue:'))
+    .map((p) => String(p).slice(6))
+    .filter(Boolean)
+  const one = String(row.venue_id || '').trim()
+  if (one && !ids.includes(one)) ids.unshift(one)
+  return ids
 }
 
 exports.main = async (event) => {
@@ -43,20 +59,20 @@ exports.main = async (event) => {
 
     if (action === 'list') {
       let sql = `SELECT id, username, name, role, venue_id, venue_name, status, created_at, permissions
-                   FROM admins`
-      const args = []
-      if (venueId) {
-        sql += ' WHERE venue_id=? OR IFNULL(venue_id,\'\')=\'\''
-        args.push(venueId)
-      }
-      sql += ' ORDER BY id DESC LIMIT 200'
+                   FROM admins ORDER BY id DESC LIMIT 200`
       let rows
       try {
-        const [r] = await pool.query(sql, args)
+        const [r] = await pool.query(sql)
         rows = r
       } catch (e) {
-        const [r] = await pool.query(sql.replace(', permissions', ''), args)
+        const [r] = await pool.query(sql.replace(', permissions', ''))
         rows = r
+      }
+      if (venueId) {
+        rows = (rows || []).filter((r) => {
+          if (!r.venue_id) return true
+          return accountVenueIds(r).includes(venueId)
+        })
       }
       return {
         ok: true,
@@ -69,7 +85,7 @@ exports.main = async (event) => {
           venueId: r.venue_id,
           venueName: r.venue_name,
           status: r.status || 'active',
-          perms: (() => { try { return JSON.parse(r.permissions || '[]') } catch (e) { return [] } })()
+          perms: parsePerms(r.permissions)
         }))
       }
     }
@@ -87,6 +103,15 @@ exports.main = async (event) => {
       }
       const [dup] = await pool.query('SELECT id FROM admins WHERE username=? LIMIT 1', [username])
       if (dup[0]) return { ok: false, msg: '账号已存在', fnVer: FN_VER }
+      if (Array.isArray(body.perms)) {
+        try { await pool.query('ALTER TABLE admins ADD COLUMN permissions TEXT NULL') } catch (e) {}
+        const [res] = await pool.query(
+          `INSERT INTO admins (username, password, name, role, venue_id, venue_name, status, permissions, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NOW())`,
+          [username, password, name, role, venueId || null, venueName || null, JSON.stringify(body.perms)]
+        )
+        return { ok: true, fnVer: FN_VER, id: res.insertId }
+      }
       const [res] = await pool.query(
         `INSERT INTO admins (username, password, name, role, venue_id, venue_name, status, created_at)
          VALUES (?, ?, ?, ?, ?, ?, 'active', NOW())`,

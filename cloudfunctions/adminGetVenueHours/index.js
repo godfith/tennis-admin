@@ -22,7 +22,8 @@ const FALLBACK = [
   '17:00-18:00',
   '18:00-19:00',
   '19:00-20:00',
-  '20:00-21:00'
+  '20:00-21:00',
+  '21:00-22:00'
 ]
 
 function parseEvent(event) {
@@ -78,7 +79,7 @@ exports.main = async (event) => {
       : Array.from(new Set(rows.map((r) => r.timeSlot))).sort()
     return {
       ok: true,
-      fnVer: 'venueHours-20260911a',
+      fnVer: 'venueHours-20261105c',
       list: rows,
       byWeekday,
       slots: slots.length ? slots : FALLBACK.slice(),
@@ -88,7 +89,7 @@ exports.main = async (event) => {
   } catch (err) {
     return {
       ok: true,
-      fnVer: 'venueHours-20260911a',
+      fnVer: 'venueHours-20261105c',
       list: [],
       byWeekday: {},
       slots: FALLBACK.slice(),

@@ -18,30 +18,30 @@
         placeholder="昵称 / 手机 / 会员号 / 备注"
         clearable
         style="width: 220px"
-        @keyup.enter="loadData"
+        @keyup.enter="searchUsers"
       />
-      <el-select v-model="filterTagId" clearable placeholder="标签" style="width: 140px" @change="loadData">
+      <el-select v-model="filterTagId" clearable placeholder="标签" style="width: 140px" @change="searchUsers">
         <el-option v-for="t in tagList" :key="t._id" :label="t.name" :value="t._id" />
       </el-select>
-      <el-select v-model="filterCardType" clearable placeholder="卡券类型" style="width: 120px" @change="loadData">
+      <el-select v-model="filterCardType" clearable placeholder="卡券类型" style="width: 120px" @change="searchUsers">
         <el-option label="次卡" value="times" />
         <el-option label="教练卡" value="coach" />
         <el-option label="团课" value="group" />
         <el-option label="时间卡" value="time" />
         <el-option label="储值卡" value="stored" />
       </el-select>
-      <el-select v-model="filterCardName" filterable allow-create default-first-option clearable placeholder="卡券名称" style="width: 180px" @change="loadData">
+      <el-select v-model="filterCardName" filterable allow-create default-first-option clearable placeholder="卡券名称" style="width: 180px" @change="searchUsers">
         <el-option v-for="t in activeTemplates" :key="t._id" :label="t.name" :value="t.name" />
       </el-select>
-      <el-select v-model="filterCardStatus" clearable placeholder="卡券状态" style="width: 130px" @change="loadData">
+      <el-select v-model="filterCardStatus" clearable placeholder="卡券状态" style="width: 130px" @change="searchUsers">
         <el-option label="使用中" value="active" />
         <el-option label="停用" value="disabled" />
         <el-option label="过期" value="expired" />
         <el-option label="已完成" value="done" />
       </el-select>
-      <el-date-picker v-model="createdFrom" type="date" value-format="YYYY-MM-DD" placeholder="注册起" style="width: 140px" @change="loadData" />
-      <el-date-picker v-model="createdTo" type="date" value-format="YYYY-MM-DD" placeholder="注册止" style="width: 140px" @change="loadData" />
-      <el-select v-model="sort" style="width: 150px" @change="loadData">
+      <el-date-picker v-model="createdFrom" type="date" value-format="YYYY-MM-DD" placeholder="注册起" style="width: 140px" @change="searchUsers" />
+      <el-date-picker v-model="createdTo" type="date" value-format="YYYY-MM-DD" placeholder="注册止" style="width: 140px" @change="searchUsers" />
+      <el-select v-model="sort" style="width: 150px" @change="searchUsers">
         <el-option label="最新注册" value="id_desc" />
         <el-option label="最早注册" value="created_asc" />
         <el-option label="累计消费高" value="spend_desc" />
@@ -50,7 +50,7 @@
         <el-option label="持卡多" value="cards_desc" />
         <el-option label="最近到店" value="visit_desc" />
       </el-select>
-      <el-button type="primary" :loading="loading" @click="loadData">搜索</el-button>
+      <el-button type="primary" :loading="loading" @click="searchUsers">搜索</el-button>
       <el-button @click="resetAndLoad">重置</el-button>
       <el-button v-if="canIssueCard" type="success" @click="openBatchIssue">批量发卡</el-button>
       <el-button v-if="canIssueCard" type="warning" @click="openBatchDisable">批量停用</el-button>
@@ -139,188 +139,302 @@
         </template>
       </el-table-column>
     </el-table>
+    <div class="pager">
+      <span class="pager-total">共 {{ userTotal }} 人，当前第 {{ page }} 页</span>
+      <el-pagination
+        background
+        layout="sizes, prev, pager, next"
+        :total="userTotal"
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="[50, 100]"
+        @current-change="loadData"
+        @size-change="onPageSizeChange"
+      />
+    </div>
 
     <!-- 详情 -->
-    <el-drawer v-model="detailVisible" size="560px" destroy-on-close>
+    <el-drawer v-model="detailVisible" size="1080px" destroy-on-close class="user-detail-drawer">
       <template #header>
         <div class="drawer-head">
-          <div>
+          <div class="drawer-id">
             <div class="drawer-name">{{ displayName(detailUser) }}</div>
-            <div class="drawer-sub">{{ detailUser.phone || '无手机号' }} · {{ detailUser.userId }}</div>
+            <div class="drawer-meta">
+              <span>{{ detailUser.phone || '无手机号' }}</span>
+              <span v-if="detailUser.userId">{{ detailUser.userId }}</span>
+              <span v-if="detailUser.venueName">{{ shortVenue(detailUser.venueName) || detailUser.venueName }}</span>
+              <span v-if="ymd(detailUser.createdAt || detailUser.created_at)">注册 {{ ymd(detailUser.createdAt || detailUser.created_at) }}</span>
+            </div>
           </div>
-          <el-button v-if="backFrom" size="small" @click="goBack">返回{{ backLabel }}</el-button>
+          <div class="drawer-head-actions">
+            <el-button v-if="canIssueCard" type="success" @click="openIssue(detailUser)">发卡</el-button>
+            <el-button v-if="backFrom" @click="goBack">返回{{ backLabel }}</el-button>
+          </div>
         </div>
       </template>
       <div v-loading="detailLoading" class="detail">
-        <div class="stat-row">
-          <div class="stat">
+        <div class="metric-row">
+          <div class="metric">
+            <div class="lab">现金余额</div>
             <div class="num">¥{{ money(detailUser.balance) }}</div>
-            <div class="lab">余额（现金）</div>
           </div>
-          <div class="stat">
-            <div class="num">{{ detailUser.points || 0 }}</div>
+          <div class="metric">
             <div class="lab">积分</div>
+            <div class="num">{{ detailUser.points || 0 }}</div>
           </div>
-          <div class="stat">
-            <div class="num">¥{{ money(detailUser.totalSpend) }}</div>
+          <div class="metric metric-spend">
             <div class="lab">累计消费</div>
+            <div class="num">¥{{ money(detailUser.totalSpend) }}</div>
+            <div v-if="detailUser.spendByVenue && detailUser.spendByVenue.length" class="metric-sub">
+              <span v-for="sv in detailUser.spendByVenue" :key="sv.venueId || sv.venueName">{{ shortVenue(sv.venueName) || '未分馆' }} ¥{{ money(sv.amount) }}</span>
+            </div>
           </div>
-          <div class="stat">
-            <div class="num">{{ detailUser.cardCount || 0 }}</div>
+          <div class="metric">
             <div class="lab">有效持卡</div>
+            <div class="num">{{ detailUser.cardCount || 0 }}</div>
           </div>
-          <div class="stat">
-            <div class="num">{{ ymd(detailUser.lastVisit) || '-' }}</div>
+          <div class="metric">
             <div class="lab">最近到店</div>
-          </div>
-        </div>
-        <div class="venue-spend">
-          <div v-for="s in (detailUser.spendByVenue || [])" :key="s.venueId || s.venueName" class="stat slim">
-            <div class="num">¥{{ money(s.amount) }}</div>
-            <div class="lab">{{ s.venueName || '未分馆' }}</div>
-          </div>
-          <div v-if="!(detailUser.spendByVenue && detailUser.spendByVenue.length)" class="muted">暂无分馆消费</div>
-        </div>
-
-        <div class="block">
-          <div class="block-title">标签</div>
-          <el-select
-            v-model="detailTagIds"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            placeholder="选择已有标签，或输入后回车新建"
-            style="width: 100%"
-            @change="saveDetailTags"
-          >
-            <el-option v-for="t in tagList" :key="t._id" :label="t.name" :value="t._id" />
-          </el-select>
-          <div class="new-tag-row">
-            <el-input v-model="quickTagName" placeholder="新标签名" style="width: 160px" @keyup.enter="createAndAttachTag" />
-            <el-color-picker v-model="quickTagColor" size="small" />
-            <el-button type="primary" plain size="small" @click="createAndAttachTag">新增并打上</el-button>
+            <div class="num num-date">{{ ymd(detailUser.lastVisit) || '-' }}</div>
           </div>
         </div>
 
-        <div class="block">
-          <div class="block-title">余额 / 积分</div>
-          <div class="wallet-row">
-            <el-input-number v-model="wallet.addBalance" :step="10" :precision="2" placeholder="改余额" />
-            <span class="muted">正数充值，负数扣减</span>
+        <div class="profile-row">
+          <div class="profile-card">
+            <div class="profile-hd">
+              <span>标签</span>
+              <el-button link type="primary" @click="detailTagEdit = !detailTagEdit">{{ detailTagEdit ? '完成' : '编辑' }}</el-button>
+            </div>
+            <div class="tag-list">
+              <el-tag
+                v-for="t in detailTags"
+                :key="t._id"
+                size="small"
+                :style="{ background: t.color, borderColor: t.color, color: '#fff' }"
+              >{{ t.name }}</el-tag>
+              <span v-if="!detailTags.length" class="muted">暂无标签</span>
+            </div>
+            <div v-if="detailTagEdit" class="profile-edit">
+              <el-select
+                v-model="detailTagIds"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="选择已有标签，或输入后回车新建"
+                style="width: 100%"
+                @change="saveDetailTags"
+              >
+                <el-option v-for="t in tagList" :key="t._id" :label="t.name" :value="t._id" />
+              </el-select>
+              <div class="new-tag-row">
+                <el-input v-model="quickTagName" placeholder="新标签名" @keyup.enter="createAndAttachTag" />
+                <el-color-picker v-model="quickTagColor" size="small" />
+                <el-button type="primary" plain size="small" @click="createAndAttachTag">新增并打上</el-button>
+              </div>
+            </div>
           </div>
-          <el-checkbox v-model="wallet.migrated" style="margin-top:6px">旧系统迁入余额，不计营业额</el-checkbox>
-          <div class="wallet-row">
-            <el-input-number v-model="wallet.addPoints" :step="10" :precision="0" />
-            <span class="muted">积分增减</span>
+          <div class="profile-card">
+            <div class="profile-hd"><span>备注</span></div>
+            <el-input
+              v-model="detailRemark"
+              type="textarea"
+              :rows="2"
+              resize="none"
+              placeholder="写给前台看的备注，失焦后自动保存"
+              @blur="saveRemark"
+            />
           </div>
-          <el-input v-model="wallet.remark" placeholder="备注，如：前台充值 / 纠错" style="margin:8px 0" />
-          <el-button type="primary" size="small" :loading="walletSaving" @click="saveWallet">保存余额积分</el-button>
+          <div class="profile-card">
+            <div class="profile-hd">
+              <span>调整余额 / 积分</span>
+              <el-button link type="primary" @click="walletEdit = !walletEdit">{{ walletEdit ? '收起' : '打开' }}</el-button>
+            </div>
+            <template v-if="!walletEdit">
+              <div class="muted">需要充值、扣减或纠错时再打开</div>
+            </template>
+            <div v-else class="profile-edit">
+              <div class="wallet-row">
+                <el-input-number v-model="wallet.addBalance" :step="10" :precision="2" controls-position="right" style="width: 160px" />
+                <span class="hint-inline">余额增减，正数充值，负数扣减</span>
+              </div>
+              <el-checkbox v-model="wallet.migrated">旧系统迁入余额，不计营业额</el-checkbox>
+              <div class="wallet-row">
+                <el-input-number v-model="wallet.addPoints" :step="10" :precision="0" controls-position="right" style="width: 160px" />
+                <span class="hint-inline">积分增减</span>
+              </div>
+              <el-input v-model="wallet.remark" placeholder="备注，如：前台充值 / 纠错" />
+              <el-button type="primary" size="small" :loading="walletSaving" @click="saveWallet">保存余额积分</el-button>
+            </div>
+          </div>
         </div>
 
-        <div class="block">
-          <div class="block-title">备注</div>
-          <el-input v-model="detailRemark" type="textarea" :rows="2" placeholder="前台备注" @blur="saveRemark" />
-        </div>
-
-        <div class="block">
-          <div class="block-title">持卡</div>
-          <el-table :data="detailCards" size="small" border>
-            <el-table-column label="卡" min-width="120">
-              <template #default="{ row }">
-                {{ row.cardName }}
-                <el-tag v-if="row.rulesEdited" size="small" type="warning" style="margin-left:4px">已改规则</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="余次" width="90">
-              <template #default="{ row }">
-                <span v-if="isTimesLike(row.type)">{{ row.remainingTimes }}/{{ row.totalTimes }}</span>
-                <span v-else>-</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="已用" width="70">
-              <template #default="{ row }">
-                <span v-if="isTimesLike(row.type)">{{ Math.max(0, Number(row.totalTimes || 0) - Number(row.remainingTimes || 0)) }}</span>
-                <span v-else>-</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="80">
-              <template #default="{ row }">
-                <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="" width="260">
-              <template #default="{ row }">
-                <el-button link type="primary" @click="openCardDetail(row)">详情</el-button>
-                <el-button v-if="row.status === 'active'" link type="warning" @click="openPause(row)">停卡</el-button>
-                <el-button v-if="row.status === 'disabled'" link type="success" @click="toggleListCard(row, 'enable')">复卡</el-button>
-                <el-button v-if="canExtendCards && row.status !== 'refunded' && row.status !== 'deleted'" link type="primary" @click="openExtend(row)">延期</el-button>
-                <el-button v-if="canRefundCard && row.status !== 'deleted'" link type="danger" @click="onDeleteCard(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-button v-if="canIssueCard" type="success" plain size="small" style="margin-top:8px" @click="openIssue(detailUser)">发卡</el-button>
-        </div>
-
-        <div class="block">
-          <div class="block-title">预约（含已完成 / 未完成 / 已取消）</div>
-          <el-table :data="detailBookings" size="small" border>
-            <el-table-column label="日期" width="110">
-              <template #default="{ row }">{{ ymd(row.date) }}</template>
-            </el-table-column>
-            <el-table-column prop="time" label="时段" width="110" />
-            <el-table-column prop="court" label="场地" min-width="100" />
-            <el-table-column label="状态" width="80">
-              <template #default="{ row }">
-                <el-tag size="small" :type="bookingTag(row)">{{ bookingLabel(row) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="cardName" label="用卡" min-width="120" show-overflow-tooltip />
-            <el-table-column label="金额" width="80">
-              <template #default="{ row }">{{ row.cardName ? (row.amount ? '¥' + money(row.amount) : '用卡') : (row.amount ? '¥' + money(row.amount) : '¥0') }}</template>
-            </el-table-column>
-            <el-table-column label="" width="70">
-              <template #default="{ row }">
-                <el-button v-if="canEditBooking(row)" link type="primary" @click="openBookingEdit(row)">修改</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-
-        <div class="block">
-          <div class="block-title">卡使用情况</div>
-          <el-table :data="cardUses" size="small" border>
-            <el-table-column label="日期" width="110">
-              <template #default="{ row }">{{ ymd(row.date) }}</template>
-            </el-table-column>
-            <el-table-column label="类型" width="90">
-              <template #default="{ row }">{{ ledgerLabel(row.type) }}</template>
-            </el-table-column>
-            <el-table-column label="金额" width="90">
-              <template #default="{ row }">¥{{ money(row.amount) }}</template>
-            </el-table-column>
-            <el-table-column prop="remark" label="用了哪张卡 / 场地" min-width="160" />
-          </el-table>
-          <div v-if="!cardUses.length" class="muted">还没有用卡记录</div>
-        </div>
-
-        <div class="block">
-          <div class="block-title">消费流水</div>
-          <el-table :data="detailLedger" size="small" border>
-            <el-table-column label="日期" width="110">
-              <template #default="{ row }">{{ ymd(row.date) }}</template>
-            </el-table-column>
-            <el-table-column label="类型" width="90">
-              <template #default="{ row }">{{ ledgerLabel(row.type) }}</template>
-            </el-table-column>
-            <el-table-column label="金额" width="90">
-              <template #default="{ row }">¥{{ money(row.amount) }}</template>
-            </el-table-column>
-            <el-table-column prop="remark" label="备注" min-width="120" />
-          </el-table>
-        </div>
+        <el-tabs v-model="detailTab" class="detail-tabs">
+          <el-tab-pane :label="'持卡（' + detailCards.length + '）'" name="cards">
+            <div class="tab-toolbar">
+              <el-button v-if="canIssueCard" type="success" @click="openIssue(detailUser)">给这位会员发卡</el-button>
+            </div>
+            <el-table :data="detailCards" stripe size="large" class="clean-table" max-height="560">
+              <el-table-column label="卡" min-width="170">
+                <template #default="{ row }">
+                  <div class="card-name">{{ row.cardName }}</div>
+                  <div v-if="row.rulesEdited || hasDatesEdited(row)" class="card-flags">
+                    <span v-if="row.rulesEdited">已改规则</span>
+                    <span v-if="hasDatesEdited(row)">已改有效期</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="88">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="typeTag(row.type)">{{ typeLabel(row.type) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="适用场地" min-width="110">
+                <template #default="{ row }">{{ courtTypesText(row) }}</template>
+              </el-table-column>
+              <el-table-column label="门店" min-width="110">
+                <template #default="{ row }">{{ shortVenue(row.venueName) || row.venueName || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="金额" width="90">
+                <template #default="{ row }">{{ row.price != null && row.price !== '' ? '¥' + money(row.price) : '-' }}</template>
+              </el-table-column>
+              <el-table-column label="余次" width="100">
+                <template #default="{ row }">
+                  <template v-if="isTimesLike(row.type)">
+                    <span class="remain-num">{{ row.remainingTimes }}</span>
+                    <span class="remain-total"> / {{ row.totalTimes }}</span>
+                  </template>
+                  <span v-else class="muted">-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="有效期" min-width="168">
+                <template #default="{ row }">{{ validityText(row) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="130">
+                <template #default="{ row }">
+                  <div class="status-stack">
+                    <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+                    <span v-if="isCardUnactivated(row)" class="status-note">未激活</span>
+                    <span v-else-if="isCardActivated(row)" class="status-note on">已激活</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="发卡人" min-width="100" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.issuerName || row.issuer || row.source || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="220" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" @click="openCardDetail(row)">详情</el-button>
+                  <el-button v-if="row.status === 'active'" link type="warning" @click="openPause(row)">停卡</el-button>
+                  <el-button v-if="row.status === 'disabled'" link type="success" @click="toggleListCard(row, 'enable')">复卡</el-button>
+                  <el-button v-if="canExtendCards && row.status !== 'refunded' && row.status !== 'deleted'" link type="primary" @click="openExtend(row)">延期</el-button>
+                  <el-button v-if="canRefundCard && row.status !== 'deleted'" link type="danger" @click="onDeleteCard(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="!detailCards.length" class="empty-hint">还没有卡</div>
+          </el-tab-pane>
+          <el-tab-pane :label="'预约（' + detailBookings.length + '）'" name="bookings">
+            <el-table :data="detailBookings" stripe size="large" class="clean-table clickable-table" max-height="560" @row-click="goBookingCell">
+              <el-table-column label="日期" width="120">
+                <template #default="{ row }">{{ ymd(row.date) }}</template>
+              </el-table-column>
+              <el-table-column prop="time" label="时段" width="130" />
+              <el-table-column prop="court" label="场地" min-width="120" />
+              <el-table-column label="门店" min-width="120">
+                <template #default="{ row }">{{ shortVenue(row.venueName) || row.venueName || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="bookingTag(row)">{{ bookingLabel(row) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="cardName" label="用卡" min-width="140" show-overflow-tooltip />
+              <el-table-column label="金额" width="100">
+                <template #default="{ row }">{{ row.cardName ? (row.amount ? '¥' + money(row.amount) : '用卡') : (row.amount ? '¥' + money(row.amount) : '¥0') }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="80" fixed="right">
+                <template #default="{ row }">
+                  <el-button v-if="canEditBooking(row)" link type="primary" @click.stop="openBookingEdit(row)">修改</el-button>
+                  <span v-else class="muted">-</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="detailBookings.length" class="tab-hint">点击一行，跳到当天预约管理里对应的格子</div>
+            <div v-if="!detailBookings.length" class="empty-hint">还没有预约</div>
+          </el-tab-pane>
+          <el-tab-pane :label="'上课记录（' + detailClasses.length + '）'" name="classes">
+            <el-table :data="detailClasses" stripe size="large" class="clean-table clickable-table" max-height="560" @row-click="goBookingCell">
+              <el-table-column label="日期" width="120">
+                <template #default="{ row }">{{ ymd(row.date) }}</template>
+              </el-table-column>
+              <el-table-column prop="time" label="时段" width="130" />
+              <el-table-column label="课程" min-width="160">
+                <template #default="{ row }">
+                  <div class="card-name">{{ row.className || (row.kind === 'coach' ? '私教课' : '团课') }}</div>
+                  <div v-if="row.theme" class="card-flags">{{ row.theme }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="108">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="classKindTag(row)">{{ classKindLabel(row) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="教练" min-width="100" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.coachName || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="门店" min-width="110">
+                <template #default="{ row }">{{ shortVenue(row.venueName) || row.venueName || '-' }}</template>
+              </el-table-column>
+              <el-table-column prop="court" label="场地" min-width="100" />
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="bookingTag(row)">{{ bookingLabel(row) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="cardName" label="用卡" min-width="130" show-overflow-tooltip />
+            </el-table>
+            <div v-if="detailClasses.length" class="tab-hint">包含团课和私教。点击一行，跳到当天预约管理里对应的格子</div>
+            <div v-if="!detailClasses.length" class="empty-hint">还没有上课记录</div>
+          </el-tab-pane>
+          <el-tab-pane :label="'卡使用（' + cardUses.length + '）'" name="uses">
+            <el-table :data="cardUses" stripe size="large" class="clean-table" max-height="560">
+              <el-table-column label="日期" width="120">
+                <template #default="{ row }">{{ ymd(row.date) }}</template>
+              </el-table-column>
+              <el-table-column label="类型" width="110">
+                <template #default="{ row }">{{ ledgerLabel(row.type) }}</template>
+              </el-table-column>
+              <el-table-column label="金额" width="110">
+                <template #default="{ row }">
+                  <span :class="{ 'amt-neg': Number(row.amount) < 0, 'amt-pos': Number(row.amount) > 0 }">¥{{ money(row.amount) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="remark" label="用了哪张卡 / 场地" min-width="280" show-overflow-tooltip />
+            </el-table>
+            <div v-if="!cardUses.length" class="empty-hint">还没有用卡记录</div>
+          </el-tab-pane>
+          <el-tab-pane :label="'消费流水（' + detailLedger.length + '）'" name="ledger">
+            <el-table :data="detailLedger" stripe size="large" class="clean-table" max-height="560">
+              <el-table-column label="日期" width="120">
+                <template #default="{ row }">{{ ymd(row.date) }}</template>
+              </el-table-column>
+              <el-table-column label="类型" width="110">
+                <template #default="{ row }">{{ ledgerLabel(row.type) }}</template>
+              </el-table-column>
+              <el-table-column label="金额" width="110">
+                <template #default="{ row }">
+                  <span :class="{ 'amt-neg': Number(row.amount) < 0, 'amt-pos': Number(row.amount) > 0 }">¥{{ money(row.amount) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="remark" label="备注" min-width="280" show-overflow-tooltip />
+            </el-table>
+            <div v-if="!detailLedger.length" class="empty-hint">还没有流水</div>
+          </el-tab-pane>
+        </el-tabs>
       </div>
     </el-drawer>
+
 
     <el-dialog v-model="bookEditVisible" title="修改未开始的预约" width="460px">
       <el-form label-width="80px">
@@ -368,6 +482,7 @@
           <template #default="{ row }">
             {{ row.cardName }}
             <el-tag v-if="row.rulesEdited" size="small" type="warning" style="margin-left:4px">已改规则</el-tag>
+            <el-tag v-if="hasDatesEdited(row)" size="small" type="danger" style="margin-left:4px">已改有效期</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="类型" width="90">
@@ -388,11 +503,13 @@
           </template>
         </el-table-column>
         <el-table-column label="有效期" min-width="160">
-          <template #default="{ row }">{{ row.validFrom || '-' }} ~ {{ row.validTo || '不限' }}</template>
+          <template #default="{ row }">{{ validityText(row) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="160">
           <template #default="{ row }">
             <el-tag :type="statusTag(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+            <el-tag v-if="isCardUnactivated(row)" size="small" type="warning" style="margin-left:4px">未激活</el-tag>
+            <el-tag v-else-if="isCardActivated(row)" size="small" type="success" style="margin-left:4px">已激活</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
@@ -426,11 +543,13 @@
         <el-table-column label="用户" width="120" prop="nickName" />
         <el-table-column label="手机" width="130" prop="phone" />
         <el-table-column label="有效期" min-width="170">
-          <template #default="{ row }">{{ row.validFrom || '-' }} ~ {{ row.validTo || '不限' }}</template>
+          <template #default="{ row }">{{ validityText(row) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="160">
           <template #default="{ row }">
             <el-tag size="small" :type="statusTag(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            <el-tag v-if="isCardUnactivated(row)" size="small" type="warning" style="margin-left:4px">未激活</el-tag>
+            <el-tag v-else-if="isCardActivated(row)" size="small" type="success" style="margin-left:4px">已激活</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -451,8 +570,9 @@
         </el-form-item>
         <el-form-item label="选择卡券" required>
           <el-select v-model="issueForm.templateId" filterable placeholder="先选一张要发的卡" style="width: 360px" @change="onTemplateChange">
-            <el-option v-for="t in activeTemplates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+            <el-option v-for="t in issuableTemplates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
+          <div class="hint" style="margin-left:0">只列出当前发卡场馆可发的卡券（不限门店或包含本店）</div>
           <el-tag v-if="selectedTemplate" :type="typeTag(selectedTemplate.type)" size="small" style="margin-left:8px">{{ typeLabel(selectedTemplate.type) }}</el-tag>
         </el-form-item>
         <el-form-item label="发卡人" required>
@@ -466,16 +586,16 @@
           <el-input-number v-model="issueForm.totalTimes" :min="1" />
         </el-form-item>
         <el-form-item label="有效期">
-          <el-radio-group v-model="issueForm.activateMode" @change="applyIssueDates">
+          <el-radio-group v-model="issueForm.activateMode" @change="onIssueActivateOrDaysChange">
             <el-radio label="now">立即激活</el-radio>
             <el-radio label="first_use">首次使用激活</el-radio>
           </el-radio-group>
-          <el-input-number v-model="issueForm.durationDays" :min="0" style="margin-left:8px" @change="applyIssueDates" />
+          <el-input-number v-model="issueForm.durationDays" :min="0" style="margin-left:8px" @change="onIssueActivateOrDaysChange" />
           <span class="hint">天，0 = 不限</span>
           <div v-if="issueForm.activateMode === 'now'" style="margin-top:8px">
-            <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" />
+            <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" @change="onIssueDatesManual" />
             <span style="margin:0 8px">至</span>
-            <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="不限" />
+            <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="不限" @change="onIssueDatesManual" />
           </div>
           <div v-else class="hint" style="margin-left:0">发卡时不写日期，第一次订场使用后按 {{ issueForm.durationDays || 0 }} 天开始计算</div>
         </el-form-item>
@@ -561,8 +681,9 @@
         </el-form-item>
         <el-form-item label="选择卡模板" required>
           <el-select v-model="issueForm.templateId" filterable teleported placeholder="输入名称搜索卡模板" style="width: 100%" @change="onTemplateChange">
-            <el-option v-for="t in activeTemplates" :key="t._id" :label="`${t.name}（${typeLabel(t.type)}）`" :value="t._id" />
+            <el-option v-for="t in issuableTemplates" :key="t._id" :label="`${t.name}（${typeLabel(t.type)}）`" :value="t._id" />
           </el-select>
+          <div class="hint">只列出当前发卡场馆可发的卡券（不限门店或包含本店）</div>
         </el-form-item>
         <el-form-item v-if="selectedTemplate" label="卡类型">
           <el-tag :type="typeTag(selectedTemplate.type)">{{ typeLabel(selectedTemplate.type) }}</el-tag>
@@ -580,11 +701,21 @@
         <el-form-item v-if="selectedTemplate && isTimesLike(selectedTemplate.type)" label="次数">
           <el-input-number v-model="issueForm.totalTimes" :min="1" />
         </el-form-item>
-        <el-form-item label="生效日期">
-          <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" />
-        </el-form-item>
-        <el-form-item label="到期日期">
-          <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="可留空" />
+        <el-form-item label="有效期">
+          <el-radio-group v-model="issueForm.activateMode" @change="onIssueActivateOrDaysChange">
+            <el-radio label="now">立即激活</el-radio>
+            <el-radio label="first_use">首次使用激活</el-radio>
+          </el-radio-group>
+          <div style="margin-top:8px">
+            <el-input-number v-model="issueForm.durationDays" :min="0" @change="onIssueActivateOrDaysChange" />
+            <span class="hint">天，0 = 不限。选模板后按有效天数自动填日期，可再改</span>
+          </div>
+          <div v-if="issueForm.activateMode === 'now'" style="margin-top:8px">
+            <el-date-picker v-model="issueForm.validFrom" type="date" value-format="YYYY-MM-DD" @change="onIssueDatesManual" />
+            <span style="margin:0 8px">至</span>
+            <el-date-picker v-model="issueForm.validTo" type="date" value-format="YYYY-MM-DD" placeholder="不限" @change="onIssueDatesManual" />
+          </div>
+          <div v-else class="hint" style="margin-left:0">发卡时不写日期，第一次使用后按 {{ issueForm.durationDays || 0 }} 天开始计算</div>
         </el-form-item>
         <el-form-item label="可用门店">
           <el-select v-model="issueForm.allowedVenueIds" multiple clearable filterable placeholder="不选 = 所有门店" style="width: 100%">
@@ -658,17 +789,24 @@
       <el-form label-width="110px" v-if="cardForm._id">
         <el-form-item label="标识">
           <el-tag v-if="cardForm.rulesEdited" type="warning" size="small">已改规则 · 仅此张卡</el-tag>
-          <el-tag v-else type="info" size="small">沿用模板</el-tag>
+          <el-tag v-if="hasDatesEdited(cardForm)" type="danger" size="small" style="margin-left:6px">已改有效期</el-tag>
+          <el-tag v-if="!cardForm.rulesEdited && !hasDatesEdited(cardForm)" type="info" size="small">沿用模板</el-tag>
           <span class="hint">改这里只动这一张持卡，不会改卡模板，也不能批量套到别人卡上</span>
         </el-form-item>
         <el-form-item label="卡名称">
           <el-input v-model="cardForm.cardName" />
+        </el-form-item>
+        <el-form-item label="实收金额">
+          <el-input-number v-model="cardForm.price" :min="0" :precision="2" :step="1" />
+          <span class="hint">录错可改；保存后写流水「改卡实收」，差额计入 card_price_adjust</span>
         </el-form-item>
         <el-form-item label="类型">
           <el-tag :type="typeTag(cardForm.type)" size="small">{{ typeLabel(cardForm.type) }}</el-tag>
         </el-form-item>
         <el-form-item label="状态">
           <el-tag :type="statusTag(cardForm.status)" size="small">{{ statusLabel(cardForm.status) }}</el-tag>
+          <el-tag v-if="isCardUnactivated(cardForm)" type="warning" size="small" style="margin-left:6px">未激活</el-tag>
+          <el-tag v-else-if="isCardActivated(cardForm)" type="success" size="small" style="margin-left:6px">已激活</el-tag>
         </el-form-item>
         <el-form-item v-if="isTimesLike(cardForm.type)" label="剩余/总次">
           <el-input-number v-model="cardForm.remainingTimes" :min="0" />
@@ -690,14 +828,20 @@
             <el-option v-for="v in issueVenues" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="cardForm.type !== 'group'" label="可用规则">
+        <el-form-item label="适用场地">
+          <el-checkbox-group v-model="cardForm.timeRule.courtTypes">
+            <el-checkbox v-for="t in COURT_TYPE_OPTIONS" :key="t" :label="t" :value="t">{{ t }}</el-checkbox>
+          </el-checkbox-group>
+          <div class="hint" style="margin-left:0">不勾选 = 不限。只改这一张卡。旧卡若还没设置，打开时会按卡名带出识别结果。</div>
+        </el-form-item>
+        <el-form-item label="可用规则">
           <el-radio-group v-model="cardForm.timeRule.mode">
             <el-radio label="unlimited" value="unlimited">有效期内任意时间</el-radio>
             <el-radio label="rules" value="rules">自定义星期 + 时段</el-radio>
             <el-radio label="dates" value="dates">节假日 / 指定日期</el-radio>
           </el-radio-group>
         </el-form-item>
-        <div v-if="cardForm.type !== 'group' && cardForm.timeRule && cardForm.timeRule.mode === 'dates'" class="rules-box">
+        <div v-if="cardForm.timeRule && cardForm.timeRule.mode === 'dates'" class="rules-box">
           <div v-for="(rg, i) in (cardForm.timeRule.dateRanges || [])" :key="i" class="slot-row" style="margin-bottom:8px">
             <el-date-picker
               :model-value="rg.range && rg.range.length ? rg.range : (rg.start && rg.end ? [rg.start, rg.end] : [])"
@@ -711,7 +855,7 @@
           </div>
           <el-button size="small" @click="(cardForm.timeRule.dateRanges || (cardForm.timeRule.dateRanges = [])).push({ start: '', end: '', range: [] })">加一段日期</el-button>
         </div>
-        <div v-if="cardForm.type !== 'group' && cardForm.timeRule && cardForm.timeRule.mode === 'rules'" class="rules-box">
+        <div v-if="cardForm.timeRule && cardForm.timeRule.mode === 'rules'" class="rules-box">
           <div v-for="(rule, ri) in cardForm.timeRule.rules" :key="ri" class="rule-card">
             <div class="rule-head">
               <b>规则 {{ ri + 1 }}</b>
@@ -746,6 +890,8 @@
       <template #footer>
         <el-button v-if="cardForm.status === 'active'" type="warning" :loading="cardSaving" @click="toggleCardStatus('disable')">停用此卡</el-button>
         <el-button v-if="cardForm.status === 'disabled'" type="success" :loading="cardSaving" @click="toggleCardStatus('enable')">恢复启用</el-button>
+        <el-button v-if="canToggleActivation(cardForm) && isCardUnactivated(cardForm)" type="primary" :loading="cardSaving" @click="toggleCardActivation('activate')">激活此卡</el-button>
+        <el-button v-if="canToggleActivation(cardForm) && isCardActivated(cardForm)" type="info" :loading="cardSaving" @click="toggleCardActivation('unactivate')">改为未激活</el-button>
         <el-button @click="cardDetailVisible = false">取消</el-button>
         <el-button type="primary" :loading="cardSaving" @click="saveCardDetail">保存修改</el-button>
       </template>
@@ -764,10 +910,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { can, roleKind } from '../utils/auth'
+import { can, canAccess, roleKind } from '../utils/auth'
+import { COURT_TYPE_OPTIONS, courtTypesText, formCourtTypesForEdit, normalizeCourtTypes } from '../utils/courtTypeRule.js'
+import { todayYmd, downloadExcelHtml } from '../utils/exportTable.js'
 const route = useRoute()
 const router = useRouter()
 const backFrom = computed(() => String(route.query.from || ''))
@@ -792,15 +940,28 @@ const selected = ref([])
 const tagList = ref([])
 const venueCols = ref([])
 const exporting = ref(false)
+const page = ref(1)
+const pageSize = ref(50)
+const userTotal = ref(0)
 const regVisible = ref(false)
 const regSaving = ref(false)
 const regForm = ref({ phone: '', nickName: '' })
 const currentUser = ref(null)
 const venueList = ref([])
+function operatorVenue() {
+  const lockedId = localStorage.getItem('admin_venue_id') || ''
+  const lockedName = localStorage.getItem('admin_venue_name') || ''
+  if (lockedId) {
+    return { venueId: lockedId, venueName: lockedName || localStorage.getItem('venue_name') || '' }
+  }
+  return {
+    venueId: localStorage.getItem('venue_id') || '',
+    venueName: localStorage.getItem('venue_name') || ''
+  }
+}
 const issueVenues = computed(() => {
   const own = localStorage.getItem('admin_venue_id') || ''
-  const role = localStorage.getItem('admin_role') || ''
-  if (own && role !== 'admin' && role !== 'super') return venueList.value.filter((v) => (v.venueId || v._id) === own)
+  if (own && roleKind() !== 'admin') return venueList.value.filter((v) => (v.venueId || v._id) === own)
   return venueList.value
 })
 const disableVisible = ref(false)
@@ -821,7 +982,9 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailUser = ref({})
 const detailCards = ref([])
+const detailTab = ref('cards')
 const detailBookings = ref([])
+const detailClasses = ref([])
 const bookEditVisible = ref(false)
 const bookEditSaving = ref(false)
 const bookEdit = ref({ id: '', court: '', date: '', time: '', amount: 0, remark: '' })
@@ -829,8 +992,11 @@ const cardUses = computed(() => (detailLedger.value || []).filter((r) => ['card_
 const detailLedger = ref([])
 const detailTagIds = ref([])
 const detailRemark = ref('')
+const detailTagEdit = ref(false)
+const walletEdit = ref(false)
 const wallet = ref({ addBalance: 0, addPoints: 0, remark: '', migrated: false })
 const walletSaving = ref(false)
+const detailTags = computed(() => (detailTagIds.value || []).map((id) => tagList.value.find((t) => t._id === id)).filter(Boolean))
 
 const tagManageVisible = ref(false)
 const newTagName = ref('')
@@ -898,7 +1064,7 @@ const extendCard = ref({})
 const extendDays = ref(30)
 const cardDetailVisible = ref(false)
 const cardSaving = ref(false)
-const cardForm = ref({ _id: '', cardName: '', type: '', status: '', remainingTimes: 0, totalTimes: 0, validFrom: '', validTo: '', timeRule: { mode: 'unlimited', rules: [] }, rulesEdited: false })
+const cardForm = ref({ _id: '', cardName: '', type: '', status: '', price: 0, remainingTimes: 0, totalTimes: 0, validFrom: '', validTo: '', timeRule: { mode: 'unlimited', rules: [] }, rulesEdited: false, datesEdited: false, remark: '' })
 const isStoreManager = roleKind() === 'manager'
 const canExtendCards = can('extendCard')
 const canRefundCard = can('refundCard')
@@ -907,15 +1073,24 @@ const extendMin = isStoreManager ? -120 : -36500
 const extendMax = isStoreManager ? 120 : 36500
 const issueForm = ref({
   templateId: '', price: 0, totalTimes: 10, validFrom: '', validTo: '', payMeituan: 0, payDouyin: 0, payOffline: 0,
-  remark: '', venueId: '', venueName: '', issuerName: ''
+  remark: '', venueId: '', venueName: '', issuerName: '', activateMode: 'now', durationDays: 0, allowedVenueIds: []
 })
+const issueDatesEdited = ref(false)
 
 const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 
 const activeTemplates = computed(() => templates.value.filter((t) => t.status === 'active'))
+const issuableTemplates = computed(() => activeTemplates.value.filter((t) => templateAllowedAtVenue(t, issueForm.value.venueId)))
 const selectedTemplate = computed(() => templates.value.find((t) => t._id === issueForm.value.templateId))
+const cardDetailTitle = computed(() => {
+  const name = cardForm.value.cardName || '卡详情'
+  const tags = []
+  if (cardForm.value.rulesEdited) tags.push('已改规则')
+  if (hasDatesEdited(cardForm.value)) tags.push('已改有效期')
+  return tags.length ? name + '（' + tags.join(' · ') + '）' : name
+})
 const previewNewValidTo = computed(() => {
   if (!extendVisible.value) return '-'
   return addDaysYmd(extendCard.value.validTo, extendDays.value)
@@ -968,6 +1143,63 @@ function friendlyMsg(msg) {
 function isTimesLike(t) {
   return t === 'times' || t === 'coach' || t === 'group'
 }
+function todayYmdLocal() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+function templateVenueIds(tpl) {
+  if (!tpl) return []
+  const rule = parseCardRule(tpl.timeRule || tpl.time_rule)
+  return (rule.venueIds || []).map((x) => String(x)).filter(Boolean)
+}
+function templateAllowedAtVenue(tpl, venueId) {
+  const ids = templateVenueIds(tpl)
+  if (!ids.length) return true
+  if (!venueId) return false
+  return ids.indexOf(String(venueId)) >= 0
+}
+function hasDatesEdited(card) {
+  if (!card) return false
+  if (card.datesEdited) return true
+  if (/\[已改有效期\]/.test(String(card.remark || ''))) return true
+  const tpl = templates.value.find((t) => String(t._id) === String(card.templateId || card.template_id || ''))
+  if (!tpl) return false
+  const rule = parseCardRule(tpl.timeRule || tpl.time_rule)
+  const mode = rule.activateMode || 'now'
+  if (mode === 'first_use') return false
+  const days = Number(tpl.durationDays || rule.durationDays || 0)
+  const from = String(card.validFrom || '').slice(0, 10)
+  const to = String(card.validTo || '').slice(0, 10)
+  if (rule.mode === 'dates' && (rule.dateRanges || []).length) {
+    const starts = rule.dateRanges.map((x) => x.start).filter(Boolean).sort()
+    const ends = rule.dateRanges.map((x) => x.end).filter(Boolean).sort()
+    return from !== (starts[0] || '') || to !== (ends[ends.length - 1] || '')
+  }
+  if (days > 0) {
+    if (!from) return true
+    return to !== addDaysYmd(from, days)
+  }
+  return !!to
+}
+function computeIssueDateDefault(tpl, activateMode, durationDays) {
+  const rule = parseCardRule(tpl && (tpl.timeRule || tpl.time_rule))
+  const mode = activateMode || rule.activateMode || 'now'
+  const days = durationDays != null && durationDays !== ''
+    ? Number(durationDays)
+    : (Number(tpl && (tpl.durationDays || rule.durationDays)) || 0)
+  if (mode === 'first_use') return { validFrom: '', validTo: '', activateMode: 'first_use', durationDays: days || 0 }
+  if (rule.mode === 'dates' && (rule.dateRanges || []).length) {
+    const starts = rule.dateRanges.map((x) => x.start).filter(Boolean).sort()
+    const ends = rule.dateRanges.map((x) => x.end).filter(Boolean).sort()
+    return { validFrom: starts[0] || todayYmdLocal(), validTo: ends.length ? ends[ends.length - 1] : '', activateMode: 'now', durationDays: days || 0 }
+  }
+  if (days > 0) {
+    const from = todayYmdLocal()
+    return { validFrom: from, validTo: addDaysYmd(from, days), activateMode: 'now', durationDays: days }
+  }
+  return { validFrom: '', validTo: '', activateMode: mode, durationDays: 0 }
+}
 function tplLabel(t) {
   const tag = typeLabel(t.type)
   const times = Number(t.totalTimes || t.total_times || 0)
@@ -986,6 +1218,32 @@ function statusLabel(s) {
 function statusTag(s) {
   return { active: 'success', expired: 'info', used_up: 'warning', refunded: 'danger', disabled: 'info' }[s] || 'info'
 }
+function parseCardTimeRule(card) {
+  if (!card) return {}
+  let rule = card.timeRule || card.time_rule
+  if (typeof rule === 'string') {
+    try { rule = JSON.parse(rule) } catch (e) { rule = null }
+  }
+  return rule && typeof rule === 'object' ? rule : {}
+}
+function isCardActivated(card) {
+  return !!(card && String(card.validFrom || card.valid_from || '').slice(0, 10))
+}
+function isCardUnactivated(card) {
+  if (!card) return false
+  if (isCardActivated(card)) return false
+  const to = String(card.validTo || card.valid_to || '').slice(0, 10)
+  const mode = parseCardTimeRule(card).activateMode || ''
+  return mode === 'first_use' || !to
+}
+function validityText(card) {
+  if (isCardUnactivated(card)) return '未激活'
+  return (card && card.validFrom ? card.validFrom : '-') + ' ~ ' + ((card && card.validTo) ? card.validTo : '不限')
+}
+function canToggleActivation(card) {
+  const st = card && card.status
+  return st !== 'deleted' && st !== 'refunded'
+}
 function emptyCardRule() {
   return { weekdays: [1, 2, 3, 4, 5], unlimited: false, timeSlots: [{ start: '10:00', end: '18:00' }] }
 }
@@ -1002,8 +1260,12 @@ function parseCardRule(raw) {
       start: x.start || '', end: x.end || '', range: [x.start || '', x.end || ''].filter(Boolean)
     })) : [],
     holidayKey: r.holidayKey || '',
-    venueIds: Array.isArray(r.venueIds) ? r.venueIds.slice() : []
+    venueIds: Array.isArray(r.venueIds) ? r.venueIds.slice() : [],
+    courtTypes: Array.isArray(r.courtTypes) ? r.courtTypes.slice() : [],
+    activateMode: r.activateMode || '',
+    durationDays: Number(r.durationDays) || 0
   }
+  if (r.pause) extra.pause = r.pause
   if (r.mode === 'dates') return { mode: 'dates', rules: r.rules && r.rules.length ? r.rules : [emptyCardRule()], ...extra }
   if (r.mode === 'unlimited' || r.mode === 'all') return { mode: 'unlimited', rules: r.rules && r.rules.length ? r.rules : [emptyCardRule()], ...extra }
   const rules = Array.isArray(r.rules) && r.rules.length ? r.rules.map((x) => ({
@@ -1015,6 +1277,7 @@ function parseCardRule(raw) {
 }
 function openCardDetail(card) {
   const rule = parseCardRule(card.timeRule || card.time_rule)
+  rule.courtTypes = formCourtTypesForEdit(card.timeRule || card.time_rule, card.cardName || card.card_name, card.type)
   if (!(Number(rule.maxHoursPerDay) > 0)) {
     const tpl = templates.value.find((t) => String(t._id) === String(card.templateId || card.template_id || ''))
     const fromTpl = parseCardRule(tpl && (tpl.timeRule || tpl.time_rule))
@@ -1025,12 +1288,15 @@ function openCardDetail(card) {
     cardName: card.cardName || '',
     type: card.type,
     status: card.status,
+    price: card.price != null && card.price !== '' ? Number(card.price) : 0,
     remainingTimes: Number(card.remainingTimes || 0),
     totalTimes: Number(card.totalTimes || 0),
     validFrom: card.validFrom || '',
     validTo: card.validTo || '',
     timeRule: rule,
-    rulesEdited: !!card.rulesEdited
+    rulesEdited: !!card.rulesEdited,
+    datesEdited: !!card.datesEdited || /\[已改有效期\]/.test(String(card.remark || '')),
+    remark: card.remark || ''
   }
   cardDetailVisible.value = true
 }
@@ -1073,6 +1339,45 @@ async function toggleCardStatus(action) {
     ElMessage.error(e.message || '失败')
   } finally { cardSaving.value = false }
 }
+async function toggleCardActivation(action) {
+  const name = cardForm.value.cardName || '这张卡'
+  try {
+    if (action === 'activate') {
+      const days = Number((cardForm.value.timeRule && cardForm.value.timeRule.durationDays) || 0)
+      const from = todayYmdLocal()
+      const to = days > 0 ? addDaysYmd(from, days) : ''
+      await ElMessageBox.confirm(
+        `将「${name}」激活，有效期为 ${from} ~ ${to || '不限'}。次数与停用状态不变。`,
+        '激活此卡',
+        { type: 'warning', confirmButtonText: '确认激活' }
+      )
+    } else {
+      await ElMessageBox.confirm(
+        `将「${name}」改为未激活：清空有效期，次数与停用状态不变，以后再激活或第一次使用后才开始计算有效期。`,
+        '改为未激活',
+        { type: 'warning', confirmButtonText: '确认改为未激活' }
+      )
+    }
+  } catch (e) { return }
+  cardSaving.value = true
+  try {
+    const result = await post('/adminSaveMemberCard', {
+      action: action === 'activate' ? 'activate' : 'unactivate',
+      cardId: cardForm.value._id,
+      operatorName: localStorage.getItem('admin_name') || '管理员'
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '操作失败'); return }
+    ElMessage.success(action === 'activate' ? '已激活' : '已改为未激活')
+    cardForm.value.validFrom = result.validFrom || ''
+    cardForm.value.validTo = result.validTo || ''
+    if (result.status) cardForm.value.status = result.status
+    if (!cardForm.value.timeRule || typeof cardForm.value.timeRule !== 'object') cardForm.value.timeRule = {}
+    if (result.activateMode) cardForm.value.timeRule.activateMode = result.activateMode
+    refreshCards()
+  } catch (e) {
+    ElMessage.error(e.message || '失败')
+  } finally { cardSaving.value = false }
+}
 async function saveCardDetail() {
   if (!cardForm.value._id) return
   cardSaving.value = true
@@ -1083,11 +1388,15 @@ async function saveCardDetail() {
       operatorName: localStorage.getItem('admin_name') || '管理员',
       data: {
         cardName: cardForm.value.cardName,
+        price: cardForm.value.price,
         validFrom: cardForm.value.validFrom,
         validTo: cardForm.value.validTo,
         remainingTimes: cardForm.value.remainingTimes,
         totalTimes: cardForm.value.totalTimes,
-        timeRule: cardForm.value.timeRule
+        timeRule: {
+          ...cardForm.value.timeRule,
+          courtTypes: normalizeCourtTypes((cardForm.value.timeRule && cardForm.value.timeRule.courtTypes) || []) || []
+        }
       }
     })
     if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
@@ -1104,7 +1413,23 @@ function refreshCards() {
   if (cardsVisible.value && currentUser.value) openCards(currentUser.value)
 }
 function ledgerLabel(t) {
-  return { court_pay: '订场支付', card_issue: '发卡', card_refund: '退卡', card_use: '用卡', enroll: '团课', balance_in: '实充余额', balance_out: '扣减余额', balance_migrate: '迁入余额（不计营业额）', court_cancel: '取消订场' }[t] || t
+  return {
+    court_pay: '订场支付',
+    card_issue: '发卡',
+    issue_card: '发卡',
+    card_refund: '退卡',
+    refund_card: '退卡',
+    card_use: '用卡',
+    card_use_cancel: '取消用卡',
+    enroll: '团课',
+    balance_in: '实充余额',
+    balance_out: '扣减余额',
+    balance_migrate: '迁入余额（不计营业额）',
+    court_cancel: '取消订场',
+    court_refund: '退款',
+    court_adjust: '改金额',
+    card_price_adjust: '改卡实收'
+  }[t] || t
 }
 function formatTime(t) {
   if (!t) return '-'
@@ -1119,6 +1444,12 @@ async function post(path, body = {}) {
     body: JSON.stringify(body)
   })
   const text = await res.text()
+  if (!res.ok) {
+    if (res.status === 504 || res.status === 502 || res.status === 408) {
+      return { ok: false, msg: '服务响应超时，请稍后重试或缩小筛选范围' }
+    }
+    return { ok: false, msg: text ? ('请求失败（' + res.status + '）') : ('请求失败（' + res.status + '），接口无返回') }
+  }
   if (!text) return { ok: false, msg: '接口无返回，请覆盖部署对应云函数' }
   let data
   try { data = JSON.parse(text) } catch (e) { return { ok: false, msg: '接口返回不是 JSON，请检查云函数是否部署' } }
@@ -1135,8 +1466,8 @@ async function submitReg() {
     const result = await post('/adminRegisterUser', {
       phone,
       nickName: (regForm.value.nickName || '').trim() || phone,
-      venueId: localStorage.getItem('venue_id') || '',
-      venueName: localStorage.getItem('venue_name') || ''
+      venueId: operatorVenue().venueId,
+      venueName: operatorVenue().venueName
     })
     if (!result.ok) { ElMessage.error(result.msg || '失败'); return }
     ElMessage.success(result.existed ? '该手机已存在' : '已新增')
@@ -1168,13 +1499,16 @@ async function loadData() {
       cardStatus: filterCardStatus.value || '',
       createdFrom: createdFrom.value || '',
       createdTo: createdTo.value || '',
-      sort: sort.value
+      sort: sort.value,
+      page: page.value,
+      pageSize: pageSize.value
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '加载失败')
       return
     }
     list.value = result.list || []
+    userTotal.value = Number(result.total != null ? result.total : list.value.length) || 0
     if (result.tags) tagList.value = result.tags
     if (result.venues) venueCols.value = result.venues
   } catch (e) {
@@ -1184,6 +1518,14 @@ async function loadData() {
   }
 }
 
+function searchUsers() {
+  page.value = 1
+  loadData()
+}
+function onPageSizeChange() {
+  page.value = 1
+  loadData()
+}
 function resetAndLoad() {
   keyword.value = ''
   filterTagId.value = ''
@@ -1193,31 +1535,61 @@ function resetAndLoad() {
   createdFrom.value = ''
   createdTo.value = ''
   sort.value = 'id_desc'
+  page.value = 1
   loadData()
 }
 
 async function exportExcel() {
   exporting.value = true
   try {
-    const result = await post('/adminGetUsers', {
-      action: 'list',
-      keyword: keyword.value.trim(),
-      tagId: filterTagId.value || '',
-      cardType: filterCardType.value || '',
-      cardName: filterCardName.value || '',
-      cardStatus: filterCardStatus.value || '',
-      createdFrom: createdFrom.value || '',
-      createdTo: createdTo.value || '',
-      sort: sort.value,
-      export: true,
-      pageSize: 500
-    })
-    if (!result.ok) {
-      ElMessage.error(result.msg || '导出失败')
+    const chunkSize = 500
+    const hardCap = 20000
+    let pageNo = 1
+    let rows = []
+    let venues = venueCols.value
+    let truncated = false
+    let total = 0
+    while (rows.length < hardCap) {
+      const result = await post('/adminGetUsers', {
+        action: 'list',
+        keyword: keyword.value.trim(),
+        tagId: filterTagId.value || '',
+        cardType: filterCardType.value || '',
+        cardName: filterCardName.value || '',
+        cardStatus: filterCardStatus.value || '',
+        createdFrom: createdFrom.value || '',
+        createdTo: createdTo.value || '',
+        sort: sort.value,
+        export: true,
+        page: pageNo,
+        pageSize: chunkSize
+      })
+      if (!result.ok) {
+        ElMessage.error(result.msg || '导出失败')
+        return
+      }
+      const chunk = result.list || []
+      if (result.venues && result.venues.length) venues = result.venues
+      total = Number(result.total != null ? result.total : 0) || total
+      rows = rows.concat(chunk)
+      if (rows.length > hardCap) {
+        rows = rows.slice(0, hardCap)
+        truncated = true
+        break
+      }
+      if (total > hardCap && rows.length >= hardCap) {
+        truncated = true
+        break
+      }
+      if (!chunk.length || chunk.length < chunkSize || (total && rows.length >= total)) break
+      pageNo += 1
+      if (pageNo > 80) break
+    }
+    truncated = truncated || (total > rows.length)
+    if (!rows.length) {
+      ElMessage.warning('当前筛选没有可导出的用户')
       return
     }
-    const rows = result.list || []
-    const venues = result.venues && result.venues.length ? result.venues : venueCols.value
     const extraNames = []
     rows.forEach((u) => {
       ;(u.spendByVenue || []).forEach((s) => {
@@ -1228,18 +1600,22 @@ async function exportExcel() {
     const venueNames = venues.map((v) => v.name).concat(extraNames)
     const header = ['昵称', '手机号', '会员号', '标签', '累计消费', '余额', '积分']
       .concat(venueNames.map((n) => n + '消费'))
-      .concat(['持卡数', '最近到店', '所属场馆', '注册时间', '备注'])
-    const lines = [header.map(csvCell).join(',')]
-    rows.forEach((u) => {
+      .concat(['持卡数', '持卡明细', '最近到店', '所属场馆', '注册时间', '备注'])
+    const tableRows = rows.map((u) => {
       const spendMap = {}
       ;(u.spendByVenue || []).forEach((s) => {
         spendMap[s.venueName || '未分馆'] = Number(s.amount) || 0
       })
-      const line = [
+      const cardSummary = (u.cards || []).map((c) => {
+        const bits = [c.cardName || '', statusLabel(c.status)]
+        if (isTimesLike(c.type)) bits.push((c.remainingTimes || 0) + (c.totalTimes != null ? '/' + c.totalTimes : '') + '次')
+        return bits.filter(Boolean).join(' ')
+      }).join('；')
+      return [
         displayName(u),
         u.phone || '',
         u.userId || '',
-        (u.tags || []).map((t) => t.name).join('、'),
+        (u.tags || []).map((tg) => tg.name).join('、'),
         money(u.totalSpend),
         money(u.balance),
         u.points || 0
@@ -1247,27 +1623,23 @@ async function exportExcel() {
         .concat(venueNames.map((n) => money(spendMap[n] || 0)))
         .concat([
           u.cardCount ?? 0,
+          cardSummary,
           ymd(u.lastVisit),
           u.venueName || '',
           formatTime(u.createdAt).slice(0, 10),
           u.remark || ''
         ])
-      lines.push(line.map(csvCell).join(','))
     })
-    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'application/vnd.ms-excel;charset=utf-8;' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = '用户列表_' + new Date().toISOString().slice(0, 10) + '.xls'
-    a.click()
-    URL.revokeObjectURL(a.href)
-    ElMessage.success('已导出 ' + rows.length + ' 人')
+    const fname = '用户导出-' + todayYmd() + '.xls'
+    downloadExcelHtml(fname, '用户', header, tableRows)
+    const more = truncated ? '（已达上限，仅导出前 ' + rows.length + ' 人）' : ''
+    ElMessage.success('已导出 ' + rows.length + ' 人' + more)
   } catch (e) {
     ElMessage.error(e.message || '导出失败')
   } finally {
     exporting.value = false
   }
 }
-
 function bookingLabel(row) {
   if (row.status === 'cancelled') return '已取消'
   if (row.status === 'done' || row.status === 'completed') return '已完成'
@@ -1283,6 +1655,40 @@ function canEditBooking(row) {
   if (!row || row.status !== 'booked') return false
   const start = String(row.date || '') + ' ' + String(row.time || '00:00').split('-')[0]
   return new Date(start.replace(/-/g, '/')).getTime() > Date.now()
+}
+function classKindLabel(row) {
+  if (!row) return '-'
+  if (row.kind === 'coach' || (!row.groupClassId && (row.coachName || row.coachId))) return '私教'
+  if (row.classType === 'self') return '自组团课'
+  return '固定团课'
+}
+function classKindTag(row) {
+  if (classKindLabel(row) === '私教') return 'warning'
+  if (classKindLabel(row) === '自组团课') return ''
+  return 'success'
+}
+function goBookingCell(row) {
+  if (!row) return
+  if (!canAccess('/bookings')) {
+    ElMessage.warning('没有预约管理的查看权限')
+    return
+  }
+  const date = ymd(row.date)
+  if (!date) {
+    ElMessage.warning('这条记录没有日期，无法跳转')
+    return
+  }
+  const query = {
+    date,
+    time: row.time || '',
+    court: row.court || '',
+    venueId: row.venueId || '',
+    venueName: row.venueName || '',
+    bookingId: String(row._id || row.id || ''),
+    from: 'users'
+  }
+  detailVisible.value = false
+  router.push({ path: '/bookings', query })
 }
 function openBookingEdit(row) {
   bookEdit.value = {
@@ -1330,6 +1736,9 @@ async function openDetail(row) {
   currentUser.value = row
   detailVisible.value = true
   detailLoading.value = true
+  detailTagEdit.value = false
+  walletEdit.value = false
+  wallet.value = { addBalance: 0, addPoints: 0, remark: '', migrated: false }
   try {
     const result = await post('/adminGetUsers', { action: 'detail', userId: row._id })
     if (!result.ok) {
@@ -1337,8 +1746,10 @@ async function openDetail(row) {
       return
     }
     detailUser.value = result.user || row
+    detailTab.value = 'cards'
     detailCards.value = result.cards || []
     detailBookings.value = result.bookings || []
+    detailClasses.value = result.classes || []
     detailLedger.value = result.ledger || []
     detailTagIds.value = (result.user.tags || []).map((t) => t._id)
     detailRemark.value = result.user.remark || ''
@@ -1637,20 +2048,28 @@ async function onRefund(card) {
 function onVenuePick(id) {
   const v = venueList.value.find((x) => (x.venueId || x._id) === id)
   issueForm.value.venueName = v ? v.name : ''
+  const tpl = selectedTemplate.value
+  if (tpl && !templateAllowedAtVenue(tpl, id)) {
+    issueForm.value.templateId = ''
+    issueDatesEdited.value = false
+    ElMessage.warning('该卡券不能在当前场馆发放，请重新选择')
+  }
 }
 
 function blankIssue(extra) {
+  const op = operatorVenue()
+  const ex = extra || {}
   return {
     templateId: '',
     price: 0,
     totalTimes: 10,
-    validFrom: new Date().toISOString().slice(0, 10),
+    validFrom: '',
     validTo: '',
     activateMode: 'now',
-    durationDays: 30,
+    durationDays: 0,
     remark: '',
-    venueId: extra.venueId || localStorage.getItem('venue_id') || '',
-    venueName: extra.venueName || localStorage.getItem('venue_name') || '',
+    venueId: ex.venueId || op.venueId || '',
+    venueName: ex.venueName || op.venueName || '',
     issuerName: localStorage.getItem('admin_name') || '',
     allowedVenueIds: []
   }
@@ -1659,7 +2078,8 @@ function blankIssue(extra) {
 function openIssue(row) {
   batchMode.value = false
   currentUser.value = row
-  issueForm.value = blankIssue({ venueId: row.venueId, venueName: row.venueName })
+  issueForm.value = blankIssue(operatorVenue())
+  issueDatesEdited.value = false
   issueVisible.value = true
   loadTemplates()
 }
@@ -1712,10 +2132,8 @@ function openBatchIssue() {
   batchKeyword.value = keyword.value
   batchTagId.value = filterTagId.value
   batchSelected.value = []
-  issueForm.value = blankIssue({
-    venueId: localStorage.getItem('venue_id') || '',
-    venueName: localStorage.getItem('venue_name') || ''
-  })
+  issueForm.value = blankIssue(operatorVenue())
+  issueDatesEdited.value = false
   batchVisible.value = true
   loadTemplates()
   loadBatchUsers()
@@ -1767,6 +2185,10 @@ async function submitBatchIssue() {
   if (!issueForm.value.venueId) { ElMessage.warning('请选择发卡场馆'); return }
   if (!String(issueForm.value.issuerName || '').trim()) { ElMessage.warning('请填写发卡人'); return }
   if (!batchSelected.value.length) { ElMessage.warning('请勾选要发卡的用户'); return }
+  if (selectedTemplate.value && !templateAllowedAtVenue(selectedTemplate.value, issueForm.value.venueId)) {
+    ElMessage.warning('该卡券不能在当前场馆发放')
+    return
+  }
   const tpl = selectedTemplate.value
   try {
     await ElMessageBox.confirm(
@@ -1796,46 +2218,51 @@ async function submitBatchIssue() {
   }
 }
 
-function applyIssueDates() {
-  const days = Number(issueForm.value.durationDays) || 0
-  if (issueForm.value.activateMode === 'first_use') {
-    issueForm.value.validFrom = ''
-    issueForm.value.validTo = ''
-    return
-  }
-  const now = new Date()
-  const p = (n) => (n < 10 ? '0' + n : '' + n)
-  const ymd = (d) => d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-  issueForm.value.validFrom = ymd(now)
-  if (days > 0) {
-    const end = new Date(now)
-    end.setDate(end.getDate() + days)
-    issueForm.value.validTo = ymd(end)
-  } else {
-    issueForm.value.validTo = ''
-  }
+function applyIssueDates(force) {
+  if (!force && issueDatesEdited.value) return
+  const def = computeIssueDateDefault(
+    selectedTemplate.value,
+    issueForm.value.activateMode,
+    issueForm.value.durationDays
+  )
+  issueForm.value.validFrom = def.validFrom
+  issueForm.value.validTo = def.validTo
+}
+function onIssueActivateOrDaysChange() {
+  applyIssueDates(false)
+}
+function onIssueDatesManual() {
+  issueDatesEdited.value = true
 }
 function onTemplateChange(id) {
   const t = templates.value.find((x) => x._id === id)
   if (!t) return
+  issueDatesEdited.value = false
   issueForm.value.totalTimes = t.totalTimes || 10
-  issueForm.value.price = Number(t.price) || 0
+  // 模板有正价才覆盖；缺价/0 时保留已填的线下实收
+  const tplPrice = Number(t.price)
+  if (Number.isFinite(tplPrice) && tplPrice > 0) {
+    issueForm.value.price = tplPrice
+  }
   const rule = parseCardRule(t.timeRule || t.time_rule)
   issueForm.value.allowedVenueIds = (rule.venueIds || []).slice()
   issueForm.value.activateMode = rule.activateMode || 'now'
   issueForm.value.durationDays = Number(t.durationDays) || Number(rule.durationDays) || 0
-  if (rule.mode === 'dates' && rule.dateRanges && rule.dateRanges.length) {
-    const starts = rule.dateRanges.map((x) => x.start).filter(Boolean).sort()
-    const ends = rule.dateRanges.map((x) => x.end).filter(Boolean).sort()
-    issueForm.value.activateMode = 'now'
-    if (starts[0]) issueForm.value.validFrom = starts[0]
-    if (ends.length) issueForm.value.validTo = ends[ends.length - 1]
-    return
-  }
-  applyIssueDates()
+  applyIssueDates(true)
 }
 
 async function issueOne(user) {
+  let remark = issueForm.value.remark || ''
+  const def = computeIssueDateDefault(
+    selectedTemplate.value,
+    issueForm.value.activateMode,
+    issueForm.value.durationDays
+  )
+  const from = issueForm.value.activateMode === 'first_use' ? '' : (issueForm.value.validFrom || '')
+  const to = issueForm.value.activateMode === 'first_use' ? '' : (issueForm.value.validTo || '')
+  if ((from || '') !== (def.validFrom || '') || (to || '') !== (def.validTo || '')) {
+    if (remark.indexOf('[已改有效期]') < 0) remark = (remark ? remark + ' ' : '') + '[已改有效期]'
+  }
   return post('/adminIssueCard', {
     userId: user._id,
     openid: user._openid || '',
@@ -1847,7 +2274,7 @@ async function issueOne(user) {
     validTo: issueForm.value.activateMode === 'first_use' ? null : (issueForm.value.validTo || null),
     activateMode: issueForm.value.activateMode || 'now',
     durationDays: Number(issueForm.value.durationDays) || 0,
-    remark: issueForm.value.remark,
+    remark,
     payMeituan: Number(issueForm.value.payMeituan) || 0,
     payDouyin: Number(issueForm.value.payDouyin) || 0,
     payOffline: Number(issueForm.value.payOffline) || 0,
@@ -1869,6 +2296,10 @@ async function submitIssue() {
   }
   if (!String(issueForm.value.issuerName || '').trim()) {
     ElMessage.warning('请填写发卡人')
+    return
+  }
+  if (selectedTemplate.value && !templateAllowedAtVenue(selectedTemplate.value, issueForm.value.venueId)) {
+    ElMessage.warning('该卡券不能在当前场馆发放')
     return
   }
   const targets = batchMode.value ? selected.value.slice() : [currentUser.value]
@@ -1909,7 +2340,17 @@ async function submitIssue() {
   }
 }
 
+function onHeaderVenueChanged() {
+  const op = operatorVenue()
+  if (!issueVisible.value && !batchVisible.value) return
+  if (op.venueId && String(issueForm.value.venueId) !== String(op.venueId)) {
+    issueForm.value.venueId = op.venueId
+    issueForm.value.venueName = op.venueName || ''
+    onVenuePick(op.venueId)
+  }
+}
 onMounted(async () => {
+  window.addEventListener('venue-changed', onHeaderVenueChanged)
   if (route.query.q) keyword.value = String(route.query.q)
   loadVenues()
   loadTemplates()
@@ -1927,6 +2368,7 @@ onMounted(async () => {
     if (hit) openDetail(hit)
   }
 })
+onUnmounted(() => window.removeEventListener('venue-changed', onHeaderVenueChanged))
 </script>
 
 <style scoped>
@@ -1942,23 +2384,54 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .tag { margin-right: 4px; }
 .spend { font-weight: 600; color: #e6a23c; }
 .spend-break { font-size: 12px; color: #888; line-height: 1.4; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 8px; }
-.venue-spend { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
-.stat.slim { min-width: 120px; flex: 1; }
-.muted { color: #ccc; }
+.muted { color: #9aa39d; }
 .hint { margin-left: 8px; color: #999; font-size: 12px; }
+.hint-inline { color: #909399; font-size: 12px; }
 .warn { color: #e6a23c; font-size: 12px; margin-top: 4px; }
 .pay-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .pay-row span { width: 70px; color: #666; }
-.wallet-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.drawer-name { font-size: 18px; font-weight: 700; }
-.drawer-sub { font-size: 13px; color: #888; margin-top: 2px; }
-.detail { padding-right: 8px; }
-.stat-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 16px; }
-.stat { background: #f6faf7; border-radius: 10px; padding: 12px; text-align: center; }
-.stat .num { font-size: 18px; font-weight: 700; color: #1a5c3a; }
-.stat .lab { font-size: 12px; color: #888; margin-top: 4px; }
-.block { margin-bottom: 18px; }
-.block-title { font-weight: 600; margin-bottom: 8px; color: #333; }
+.wallet-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.drawer-head { display: flex; justify-content: space-between; align-items: center; width: 100%; padding-right: 12px; gap: 16px; }
+.drawer-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.drawer-name { font-size: 20px; font-weight: 700; color: #163d2a; line-height: 1.3; }
+.drawer-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 13px; color: #6b746f; }
+.drawer-meta span { position: relative; }
+.drawer-meta span + span::before { content: ''; }
+.detail { padding: 0 4px 16px; }
+.metric-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.metric { background: #f4f8f5; border: 1px solid #e6eee8; border-radius: 12px; padding: 12px 14px; min-height: 76px; }
+.metric .lab { font-size: 12px; color: #7a857e; }
+.metric .num { font-size: 22px; font-weight: 700; color: #163d2a; margin-top: 4px; letter-spacing: -0.02em; }
+.metric .num-date { font-size: 18px; }
+.metric-sub { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; font-size: 12px; color: #5f6b64; }
+.profile-row { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+.profile-card { background: #fff; border: 1px solid #e8eeea; border-radius: 12px; padding: 12px 14px; }
+.profile-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; color: #163d2a; font-size: 13px; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; align-items: center; }
+.profile-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.detail-tabs { margin-top: 8px; }
+.detail-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
+.detail-tabs :deep(.el-tabs__item) { font-size: 14px; font-weight: 600; }
+.detail-tabs :deep(.el-tabs__active-bar) { background: #1a5c3a; }
+.detail-tabs :deep(.el-tabs__item.is-active) { color: #1a5c3a; }
+.tab-toolbar { margin-bottom: 10px; }
+.clean-table { width: 100%; }
+.clean-table :deep(.el-table__header th) { background: #f6f8f6; color: #4a5550; font-weight: 600; }
+.clean-table :deep(.el-table__cell) { padding: 10px 0; }
+.card-name { font-weight: 600; color: #1d3d2c; }
+.card-flags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; font-size: 12px; color: #c45600; }
+.remain-num { font-size: 16px; font-weight: 700; color: #1a5c3a; }
+.remain-total { color: #8a938e; }
+.status-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.status-note { font-size: 12px; color: #c45600; }
+.status-note.on { color: #1a5c3a; }
+.empty-hint { margin-top: 16px; text-align: center; color: #9aa39d; font-size: 13px; }
+.amt-pos { color: #1a5c3a; font-weight: 600; }
+.amt-neg { color: #c45656; font-weight: 600; }
+@media (max-width: 1100px) {
+  .metric-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .profile-row { grid-template-columns: 1fr; }
+}
 .color-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; }
 .batch-picked { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; align-items: center; }
 .batch-user-head { font-weight: 600; color: #1a5c3a; margin: 8px 0; }
@@ -1969,4 +2442,11 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .slots { display: flex; flex-direction: column; gap: 6px; }
 .slot-row { display: flex; align-items: center; gap: 8px; }
 .new-tag-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 4px; flex-wrap: wrap; }
+.pager-total { color: #606266; font-size: 13px; }
+
+.clickable-table :deep(.el-table__row) { cursor: pointer; }
+.clickable-table :deep(.el-table__row:hover > td) { background: #f3faf6 !important; }
+.tab-hint { margin-top: 8px; font-size: 12px; color: #8aa396; }
 </style>

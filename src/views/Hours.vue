@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>场地时间</h2>
-        <p class="sub">按场馆、按星期配置可订时段。保存后订场率、价格表会按这里的时段显示。午休或不开放的小时不要勾选即可。</p>
+        <p class="sub">时段存库表 venue_hours，按场馆、按星期配置。保存后价格表、订场看板、锁场、订场率等都会按这里显示。结束选 22:00 即可出现 21:00–22:00；午休不开放的小时不要勾选。</p>
       </div>
       <div class="toolbar">
         <el-button :loading="loading" @click="load">刷新</el-button>
@@ -64,7 +64,7 @@
         </el-select>
         <el-button type="success" plain @click="generate">生成并勾选</el-button>
       </div>
-      <p class="hint">例如开始 08:00、结束 21:00、跳过 12:00–14:00，会生成现在这套 11 个时段。以后要开到 22:00，把结束改成 22:00 再生成即可。</p>
+      <p class="hint">例如开始 08:00、结束 22:00、跳过 12:00–14:00，会生成含 21:00–22:00 的时段。结束时刻是「关门点」，最后可预约时段从结束前一小时开始。</p>
     </div>
 
     <div class="card" v-loading="loading">
@@ -94,7 +94,7 @@ const saving = ref(false)
 const previewWeekday = ref(1)
 const applyWeekdays = ref([1, 2, 3, 4, 5, 6, 7])
 const genStart = ref('08:00')
-const genEnd = ref('21:00')
+const genEnd = ref('22:00')
 const genSkipStart = ref('12:00')
 const genSkipEnd = ref('14:00')
 const selected = ref([])

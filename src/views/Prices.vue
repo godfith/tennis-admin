@@ -129,7 +129,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
-const timeSlots = [
+const FALLBACK_SLOTS = [
   '08:00-09:00',
   '09:00-10:00',
   '10:00-11:00',
@@ -140,8 +140,10 @@ const timeSlots = [
   '17:00-18:00',
   '18:00-19:00',
   '19:00-20:00',
-  '20:00-21:00'
+  '20:00-21:00',
+  '21:00-22:00'
 ]
+const timeSlots = ref(FALLBACK_SLOTS.slice())
 
 const courts = ref([])
 const matrix = reactive({})
@@ -160,7 +162,7 @@ const someRowsSelected = computed(() => selectedRows.value.length > 0)
 
 const base = import.meta.env.DEV
   ? '/api'
-  : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
+  : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 
 function venueId() {
   return localStorage.getItem('venue_id') || ''
@@ -186,10 +188,14 @@ function money(v) {
   return Math.round(n * 100) / 100
 }
 
+function normCourt(name) {
+  return String(name || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
+}
+
 function ensureMatrix(courtNames) {
   courtNames.forEach((name) => {
     if (!matrix[name]) matrix[name] = {}
-    timeSlots.forEach((t) => {
+    timeSlots.value.forEach((t) => {
       if (matrix[name][t] == null) matrix[name][t] = 0
     })
   })
@@ -233,7 +239,7 @@ function fillSelectedCols() {
 function fillSelectedRows() {
   const p = money(batchPrice.value)
   selectedRows.value.forEach((name) => {
-    timeSlots.forEach((t) => {
+    timeSlots.value.forEach((t) => {
       matrix[name][t] = p
     })
   })
@@ -243,7 +249,7 @@ function fillSelectedRows() {
 function fillAll() {
   const p = money(batchPrice.value)
   courts.value.forEach((c) => {
-    timeSlots.forEach((t) => {
+    timeSlots.value.forEach((t) => {
       matrix[c.name][t] = p
     })
   })
@@ -283,13 +289,18 @@ async function loadPrices() {
     }
     ensureMatrix(courts.value.map((c) => c.name))
     courts.value.forEach((c) => {
-      timeSlots.forEach((t) => {
+      timeSlots.value.forEach((t) => {
         matrix[c.name][t] = 0
       })
     })
     ;(result.list || []).forEach((row) => {
-      if (matrix[row.court] && timeSlots.includes(row.timeSlot)) {
-        matrix[row.court][row.timeSlot] = money(row.price)
+      let target = row.court
+      if (!matrix[target]) {
+        const n = normCourt(row.court)
+        target = Object.keys(matrix).find((k) => normCourt(k) === n) || ''
+      }
+      if (target && matrix[target] && timeSlots.value.includes(row.timeSlot)) {
+        matrix[target][row.timeSlot] = money(row.price)
       }
     })
   } catch (e) {
@@ -299,9 +310,29 @@ async function loadPrices() {
   }
 }
 
+async function loadHours() {
+  const vid = venueId()
+  if (!vid) {
+    timeSlots.value = FALLBACK_SLOTS.slice()
+    return
+  }
+  try {
+    const result = await post('/adminGetVenueHours', { venueId: vid })
+    const slots = (result && result.ok && Array.isArray(result.slots) && result.slots.length)
+      ? result.slots.slice()
+      : FALLBACK_SLOTS.slice()
+    slots.sort()
+    timeSlots.value = slots
+    selectedCols.value = selectedCols.value.filter((t) => timeSlots.value.includes(t))
+  } catch (e) {
+    timeSlots.value = FALLBACK_SLOTS.slice()
+  }
+}
+
 async function loadAll() {
   loading.value = true
   try {
+    await loadHours()
     await loadCourts()
     await loadPrices()
   } finally {
@@ -321,7 +352,7 @@ async function save() {
   }
   const items = []
   courts.value.forEach((c) => {
-    timeSlots.forEach((t) => {
+    timeSlots.value.forEach((t) => {
       items.push({
         court: c.name,
         timeSlot: t,

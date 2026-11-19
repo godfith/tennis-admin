@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise')
+const { expireDueCards, isDueToExpire, shanghaiYmd } = require('./expireDueCards')
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -14,7 +15,84 @@ const pool = mysql.createPool({
   charset: 'utf8mb4'
 })
 
-const FN_VER = 'getUsers-20261029a'
+const FN_VER = 'getUsers-20261119c'
+let extrasReady = false
+const EXPORT_MAX = 20000
+
+function chunkIds(ids, size) {
+  const out = []
+  const n = Math.max(1, Number(size) || 800)
+  for (let i = 0; i < ids.length; i += n) out.push(ids.slice(i, i + n))
+  return out
+}
+
+function parseRuleObj(v) {
+  if (!v) return null
+  if (typeof v === 'object') return v
+  try { return JSON.parse(v) } catch (e) { return null }
+}
+function normYmd(v) {
+  if (!v) return ''
+  const m = String(v).match(/^(\d{4}-\d{2}-\d{2})/)
+  return m ? m[1] : ''
+}
+function addDaysYmd(ymd, days) {
+  const base = normYmd(ymd)
+  if (!base) return ''
+  const d = new Date(base.replace(/-/g, '/') + ' 00:00:00')
+  d.setDate(d.getDate() + Number(days || 0))
+  const p = (n) => (n < 10 ? '0' + n : '' + n)
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+function datesEditedFlag(card, tpl) {
+  const remark = String((card && card.remark) || '')
+  if (/\[已改有效期\]/.test(remark)) return true
+  if (!tpl) return false
+  const rule = parseRuleObj(tpl.time_rule || tpl.timeRule) || {}
+  const mode = rule.activateMode || 'now'
+  if (mode === 'first_use') return false
+  const days = Number(tpl.duration_days != null ? tpl.duration_days : (tpl.durationDays || rule.durationDays) || 0)
+  const from = normYmd(card.valid_from || card.validFrom)
+  const to = normYmd(card.valid_to || card.validTo)
+  if (rule.mode === 'dates' && Array.isArray(rule.dateRanges) && rule.dateRanges.length) {
+    const starts = rule.dateRanges.map((x) => x && x.start).filter(Boolean).sort()
+    const ends = rule.dateRanges.map((x) => x && x.end).filter(Boolean).sort()
+    return from !== (starts[0] || '') || to !== (ends[ends.length - 1] || '')
+  }
+  if (days > 0) {
+    if (!from) return true
+    return to !== addDaysYmd(from, days)
+  }
+  return !!to
+}
+async function loadTplMap(poolOrConn, cards) {
+  const ids = []
+  const seen = {}
+  ;(cards || []).forEach((c) => {
+    const id = c.template_id || c.templateId
+    if (id == null || id === '') return
+    const k = String(id)
+    if (seen[k]) return
+    seen[k] = true
+    ids.push(id)
+  })
+  const map = {}
+  if (!ids.length) return map
+  const ph = ids.map(() => '?').join(',')
+  try {
+    const [rows] = await poolOrConn.query(`SELECT * FROM card_templates WHERE id IN (${ph})`, ids)
+    ;(rows || []).forEach((r) => { map[String(r.id)] = r })
+  } catch (e) {}
+  return map
+}
+
+
+function money(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  return Math.round(n * 100) / 100
+}
+
 
 function fmtYmd(v) {
   if (!v) return ''
@@ -91,24 +169,26 @@ async function loadSpendByUsers(ids) {
   const map = {}
   if (!ids.length) return map
   try {
-    const [rows] = await pool.query(
-      `SELECT user_id AS userId, IFNULL(venue_id,'') AS venueId, IFNULL(venue_name,'') AS venueName,
-              SUM(amount) AS amount
-         FROM finance_ledger
-        WHERE user_id IN (${ids.map(() => '?').join(',')})
-          AND type IN ('court_pay','card_issue','issue_card','refund_card','court_cancel','court_refund')
-        GROUP BY user_id, venue_id, venue_name`,
-      ids
-    )
-    ;(rows || []).forEach((r) => {
-      const k = String(r.userId)
-      if (!map[k]) map[k] = []
-      map[k].push({
-        venueId: String(r.venueId || ''),
-        venueName: r.venueName || '未分馆',
-        amount: Number(r.amount) || 0
+    for (const chunk of chunkIds(ids, 800)) {
+      const [rows] = await pool.query(
+        `SELECT user_id AS userId, IFNULL(venue_id,'') AS venueId, IFNULL(venue_name,'') AS venueName,
+                SUM(amount) AS amount
+           FROM finance_ledger
+          WHERE user_id IN (${chunk.map(() => '?').join(',')})
+            AND type IN ('court_pay','card_issue','issue_card','refund_card','court_cancel','court_refund')
+          GROUP BY user_id, venue_id, venue_name`,
+        chunk
+      )
+      ;(rows || []).forEach((r) => {
+        const k = String(r.userId)
+        if (!map[k]) map[k] = []
+        map[k].push({
+          venueId: String(r.venueId || ''),
+          venueName: r.venueName || '未分馆',
+          amount: Number(r.amount) || 0
+        })
       })
-    })
+    }
   } catch (e) {}
   return map
 }
@@ -122,6 +202,7 @@ function attachSpend(list, spendMap) {
 }
 
 async function ensureExtras() {
+  if (extrasReady) return
   await pool.query(`ALTER TABLE users ADD COLUMN remark varchar(255) DEFAULT ''`).catch(() => {})
   await pool.query(`ALTER TABLE users ADD COLUMN balance decimal(10,2) NOT NULL DEFAULT 0`).catch(() => {})
   await pool.query(`ALTER TABLE users ADD COLUMN points int NOT NULL DEFAULT 0`).catch(() => {})
@@ -150,24 +231,27 @@ async function ensureExtras() {
       await pool.query('INSERT IGNORE INTO user_tags (name, color) VALUES (?, ?)', [name, color])
     }
   }
+  extrasReady = true
 }
 
 async function loadTagsForUsers(ids) {
   const map = {}
   if (!ids.length) return map
-  const [rows] = await pool.query(
-    `SELECT m.user_id AS userId, t.id, t.name, t.color
-       FROM user_tag_map m
-       JOIN user_tags t ON t.id = m.tag_id
-      WHERE m.user_id IN (${ids.map(() => '?').join(',')})
-      ORDER BY t.id`,
-    ids
-  )
-  ;(rows || []).forEach((r) => {
-    const k = String(r.userId)
-    if (!map[k]) map[k] = []
-    map[k].push({ _id: String(r.id), name: r.name, color: r.color })
-  })
+  for (const chunk of chunkIds(ids, 800)) {
+    const [rows] = await pool.query(
+      `SELECT m.user_id AS userId, t.id, t.name, t.color
+         FROM user_tag_map m
+         JOIN user_tags t ON t.id = m.tag_id
+        WHERE m.user_id IN (${chunk.map(() => '?').join(',')})
+        ORDER BY t.id`,
+      chunk
+    )
+    ;(rows || []).forEach((r) => {
+      const k = String(r.userId)
+      if (!map[k]) map[k] = []
+      map[k].push({ _id: String(r.id), name: r.name, color: r.color })
+    })
+  }
   return map
 }
 
@@ -176,31 +260,68 @@ async function listTags() {
   return (rows || []).map((t) => ({ _id: String(t.id), name: t.name, color: t.color }))
 }
 
-async function loadCardsForUsers(ids) {
+async function loadCardsForUsers(ids, limitPerUser) {
   const map = {}
   if (!ids.length) return map
-  const [rows] = await pool.query(
-    `SELECT user_id, card_name, type, status, remaining_times, total_times,
-            DATE_FORMAT(valid_to,'%Y-%m-%d') AS valid_to
-       FROM member_cards
-      WHERE user_id IN (${ids.map(() => '?').join(',')})
-        AND IFNULL(status,'') NOT IN ('deleted','refunded')
-      ORDER BY id DESC`,
-    ids
-  )
-  for (const r of rows || []) {
-    const k = String(r.user_id)
-    if (!map[k]) map[k] = []
-    if (map[k].length >= 4) continue
-    map[k].push({
-      cardName: r.card_name || '',
-      type: r.type,
-      status: r.status,
-      remainingTimes: r.remaining_times,
-      totalTimes: r.total_times,
-      validTo: r.valid_to
-    })
+  const cap = Math.max(1, Number(limitPerUser) || 4)
+  for (const chunk of chunkIds(ids, 800)) {
+    const [rows] = await pool.query(
+      `SELECT user_id, card_name, type, status, remaining_times, total_times,
+              DATE_FORMAT(valid_to,'%Y-%m-%d') AS valid_to
+         FROM member_cards
+        WHERE user_id IN (${chunk.map(() => '?').join(',')})
+          AND IFNULL(status,'') NOT IN ('deleted','refunded')
+        ORDER BY id DESC`,
+      chunk
+    )
+    for (const r of rows || []) {
+      const k = String(r.user_id)
+      if (!map[k]) map[k] = []
+      if (map[k].length >= cap) continue
+      map[k].push({
+        cardName: r.card_name || '',
+        type: r.type,
+        status: r.status,
+        remainingTimes: r.remaining_times,
+        totalTimes: r.total_times,
+        validTo: r.valid_to
+      })
+    }
   }
+  return map
+}
+
+async function loadCardCountsForUsers(ids) {
+  const map = {}
+  if (!ids.length) return map
+  for (const chunk of chunkIds(ids, 800)) {
+    const [rows] = await pool.query(
+      `SELECT user_id, COUNT(*) AS n
+         FROM member_cards
+        WHERE user_id IN (${chunk.map(() => '?').join(',')}) AND status='active'
+        GROUP BY user_id`,
+      chunk
+    )
+    ;(rows || []).forEach((r) => { map[String(r.user_id)] = Number(r.n) || 0 })
+  }
+  return map
+}
+
+async function loadLastVisitForUsers(ids) {
+  const map = {}
+  if (!ids.length) return map
+  try {
+    for (const chunk of chunkIds(ids, 800)) {
+      const [rows] = await pool.query(
+        `SELECT user_id, DATE_FORMAT(MAX(date), '%Y-%m-%d') AS last_visit
+           FROM bookings
+          WHERE user_id IN (${chunk.map(() => '?').join(',')}) AND status='booked'
+          GROUP BY user_id`,
+        chunk
+      )
+      ;(rows || []).forEach((r) => { map[String(r.user_id)] = r.last_visit || '' })
+    }
+  } catch (e) {}
   return map
 }
 
@@ -241,6 +362,100 @@ function cardStatusSql(cardStatus) {
   return ''
 }
 
+
+function mapClassType(v) {
+  const t = String(v || '').trim().toLowerCase()
+  if (!t) return 'fixed'
+  if (['self', 'self_organized', 'self-organized', '自组', '自组团课'].includes(t)) return 'self'
+  return 'fixed'
+}
+
+async function loadUserClasses(pool, userId) {
+  const sqlFull = `SELECT b.id, b.court, DATE_FORMAT(b.date, '%Y-%m-%d') AS date, b.time, b.status,
+          b.amount, b.card_name, b.venue_name, b.venue_id, b.remark,
+          b.group_class_id, b.coach_id, b.coach_name, b.card_type,
+          g.name AS class_name, g.theme, g.class_type, g.coach_name AS class_coach_name
+     FROM bookings b
+     LEFT JOIN group_classes g ON g.id = b.group_class_id
+    WHERE b.user_id=?
+      AND IFNULL(b.status,'') NOT IN ('locked')
+      AND (
+        IFNULL(b.group_class_id,0) > 0
+        OR IFNULL(b.coach_id,0) > 0
+        OR IFNULL(b.coach_name,'') <> ''
+        OR IFNULL(b.card_type,'') = 'coach'
+      )
+    ORDER BY b.date DESC, b.id DESC
+    LIMIT 100`
+  const sqlBasic = `SELECT b.id, b.court, DATE_FORMAT(b.date, '%Y-%m-%d') AS date, b.time, b.status,
+          b.amount, b.card_name, b.venue_name, b.venue_id, b.remark,
+          b.group_class_id, b.coach_id, b.coach_name, b.card_type,
+          g.name AS class_name, g.coach_name AS class_coach_name
+     FROM bookings b
+     LEFT JOIN group_classes g ON g.id = b.group_class_id
+    WHERE b.user_id=?
+      AND IFNULL(b.status,'') NOT IN ('locked')
+      AND (
+        IFNULL(b.group_class_id,0) > 0
+        OR IFNULL(b.coach_id,0) > 0
+        OR IFNULL(b.coach_name,'') <> ''
+        OR IFNULL(b.card_type,'') = 'coach'
+      )
+    ORDER BY b.date DESC, b.id DESC
+    LIMIT 100`
+  const sqlFallback = `SELECT b.id, b.court, DATE_FORMAT(b.date, '%Y-%m-%d') AS date, b.time, b.status,
+          b.amount, b.card_name, b.venue_name, b.venue_id, b.remark,
+          b.group_class_id, b.coach_id, b.coach_name, b.card_type
+     FROM bookings b
+    WHERE b.user_id=?
+      AND IFNULL(b.status,'') NOT IN ('locked')
+      AND (
+        IFNULL(b.group_class_id,0) > 0
+        OR IFNULL(b.coach_id,0) > 0
+        OR IFNULL(b.coach_name,'') <> ''
+        OR IFNULL(b.card_type,'') = 'coach'
+      )
+    ORDER BY b.date DESC, b.id DESC
+    LIMIT 100`
+  let rows = []
+  try {
+    const [r] = await pool.query(sqlFull, [userId])
+    rows = r || []
+  } catch (e) {
+    try {
+      const [r] = await pool.query(sqlBasic, [userId])
+      rows = r || []
+    } catch (e2) {
+      const [r] = await pool.query(sqlFallback, [userId])
+      rows = r || []
+    }
+  }
+  return (rows || []).map((b) => {
+    const groupId = b.group_class_id ? String(b.group_class_id) : ''
+    const kind = groupId ? 'group' : 'coach'
+    return {
+      _id: String(b.id),
+      court: b.court || '',
+      date: fmtYmd(b.date),
+      time: b.time || '',
+      status: b.status,
+      amount: b.amount != null ? Number(b.amount) : 0,
+      cardName: b.card_name || '',
+      venueName: b.venue_name || '',
+      venueId: b.venue_id || '',
+      remark: b.remark || '',
+      kind,
+      groupClassId: groupId,
+      className: b.class_name || (kind === 'group' ? '团课' : '私教课'),
+      theme: b.theme || '',
+      classType: groupId ? mapClassType(b.class_type) : '',
+      coachId: b.coach_id ? String(b.coach_id) : '',
+      coachName: b.class_coach_name || b.coach_name || '',
+      cardType: b.card_type || ''
+    }
+  })
+}
+
 exports.main = async (event) => {
   const body = parseEvent(event)
   const action = body.action || 'list'
@@ -248,10 +463,11 @@ exports.main = async (event) => {
     await ensureExtras()
 
     if (action === 'listCards') {
+      await expireDueCards(pool)
       const cardName = String(body.cardName || '').trim()
       const cardStatus = String(body.cardStatus || '').trim()
       const keyword = String(body.keyword || '').trim()
-      let sql = `SELECT c.id, c.card_name, c.type, c.status, c.remaining_times, c.total_times,
+      let sql = `SELECT c.id, c.card_name, c.type, c.status, c.remaining_times, c.total_times, IFNULL(c.price,0) AS price,
                         DATE_FORMAT(c.valid_from,'%Y-%m-%d') AS valid_from,
                         DATE_FORMAT(c.valid_to,'%Y-%m-%d') AS valid_to,
                         u.id AS user_id, u.nick_name, u.phone
@@ -282,6 +498,7 @@ exports.main = async (event) => {
           status: r.status,
           remainingTimes: r.remaining_times,
           totalTimes: r.total_times,
+          price: r.price != null ? Number(r.price) : 0,
           validFrom: r.valid_from,
           validTo: r.valid_to,
           userId: r.user_id ? String(r.user_id) : '',
@@ -433,8 +650,13 @@ exports.main = async (event) => {
         let rule = card.time_rule
         if (typeof rule === 'string') { try { rule = JSON.parse(rule) } catch (e) { rule = {} } }
         if (rule && typeof rule === 'object') delete rule.pause
-        await pool.query(`UPDATE member_cards SET status='active', time_rule=?, updated_at=NOW() WHERE id=?`, [rule ? JSON.stringify(rule) : card.time_rule, cardId])
-        return { ok: true, status: 'active', fnVer: FN_VER }
+        const t = String(card.type || '')
+        let nextStatus = 'active'
+        if ((t === 'times' || t === 'coach' || t === 'group') && Number(card.remaining_times) <= 0) {
+          nextStatus = 'used_up'
+        }
+        await pool.query(`UPDATE member_cards SET status=?, time_rule=?, updated_at=NOW() WHERE id=?`, [nextStatus, rule ? JSON.stringify(rule) : card.time_rule, cardId])
+        return { ok: true, status: nextStatus, fnVer: FN_VER }
       }
       if (action === 'pauseCard') {
         const from = String(data.pauseFrom || '').slice(0, 10)
@@ -485,24 +707,72 @@ exports.main = async (event) => {
         timeRule = JSON.stringify(timeRule)
       }
       const cardName = data.cardName != null && String(data.cardName).trim() ? String(data.cardName).trim() : card.card_name
+      const oldPrice = money(card.price)
+      let nextPrice = oldPrice
+      const priceProvided = data.price != null && data.price !== ''
+      if (priceProvided) {
+        nextPrice = money(data.price)
+        if (nextPrice < 0) return { ok: false, msg: '实收金额不能为负', fnVer: FN_VER }
+      }
       let remark = card.remark || ''
       if (!/\[已改规则\]/.test(remark)) remark = (remark ? remark + ' ' : '') + '[已改规则]'
+      if (priceProvided && nextPrice !== oldPrice && !/\[已改实收\]/.test(remark)) {
+        remark = (remark ? remark + ' ' : '') + '[已改实收]'
+      }
+      const oldFrom = fmt(card.valid_from)
+      const oldTo = fmt(card.valid_to)
+      if ((oldFrom || '') !== (validFrom || '') || (oldTo || '') !== (validTo || '')) {
+        if (!/\[已改有效期\]/.test(remark)) remark = (remark ? remark + ' ' : '') + '[已改有效期]'
+      }
       try {
+        // Keep status in sync with remaining for times/coach/group cards
+        let nextStatus = card.status
+        const t = String(card.type || '')
+        if (t === 'times' || t === 'coach' || t === 'group') {
+          if (Number(remaining) > 0) {
+            if (nextStatus === 'used_up') nextStatus = 'active'
+          } else if (nextStatus === 'active') {
+            nextStatus = 'used_up'
+          }
+        }
         await pool.query(
-          `UPDATE member_cards SET card_name=?, valid_from=?, valid_to=?, remaining_times=?, total_times=?, time_rule=?, remark=?, updated_at=NOW() WHERE id=?`,
-          [cardName, validFrom, validTo, remaining, total, timeRule, remark, cardId]
+          `UPDATE member_cards SET card_name=?, valid_from=?, valid_to=?, remaining_times=?, total_times=?, time_rule=?, remark=?, price=?, status=?, updated_at=NOW() WHERE id=?`,
+          [cardName, validFrom, validTo, remaining, total, timeRule, remark, nextPrice, nextStatus, cardId]
         )
       } catch (e) {
         return { ok: false, msg: e.message || '保存失败', fnVer: FN_VER }
       }
+      const priceDelta = money(nextPrice - oldPrice)
+      if (priceProvided && priceDelta !== 0) {
+        try {
+          await pool.query(
+            `INSERT INTO finance_ledger
+              (biz_date, type, amount, venue_id, venue_name, user_id, user_name,
+               operator_name, card_id, remark)
+             VALUES (CURDATE(), 'card_price_adjust', ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              priceDelta,
+              card.venue_id || '',
+              card.venue_name || '',
+              card.user_id || null,
+              card.user_name || '',
+              op,
+              cardId,
+              '改卡实收 ' + oldPrice + '→' + nextPrice + ' · 「' + cardName + '」'
+            ]
+          )
+        } catch (e) {}
+      }
       try {
+        const detailParts = ['改卡「' + cardName + '」规则/有效期']
+        if (priceProvided && priceDelta !== 0) detailParts.push('实收 ' + oldPrice + '→' + nextPrice)
         await pool.query(
           `INSERT INTO activity_logs (type, user_name, operator_name, phone, detail, venue_id, venue_name, created_at)
            VALUES ('card_edit', ?, ?, '', ?, ?, ?, NOW())`,
-          [card.user_name || '', op, '改卡「' + cardName + '」规则/有效期', card.venue_id || '', card.venue_name || '']
+          [card.user_name || '', op, detailParts.join('；'), card.venue_id || '', card.venue_name || '']
         )
       } catch (e) {}
-      return { ok: true, rulesEdited: true, fnVer: FN_VER }
+      return { ok: true, rulesEdited: true, datesEdited: /\[已改有效期\]/.test(remark), price: nextPrice, priceDelta, fnVer: FN_VER }
     }
 
     if (action === 'saveRemark') {
@@ -515,6 +785,7 @@ exports.main = async (event) => {
     if (action === 'detail') {
       const userId = Number(body.userId || body.id)
       if (!userId) return { ok: false, msg: '缺少用户', fnVer: FN_VER }
+      await expireDueCards(pool, { userId })
       const [rows] = await pool.query(
         `SELECT u.id, u.openid, u.user_id, u.nick_name, u.avatar_url, u.phone,
                 u.role, u.created_at, u.updated_at, u.venue_id, u.venue_name, u.remark,
@@ -538,10 +809,13 @@ exports.main = async (event) => {
         [userId]
       )
       const [books] = await pool.query(
-        `SELECT id, court, DATE_FORMAT(date, '%Y-%m-%d') AS date, time, status, amount, card_name, venue_name, remark
+        `SELECT id, court, DATE_FORMAT(date, '%Y-%m-%d') AS date, time, status, amount, card_name,
+                venue_name, venue_id, remark, group_class_id, coach_id, coach_name, card_type
            FROM bookings WHERE user_id=? ORDER BY date DESC, id DESC LIMIT 80`,
         [userId]
       )
+      let classes = []
+      try { classes = await loadUserClasses(pool, userId) } catch (e) { classes = [] }
       let ledger = []
       try {
         const [led] = await pool.query(
@@ -552,6 +826,7 @@ exports.main = async (event) => {
         ledger = led || []
       } catch (e) {}
 
+      const tplMap = await loadTplMap(pool, cards)
       return {
         ok: true,
         user,
@@ -561,11 +836,12 @@ exports.main = async (event) => {
             try { timeRule = JSON.parse(timeRule) } catch (e) { timeRule = null }
           }
           const rulesEdited = !!(c.rules_edited || (timeRule && timeRule.customized) || /\[已改规则\]/.test(String(c.remark || '')))
+          const datesEdited = datesEditedFlag(c, tplMap[String(c.template_id || '')])
           return {
             _id: String(c.id),
             cardName: c.card_name,
             type: c.type,
-            status: (fmtYmd(c.valid_to) && fmtYmd(c.valid_to) < new Date().toISOString().slice(0, 10) && c.status === 'active') ? 'expired' : c.status,
+            status: isDueToExpire(c, shanghaiYmd()) ? 'expired' : c.status,
             remainingTimes: c.remaining_times,
             totalTimes: c.total_times,
             validFrom: fmtYmd(c.valid_from),
@@ -576,7 +852,8 @@ exports.main = async (event) => {
             templateId: c.template_id ? String(c.template_id) : '',
             timeRule,
             remark: c.remark || '',
-            rulesEdited
+            rulesEdited,
+            datesEdited
           }
         }),
         bookings: (books || []).map((b) => ({
@@ -588,8 +865,14 @@ exports.main = async (event) => {
           amount: b.amount != null ? Number(b.amount) : 0,
           cardName: b.card_name || '',
           venueName: b.venue_name || '',
-          remark: b.remark || ''
+          venueId: b.venue_id || '',
+          remark: b.remark || '',
+          groupClassId: b.group_class_id ? String(b.group_class_id) : '',
+          coachId: b.coach_id ? String(b.coach_id) : '',
+          coachName: b.coach_name || '',
+          cardType: b.card_type || ''
         })),
+        classes,
         ledger: ledger.map((r) => ({
           _id: String(r.id),
           date: fmtYmd(r.biz_date),
@@ -614,20 +897,27 @@ exports.main = async (event) => {
     const createdFrom = String(body.createdFrom || '').slice(0, 10)
     const createdTo = String(body.createdTo || '').slice(0, 10)
     const sort = String(body.sort || 'id_desc')
+    const isExport = body.export === true || body.action === 'export'
     const page = Math.max(1, Number(body.page) || 1)
-    const pageSize = body.export
-      ? Math.min(500, Math.max(20, Number(body.pageSize) || 500))
+    const pageSize = isExport
+      ? Math.min(1000, Math.max(1, Number(body.pageSize) || 500))
       : Math.min(100, Math.max(20, Number(body.pageSize) || 50))
+    const offset = (page - 1) * pageSize
+    const needAggSort = ['spend_desc', 'spend_asc', 'cards_desc', 'visit_desc'].includes(sort)
 
     let sql = `SELECT u.id, u.openid, u.user_id, u.nick_name, u.avatar_url, u.phone,
                       u.role, u.created_at, u.updated_at, u.venue_id, u.venue_name, u.remark,
-                      IFNULL(u.balance,0) AS balance, IFNULL(u.points,0) AS points,
-                IFNULL(u.balance,0) AS balance, IFNULL(u.points,0) AS points,
+                      IFNULL(u.balance,0) AS balance, IFNULL(u.points,0) AS points`
+    if (needAggSort) {
+      sql += `,
                       (SELECT COUNT(*) FROM member_cards c WHERE c.user_id=u.id AND c.status='active') AS card_count,
                       (SELECT COALESCE(SUM(amount),0) FROM finance_ledger f
                         WHERE f.user_id=u.id AND f.type IN ('court_pay','card_issue','issue_card','refund_card','court_cancel','court_refund')) AS total_spend,
-                      (SELECT DATE_FORMAT(MAX(date), '%Y-%m-%d') FROM bookings b WHERE b.user_id=u.id AND b.status='booked') AS last_visit
-                 FROM users u WHERE 1=1`
+                      (SELECT DATE_FORMAT(MAX(date), '%Y-%m-%d') FROM bookings b WHERE b.user_id=u.id AND b.status='booked') AS last_visit`
+    } else {
+      sql += `, 0 AS card_count, 0 AS total_spend, NULL AS last_visit`
+    }
+    sql += ' FROM users u WHERE 1=1'
     const params = []
     if (venueId) {
       sql += ' AND u.venue_id=?'
@@ -681,15 +971,30 @@ exports.main = async (event) => {
       created_desc: 'u.created_at DESC',
       created_asc: 'u.created_at ASC'
     }
+    const fromIdx = sql.indexOf(' FROM users u WHERE')
+    const countSql = fromIdx >= 0 ? ('SELECT COUNT(*) AS total' + sql.slice(fromIdx)) : ('SELECT COUNT(*) AS total FROM (' + sql + ') t')
+    let total = 0
+    try {
+      const [countRows] = await pool.query(countSql, params)
+      total = Number(countRows[0] && countRows[0].total) || 0
+    } catch (ce) {
+      console.error('count users', ce)
+    }
+
     sql += ' ORDER BY ' + (orderMap[sort] || orderMap.id_desc)
     sql += ' LIMIT ? OFFSET ?'
-    params.push(pageSize, (page - 1) * pageSize)
+    const safeOffset = Math.min(offset, EXPORT_MAX)
+    const safeLimit = offset >= EXPORT_MAX ? 0 : Math.min(pageSize, EXPORT_MAX - safeOffset)
+    params.push(safeLimit, safeOffset)
 
     let rows
     try {
       const [r] = await pool.query(sql, params)
       rows = r
     } catch (e) {
+      if (isExport) {
+        return { ok: false, msg: e.message || '导出查询失败', fnVer: FN_VER }
+      }
       let sql2 = `SELECT u.id, u.openid, u.user_id, u.nick_name, u.avatar_url, u.phone,
                          u.role, u.created_at, u.updated_at, u.remark,
                          0 AS card_count, 0 AS total_spend, NULL AS last_visit
@@ -711,15 +1016,23 @@ exports.main = async (event) => {
 
     const ids = (rows || []).map((u) => u.id)
     const tagsMap = await loadTagsForUsers(ids)
-    const cardsMap = await loadCardsForUsers(ids)
+    const cardsMap = await loadCardsForUsers(ids, isExport ? 20 : 4)
+    const cardCountMap = await loadCardCountsForUsers(ids)
+    const lastVisitMap = await loadLastVisitForUsers(ids)
     const list = attachSpend((rows || []).map((u) => {
       const item = mapUser(u, tagsMap)
       item.cards = cardsMap[String(u.id)] || []
+      item.cardCount = cardCountMap[String(u.id)] != null ? cardCountMap[String(u.id)] : item.cardCount
+      if (lastVisitMap[String(u.id)]) item.lastVisit = lastVisitMap[String(u.id)]
       return item
     }), await loadSpendByUsers(ids))
     return {
       ok: true,
       list,
+      total: typeof total === 'number' ? total : list.length,
+      truncated: typeof total === 'number' ? total > list.length : false,
+      page,
+      pageSize,
       tags: await listTags(),
       venues: await listVenues(),
       fnVer: FN_VER

@@ -1,0 +1,379 @@
+<template>
+  <div class="page">
+    <div class="page-header">
+      <div>
+        <h2>批量锁场 / 解锁</h2>
+        <p class="sub">店长只能操作自己管理的场馆。解锁只取消锁场记录，不会碰到真实预约。锁场时已锁时段会跳过；已预约的会记下「取消后自动锁场」。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <el-form label-width="100px">
+        <el-form-item label="场馆">
+          <el-select v-model="form.venueId" placeholder="选择场馆" style="width: 280px" @change="onVenue">
+            <el-option v-for="v in venues" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="场地">
+          <el-checkbox-group v-model="form.courts">
+            <el-checkbox v-for="c in courts" :key="c._id" :value="c.name">{{ c.name }}</el-checkbox>
+          </el-checkbox-group>
+          <el-button size="small" @click="form.courts = courts.map(c => c.name)">全选</el-button>
+          <el-button size="small" @click="form.courts = []">清空</el-button>
+        </el-form-item>
+        <el-form-item label="日期">
+          <el-date-picker
+            v-model="form.dateRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="开始"
+            end-placeholder="结束"
+            @change="onRangeChange"
+          />
+          <span class="hint">或单日</span>
+          <el-date-picker
+            v-model="form.singleDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="单日"
+            style="margin-left: 8px"
+            @change="onSingleChange"
+          />
+        </el-form-item>
+        <el-form-item label="时段">
+          <el-checkbox-group v-model="form.times">
+            <el-checkbox v-for="t in timeSlots" :key="t" :value="t">{{ t }}</el-checkbox>
+          </el-checkbox-group>
+          <div style="margin-top: 8px">
+            <el-button size="small" @click="form.times = timeSlots.slice()">全选</el-button>
+            <el-button size="small" @click="form.times = timeSlots.filter(t => t >= '18:00-19:00')">晚间</el-button>
+            <el-button size="small" @click="form.times = []">清空</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.remark" placeholder="锁场原因（仅批量锁场使用）" style="width: 360px" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="warning" :loading="savingLock" @click="doBatch('lock')">确认批量锁场</el-button>
+          <el-button type="danger" :loading="savingUnlock" @click="doBatch('unlock')">确认批量解锁</el-button>
+          <span class="hint" v-if="preview">预计锁定 {{ preview }} 个时段</span>
+        </el-form-item>
+        <p class="sub form-hint">锁场必须选择场地和时段。解锁时如果不选场地或时段，则按日期范围内的全部场地/时段解锁。解锁只针对锁场，不会取消客人预约。</p>
+      </el-form>
+    </div>
+
+    <div class="card">
+      <h3>锁场记录</h3>
+      <p class="sub">最近 300 条，仅供查看。批量解锁按上方选择的日期/场地/时段范围执行，不以本表为准。</p>
+      <el-table :data="locks" size="small" max-height="420" v-loading="loadingLocks">
+        <el-table-column prop="date" label="日期" width="110" />
+        <el-table-column prop="time" label="时段" width="110" />
+        <el-table-column prop="court" label="场地" width="120" />
+        <el-table-column prop="operatorName" label="操作人" width="120" />
+        <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="timeText" label="操作时间" width="170" />
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="danger" size="small" @click="unlockOne(row)">解锁</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div class="card" v-if="result">
+      <h3>结果</h3>
+      <p>成功 {{ result.ok }} 个，跳过 {{ result.skip }} 个，失败 {{ result.fail }} 个</p>
+      <el-table :data="result.details" size="small" max-height="300" v-if="result.details.length">
+        <el-table-column prop="court" label="场地" width="120" />
+        <el-table-column prop="date" label="日期" width="110" />
+        <el-table-column prop="time" label="时段" width="110" />
+        <el-table-column prop="msg" label="说明" />
+      </el-table>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+
+const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
+const venues = ref([])
+const courts = ref([])
+const savingLock = ref(false)
+const savingUnlock = ref(false)
+const result = ref(null)
+const locks = ref([])
+const loadingLocks = ref(false)
+
+const form = ref({
+  venueId: '',
+  courts: [],
+  dateRange: null,
+  singleDate: '',
+  times: [],
+  remark: ''
+})
+
+const FALLBACK_SLOTS = [
+  '08:00-09:00','09:00-10:00','10:00-11:00','11:00-12:00',
+  '12:00-13:00','13:00-14:00','14:00-15:00','15:00-16:00',
+  '16:00-17:00','17:00-18:00','18:00-19:00','19:00-20:00',
+  '20:00-21:00','21:00-22:00'
+]
+const timeSlots = ref(FALLBACK_SLOTS.slice())
+
+const preview = computed(() => {
+  const dates = getDates()
+  return form.value.courts.length * dates.length * form.value.times.length
+})
+
+function pad2(n) {
+  return String(n).padStart(2, '0')
+}
+
+function enumerateDates(start, end) {
+  const parse = (s) => {
+    const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (!m) return null
+    return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) }
+  }
+  const a = parse(start)
+  const b = parse(end)
+  if (!a || !b) return []
+  const cur = new Date(a.y, a.m - 1, a.d)
+  const last = new Date(b.y, b.m - 1, b.d)
+  if (cur > last) return []
+  const dates = []
+  while (cur <= last) {
+    dates.push(cur.getFullYear() + '-' + pad2(cur.getMonth() + 1) + '-' + pad2(cur.getDate()))
+    cur.setDate(cur.getDate() + 1)
+  }
+  return dates
+}
+
+function getDates() {
+  if (form.value.dateRange && form.value.dateRange.length === 2) {
+    return enumerateDates(form.value.dateRange[0], form.value.dateRange[1])
+  }
+  if (form.value.singleDate) return [form.value.singleDate]
+  return []
+}
+
+function onRangeChange(v) {
+  if (v && v.length === 2) form.value.singleDate = ''
+}
+
+function onSingleChange(v) {
+  if (v) form.value.dateRange = null
+}
+
+function operatorName() {
+  return localStorage.getItem('admin_name') || '管理员'
+}
+
+function currentVenueName() {
+  const venue = venues.value.find(v => (v.venueId || v._id) === form.value.venueId)
+  return venue ? venue.name : ''
+}
+
+function buildPayload(extra) {
+  const dates = getDates()
+  return Object.assign({
+    venueId: form.value.venueId,
+    venueName: currentVenueName(),
+    courts: form.value.courts.slice(),
+    dateStart: dates[0] || '',
+    dateEnd: dates[dates.length - 1] || '',
+    times: form.value.times.slice(),
+    remark: form.value.remark || '[锁场] 批量锁场',
+    operatorName: operatorName()
+  }, extra || {})
+}
+
+async function post(path, body) {
+  const res = await fetch(base + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  const text = await res.text()
+  let data
+  try { data = text ? JSON.parse(text) : {} } catch (e) {
+    throw new Error('接口异常')
+  }
+  return data.body ? (typeof data.body === 'string' ? JSON.parse(data.body) : data.body) : data
+}
+
+
+async function loadHours() {
+  const vid = form.value.venueId
+  if (!vid) {
+    timeSlots.value = FALLBACK_SLOTS.slice()
+    return
+  }
+  try {
+    const r = await post('/adminGetVenueHours', { venueId: vid })
+    const slots = (r && r.ok && Array.isArray(r.slots) && r.slots.length) ? r.slots.slice() : FALLBACK_SLOTS.slice()
+    slots.sort()
+    timeSlots.value = slots
+    form.value.times = form.value.times.filter((t) => timeSlots.value.includes(t))
+  } catch (e) {
+    timeSlots.value = FALLBACK_SLOTS.slice()
+  }
+}
+
+async function loadVenues() {
+  const r = await post('/adminGetVenues', {})
+  let list = r.list || []
+  const own = localStorage.getItem('admin_venue_id') || ''
+  const canAll = localStorage.getItem('admin_role') === 'admin' || !own
+  if (!canAll && own) list = list.filter((v) => (v.venueId || v._id) === own)
+  venues.value = list
+  if (!form.value.venueId && list[0]) {
+    form.value.venueId = list[0].venueId || list[0]._id
+    await loadHours()
+    await loadCourts()
+    await loadLocks()
+  } else if (form.value.venueId) {
+    await loadHours()
+  }
+}
+async function loadLocks() {
+  if (!form.value.venueId) { locks.value = []; return }
+  loadingLocks.value = true
+  try {
+    const r = await post('/adminSaveBooking', { action: 'listLocks', data: { venueId: form.value.venueId } })
+    locks.value = (r.list || []).filter((row) => !isOutdoorSharedCourt(row.court))
+  } finally {
+    loadingLocks.value = false
+  }
+}
+
+async function onVenue() {
+  await loadHours()
+  await loadCourts()
+  await loadLocks()
+}
+function isOutdoorSharedCourt(courtName) {
+  return String(courtName || '').trim() === '外场'
+}
+async function loadCourts() {
+  if (!form.value.venueId) { courts.value = []; return }
+  const r = await post('/adminGetCourts', { venueId: form.value.venueId })
+  courts.value = (r.list || []).filter((c) => !isOutdoorSharedCourt(c.name))
+  form.value.courts = []
+}
+
+async function doBatch(kind) {
+  const dates = getDates()
+  if (!form.value.venueId) { ElMessage.warning('请选择场馆'); return }
+  if (!dates.length) { ElMessage.warning('请选择日期'); return }
+  if (kind === 'lock') {
+    if (!form.value.courts.length) { ElMessage.warning('请选择场地'); return }
+    if (!form.value.times.length) { ElMessage.warning('请选择时段'); return }
+  }
+
+  const loadingRef = kind === 'lock' ? savingLock : savingUnlock
+  loadingRef.value = true
+  try {
+    const action = kind === 'lock' ? 'batchLock' : 'batchUnlock'
+    const dry = await post('/adminSaveBooking', { action, data: buildPayload({ dryRun: true }) })
+    if (!dry || !dry.ok) {
+      ElMessage.error((dry && dry.msg) || '预览失败')
+      return
+    }
+    let confirmText = ''
+    if (kind === 'unlock') {
+      confirmText = `将解锁 ${dry.unlock || 0} 条锁场，并清除 ${dry.intents || 0} 条「取消后自动锁」记录。不会取消真实预约。是否继续？`
+    } else {
+      const skipOther = (dry.skipGroup || 0) + (dry.skipInvalid || 0)
+      confirmText = `将锁定 ${dry.lock || 0} 个时段，跳过已锁 ${dry.skipLocked || 0}，已预约改记自动锁 ${dry.pending || 0}，团课/无效跳过 ${skipOther}。是否继续？`
+    }
+    try {
+      await ElMessageBox.confirm(confirmText, kind === 'lock' ? '确认批量锁场' : '确认批量解锁', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      })
+    } catch (e) {
+      return
+    }
+    const r = await post('/adminSaveBooking', { action, data: buildPayload({ dryRun: false }) })
+    if (!r || !r.ok) {
+      ElMessage.error((r && r.msg) || '操作失败')
+      return
+    }
+    if (kind === 'unlock') {
+      const start = (r.dates && r.dates[0]) || dates[0]
+      const end = (r.dates && r.dates[r.dates.length - 1]) || dates[dates.length - 1]
+      result.value = {
+        ok: r.unlocked || 0,
+        skip: 0,
+        fail: 0,
+        details: [{
+          court: form.value.courts.length ? form.value.courts.join('、') : '全部场地',
+          date: start === end ? start : (start + ' ~ ' + end),
+          time: form.value.times.length ? (form.value.times.length + ' 个时段') : '全部时段',
+          msg: `已解锁 ${r.unlocked || 0} 条锁场，清除 ${r.intentsCleared || 0} 条自动锁记录`
+        }]
+      }
+      ElMessage.success(`已解锁 ${r.unlocked || 0} 条，清除自动锁 ${r.intentsCleared || 0} 条`)
+    } else {
+      const skip = (r.skipLocked || 0) + (r.skipGroup || 0) + (r.skipInvalid || 0)
+      result.value = {
+        ok: (r.lock || 0) + (r.pending || 0),
+        skip,
+        fail: r.fail || 0,
+        details: r.details || []
+      }
+      ElMessage.success(`完成：锁定 ${r.lock || 0}，自动锁 ${r.pending || 0}，跳过 ${skip}`)
+    }
+    await loadLocks()
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+  } finally {
+    loadingRef.value = false
+  }
+}
+
+async function unlockOne(row) {
+  if (!row || !row.id) { ElMessage.warning('缺少记录'); return }
+  try {
+    await ElMessageBox.confirm(
+      `确定解锁 ${row.court || ''} ${row.date || ''} ${row.time || ''}？`,
+      '解锁该时段',
+      { confirmButtonText: '解锁', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch (e) {
+    return
+  }
+  try {
+    const r = await post('/adminSaveBooking', {
+      action: 'cancel',
+      id: row.id,
+      data: { operatorName: operatorName() }
+    })
+    if (r && r.ok) {
+      ElMessage.success('已解锁')
+      await loadLocks()
+    } else {
+      ElMessage.error((r && r.msg) || '解锁失败')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '解锁失败')
+  }
+}
+
+onMounted(loadVenues)
+</script>
+
+<style scoped>
+.page { padding: 16px; }
+.page-header { margin-bottom: 16px; }
+.page-header h2 { margin: 0; }
+.sub { color: #888; font-size: 13px; margin: 4px 0 0; }
+.form-hint { margin: 0 0 0 100px; }
+.card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.hint { color: #999; margin-left: 12px; font-size: 13px; }
+</style>

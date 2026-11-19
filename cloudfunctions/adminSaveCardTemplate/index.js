@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'saveCardTpl-20260929a'
+const FN_VER = 'saveCardTpl-20261117b'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -39,6 +39,61 @@ function packRule(v, maxHours) {
     return JSON.stringify(obj)
   } catch (e) {
     return null
+  }
+}
+
+function mapRow(r) {
+  let timeRule = r.time_rule
+  if (typeof timeRule === 'string') {
+    try { timeRule = JSON.parse(timeRule) } catch (e) { timeRule = { mode: 'unlimited' } }
+  }
+  if (!timeRule || typeof timeRule !== 'object') timeRule = { mode: 'unlimited' }
+  const maxHoursPerDay = Number(timeRule.maxHoursPerDay) || 0
+  return {
+    _id: String(r.id),
+    name: r.name,
+    type: r.type,
+    price: r.price,
+    totalTimes: r.total_times,
+    durationDays: r.duration_days,
+    timeRule: { ...timeRule, maxHoursPerDay },
+    maxHoursPerDay,
+    status: r.status,
+    description: r.description || '',
+    sortOrder: Number(r.sort_order) || 0
+  }
+}
+
+async function ensureSortOrder() {
+  try {
+    await pool.query('ALTER TABLE card_templates ADD COLUMN sort_order INT NOT NULL DEFAULT 0')
+  } catch (e) {}
+  try {
+    // 只在全部还是默认 0 时回填，避免把新模板排到最前的 0 或已有顺序改掉
+    await pool.query(
+      `UPDATE card_templates
+          SET sort_order = (SELECT mx FROM (SELECT MAX(id) AS mx FROM card_templates) s) - id + 1
+        WHERE (SELECT cnt FROM (SELECT COUNT(*) AS cnt FROM card_templates WHERE IFNULL(sort_order, 0) <> 0) t) = 0`
+    )
+  } catch (e) {}
+}
+
+async function hasSortOrderColumn() {
+  try {
+    await pool.query('SELECT sort_order FROM card_templates LIMIT 1')
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+async function loadOrdered() {
+  try {
+    const [rows] = await pool.query('SELECT id, sort_order FROM card_templates ORDER BY sort_order ASC, id ASC')
+    return rows || []
+  } catch (e) {
+    const [rows] = await pool.query('SELECT id FROM card_templates ORDER BY id DESC')
+    return (rows || []).map((r) => ({ id: r.id, sort_order: 0 }))
   }
 }
 
@@ -84,47 +139,99 @@ exports.main = async (event) => {
     }
 
     if (action === 'list' || action === 'get') {
-      const [rows] = await pool.query('SELECT * FROM card_templates ORDER BY id DESC')
-      const list = (rows || []).map((r) => {
-        let timeRule = r.time_rule
-        if (typeof timeRule === 'string') {
-          try { timeRule = JSON.parse(timeRule) } catch (e) { timeRule = { mode: 'unlimited' } }
-        }
-        if (!timeRule || typeof timeRule !== 'object') timeRule = { mode: 'unlimited' }
-        const maxHoursPerDay = Number(timeRule.maxHoursPerDay) || 0
-        return {
-          _id: String(r.id),
-          name: r.name,
-          type: r.type,
-          price: r.price,
-          totalTimes: r.total_times,
-          durationDays: r.duration_days,
-          timeRule: { ...timeRule, maxHoursPerDay },
-          maxHoursPerDay,
-          status: r.status,
-          description: r.description || ''
-        }
-      })
+      await ensureSortOrder()
+      let rows
+      try {
+        const [r] = await pool.query('SELECT * FROM card_templates ORDER BY sort_order ASC, id ASC')
+        rows = r
+      } catch (e) {
+        const [r] = await pool.query('SELECT * FROM card_templates ORDER BY id DESC')
+        rows = r
+      }
+      const list = (rows || []).map(mapRow)
       return { ok: true, list, fnVer: FN_VER }
+    }
+
+    if (action === 'move') {
+      if (!id) return { ok: false, msg: '缺少模板ID', fnVer: FN_VER }
+      const dir = body.direction === 'down' ? 1 : -1
+      await ensureSortOrder()
+      if (!(await hasSortOrderColumn())) return { ok: false, msg: '还没有排序字段，请先在库里执行 ADD_card_templates_sort_order.sql', fnVer: FN_VER }
+      const rows = await loadOrdered()
+      const idx = rows.findIndex((r) => Number(r.id) === id)
+      if (idx < 0) return { ok: false, msg: '模板不存在', fnVer: FN_VER }
+      const next = idx + dir
+      if (next < 0 || next >= rows.length) return { ok: true, fnVer: FN_VER }
+      const tmp = rows[idx]
+      rows[idx] = rows[next]
+      rows[next] = tmp
+      for (let i = 0; i < rows.length; i++) {
+        await pool.query('UPDATE card_templates SET sort_order=?, updated_at=NOW() WHERE id=?', [i + 1, rows[i].id])
+      }
+      return { ok: true, fnVer: FN_VER }
+    }
+
+    if (action === 'reorder') {
+      const ids = (body.ids || []).map(Number).filter(Boolean)
+      if (ids.length < 2) return { ok: false, msg: '排序数据不完整', fnVer: FN_VER }
+      if (!(await hasSortOrderColumn())) {
+        return { ok: false, msg: '还没有排序字段，请先在库里执行 ADD_card_templates_sort_order.sql', fnVer: FN_VER }
+      }
+      // Only rewrite sort_order for the submitted ids, keeping relative positions of others.
+      const [all] = await pool.query('SELECT id, sort_order FROM card_templates ORDER BY sort_order ASC, id ASC')
+      const rows = all || []
+      const incoming = ids.filter((id) => rows.some((r) => Number(r.id) === id))
+      if (incoming.length < 2) return { ok: false, msg: '排序数据不完整', fnVer: FN_VER }
+      const pos = incoming.map((id) => rows.findIndex((r) => Number(r.id) === id)).filter((i) => i >= 0).sort((a, b) => a - b)
+      if (pos.length !== incoming.length) return { ok: false, msg: '排序数据不完整', fnVer: FN_VER }
+      const next = rows.slice()
+      incoming.forEach((id, i) => {
+        next[pos[i]] = { id, sort_order: rows[pos[i]].sort_order }
+      })
+      for (let i = 0; i < next.length; i++) {
+        const so = i + 1
+        if (Number(next[i].sort_order) !== so || Number(next[i].id) !== Number(rows[i] && rows[i].id)) {
+          await pool.query('UPDATE card_templates SET sort_order=?, updated_at=NOW() WHERE id=?', [so, next[i].id])
+        }
+      }
+      return { ok: true, fnVer: FN_VER }
     }
 
     if (action === 'add') {
       if (!data.name || !data.type) return { ok: false, msg: '请填写名称和类型', fnVer: FN_VER }
+      await ensureSortOrder()
+      const params = [
+        data.name,
+        data.type,
+        Number(data.price) || 0,
+        Number(data.totalTimes) || 0,
+        Number(data.durationDays) || 0,
+        packRule(data.timeRule, data.maxHoursPerDay),
+        data.status || 'active',
+        data.description || '',
+        data.remark || ''
+      ]
+      if (await hasSortOrderColumn()) {
+        let sortOrder
+        if (data.sortOrder != null && data.sortOrder !== '') {
+          sortOrder = Number(data.sortOrder) || 0
+        } else {
+          const [m] = await pool.query('SELECT IFNULL(MAX(sort_order), 0) AS m FROM card_templates')
+          sortOrder = (Number(m[0] && m[0].m) || 0) + 1
+        }
+        const [res] = await pool.query(
+          `INSERT INTO card_templates
+            (name, type, price, total_times, duration_days, time_rule, status, description, remark, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          params.concat([sortOrder])
+        )
+        return { ok: true, id: String(res.insertId), fnVer: FN_VER }
+      }
       const [res] = await pool.query(
         `INSERT INTO card_templates
           (name, type, price, total_times, duration_days, time_rule, status, description, remark)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          data.name,
-          data.type,
-          Number(data.price) || 0,
-          Number(data.totalTimes) || 0,
-          Number(data.durationDays) || 0,
-          packRule(data.timeRule, data.maxHoursPerDay),
-          data.status || 'active',
-          data.description || '',
-          data.remark || ''
-        ]
+        params
       )
       return { ok: true, id: String(res.insertId), fnVer: FN_VER }
     }
@@ -144,6 +251,10 @@ exports.main = async (event) => {
       }
       if (data.status != null) { fields.push('status=?'); params.push(data.status) }
       if (data.description != null) { fields.push('description=?'); params.push(data.description) }
+      if ((data.sortOrder != null || data.sort_order != null) && (await hasSortOrderColumn())) {
+        fields.push('sort_order=?')
+        params.push(Number(data.sortOrder != null ? data.sortOrder : data.sort_order) || 0)
+      }
       if (!fields.length) return { ok: false, msg: '没有要改的字段', fnVer: FN_VER }
       fields.push('updated_at=NOW()')
       params.push(id)

@@ -9,8 +9,47 @@
       </div>
     </div>
 
-    <el-table :data="list" stripe border v-loading="loading" row-key="_id" @selection-change="(rows) => picked = rows">
+    <div class="filters">
+      <el-input v-model="filters.name" placeholder="按名称搜索" clearable style="width: 200px" />
+      <el-select v-model="filters.type" placeholder="全部类型" clearable style="width: 140px">
+        <el-option label="次卡" value="times" />
+        <el-option label="教练卡" value="coach" />
+        <el-option label="团课" value="group" />
+        <el-option label="时间卡" value="time" />
+        <el-option label="储值卡" value="stored" />
+      </el-select>
+      <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 140px">
+        <el-option label="启用" value="active" />
+        <el-option label="停用" value="disabled" />
+      </el-select>
+    </div>
+
+    <p class="drag-tip">按住左侧六点拖拽即可调整顺序，松开后立即保存。筛选时请先清空筛选，或用上移/下移。</p>
+    <el-table
+      ref="tableRef"
+      :data="filteredList"
+      stripe
+      border
+      v-loading="loading"
+      row-key="_id"
+      :row-class-name="dragRowClass"
+      @selection-change="(rows) => picked = rows"
+    >
       <el-table-column type="selection" width="42" />
+      <el-table-column label="排序" width="168">
+        <template #default="{ row }">
+          <span
+            class="drag-handle"
+            :class="{ disabled: filtersOn || moving }"
+            :draggable="!(filtersOn || moving)"
+            title="拖拽排序"
+            @dragstart="onDragStart(row, $event)"
+            @dragend="onDragEnd"
+          >⋮⋮</span>
+          <el-button link type="primary" :disabled="isFirst(row) || moving" @click="moveRow(row, 'up')">上移</el-button>
+          <el-button link type="primary" :disabled="isLast(row) || moving" @click="moveRow(row, 'down')">下移</el-button>
+        </template>
+      </el-table-column>
       <el-table-column prop="name" label="卡名称" min-width="140" />
       <el-table-column label="类型" width="110">
         <template #default="{ row }">
@@ -23,7 +62,17 @@
           <span v-else>{{ row.durationDays || '-' }} 天</span>
         </template>
       </el-table-column>
-      <el-table-column label="时间规则" min-width="280">
+      <el-table-column label="适用门店" min-width="160">
+        <template #default="{ row }">
+          <span>{{ venueText(row.timeRule) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="适用场地" min-width="140">
+        <template #default="{ row }">
+          <span>{{ courtTypesText(row.timeRule, row.name, row.type) }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="时间规则" min-width="240">
         <template #default="{ row }">
           <span>{{ timeRuleText(row.timeRule) }}</span>
         </template>
@@ -70,13 +119,14 @@
           <span class="hint">元，发卡时自动带出，可再改</span>
         </el-form-item>
         <el-form-item label="类型" required>
-          <el-radio-group v-model="form.type" :disabled="!!form._id">
+          <el-radio-group v-model="form.type">
             <el-radio label="times" value="times">次卡</el-radio>
             <el-radio label="coach" value="coach">教练卡</el-radio>
             <el-radio label="group" value="group">团课</el-radio>
             <el-radio label="time" value="time">时间卡</el-radio>
             <el-radio label="stored" value="stored">储值卡</el-radio>
           </el-radio-group>
+          <div v-if="form._id" class="hint" style="margin-left:0">已发出的卡仍保留自己的类型，只影响以后新发的卡。</div>
         </el-form-item>
         <el-form-item v-if="form.type === 'group'" label="说明">
           <span class="hint" style="margin-left:0">团课：时间由场馆排期，同一教练同一时段可带多名学员</span>
@@ -112,19 +162,36 @@
           <span class="hint">小时，0 = 不限制</span>
         </el-form-item>
         <el-form-item label="适用门店">
-          <el-select v-model="form.timeRule.venueIds" multiple clearable filterable placeholder="不选 = 所有门店可用" style="width: 100%">
+          <el-radio-group v-model="form.venueScope">
+            <el-radio label="all" value="all">全门店通用</el-radio>
+            <el-radio label="selected" value="selected">指定门店</el-radio>
+          </el-radio-group>
+          <el-select
+            v-if="form.venueScope === 'selected'"
+            v-model="form.timeRule.venueIds"
+            multiple
+            filterable
+            placeholder="请选择可用门店（可多选）"
+            style="width: 100%; margin-top: 8px"
+          >
             <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
           </el-select>
-          <div class="hint" style="margin-left:0">默认不限制。选了之后只能在这些店订场用卡。</div>
+          <div class="hint" style="margin-left:0">全门店通用：所有门店订场都能用。指定门店：只在勾选的店可用。</div>
         </el-form-item>
-        <el-form-item v-if="form.type !== 'group'" label="可用规则">
+        <el-form-item label="适用场地">
+          <el-checkbox-group v-model="form.timeRule.courtTypes">
+            <el-checkbox v-for="t in COURT_TYPE_OPTIONS" :key="t" :label="t" :value="t">{{ t }}</el-checkbox>
+          </el-checkbox-group>
+          <div class="hint" style="margin-left:0">不勾选 = 不限（网球、匹克球、发球机都能用）。旧模板若还没设置，打开时会按卡名带出识别结果，保存后即写入规则。</div>
+        </el-form-item>
+        <el-form-item label="可用规则">
           <el-radio-group v-model="form.timeRule.mode">
             <el-radio label="unlimited" value="unlimited">有效期内任意时间</el-radio>
             <el-radio label="rules" value="rules">自定义星期 + 时段</el-radio>
             <el-radio label="dates" value="dates">节假日 / 指定日期</el-radio>
           </el-radio-group>
         </el-form-item>
-        <div v-if="form.type !== 'group' && form.timeRule.mode === 'dates'" class="rules-box">
+        <div v-if="form.timeRule.mode === 'dates'" class="rules-box">
           <el-form-item label="快捷节日">
             <el-button v-for="h in holidayPresets" :key="h.key" size="small" :type="form.timeRule.holidayKey === h.key ? 'primary' : ''" @click="applyHoliday(h)">{{ h.label }}</el-button>
           </el-form-item>
@@ -145,7 +212,7 @@
           </el-form-item>
         </div>
 
-        <div v-if="form.type !== 'group' && form.timeRule.mode === 'rules'" class="rules-box">
+        <div v-if="form.timeRule.mode === 'rules'" class="rules-box">
           <div v-for="(rule, ri) in form.timeRule.rules" :key="ri" class="rule-card">
             <div class="rule-head">
               <b>规则 {{ ri + 1 }}</b>
@@ -186,7 +253,7 @@
         </el-form-item>
         <el-form-item v-if="form._id" label="同步已发卡">
           <el-checkbox v-model="form.syncIssued">把这次改动同步到已发给用户的卡</el-checkbox>
-          <div class="hint" style="margin-left:0">不勾选只改模板。单独改过规则的卡不会被覆盖。</div>
+          <div class="hint" style="margin-left:0">不勾选只改模板。单独改过规则的卡不会被覆盖。类型改动不会同步到已发卡。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -196,9 +263,11 @@
     </el-dialog>
   </div>
 </template>
+
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { COURT_TYPE_OPTIONS, courtTypesText, formCourtTypesForEdit, normalizeCourtTypes } from '../utils/courtTypeRule.js'
 const list = ref([])
 const picked = ref([])
 const batchVisible = ref(false)
@@ -207,7 +276,79 @@ const batchHours = ref(1)
 const batchSyncIssued = ref(true)
 const loading = ref(false)
 const saving = ref(false)
+const moving = ref(false)
+const tableRef = ref(null)
+const dragId = ref('')
+const filtersOn = computed(() => !!(filters.value.name || filters.value.type || filters.value.status))
+function dragRowClass() {
+  return filtersOn.value || moving.value ? '' : 'is-draggable-row'
+}
+function onDragStart(row, ev) {
+  if (filtersOn.value || moving.value) {
+    ev.preventDefault()
+    return
+  }
+  dragId.value = String(row._id)
+  ev.dataTransfer.effectAllowed = 'move'
+  ev.dataTransfer.setData('text/plain', String(row._id))
+}
+function onDragEnd() {
+  dragId.value = ''
+}
+function bindTableDrag() {
+  const el = tableRef.value && tableRef.value.$el
+  if (!el || el._tplDragBound) return
+  el._tplDragBound = true
+  el.addEventListener('dragover', (e) => {
+    if (!dragId.value) return
+    const tr = e.target && e.target.closest && e.target.closest('.el-table__body tr')
+    if (!tr) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  })
+  el.addEventListener('drop', (e) => {
+    const tr = e.target && e.target.closest && e.target.closest('.el-table__body tr')
+    if (!tr) return
+    e.preventDefault()
+    const rows = tr.parentNode.querySelectorAll('tr')
+    const idx = Array.prototype.indexOf.call(rows, tr)
+    const target = filteredList.value[idx]
+    if (target) onDropRow(target)
+  })
+}
+async function onDropRow(row) {
+  const fromId = dragId.value
+  dragId.value = ''
+  if (!fromId || filtersOn.value || moving.value) return
+  const toId = String(row._id)
+  if (fromId === toId) return
+  const prev = list.value.slice()
+  const arr = list.value.slice()
+  const from = arr.findIndex((r) => String(r._id) === fromId)
+  const to = arr.findIndex((r) => String(r._id) === toId)
+  if (from < 0 || to < 0) return
+  const item = arr.splice(from, 1)[0]
+  arr.splice(to, 0, item)
+  list.value = arr
+  moving.value = true
+  try {
+    const result = await post('/adminSaveCardTemplate', { action: 'reorder', ids: arr.map((r) => r._id) })
+    if (!result.ok) {
+      list.value = prev
+      ElMessage.error(result.msg || '排序保存失败')
+      return
+    }
+    ElMessage.success('已保存排序')
+  } catch (e) {
+    list.value = prev
+    ElMessage.error((e && e.message) || '排序保存失败')
+  } finally {
+    moving.value = false
+  }
+}
+
 const visible = ref(false)
+const filters = ref({ name: '', type: '', status: '' })
 function emptyRule() {
   return { weekdays: [1, 2, 3, 4, 5], unlimited: true, timeSlots: [{ start: '10:00', end: '18:00' }] }
 }
@@ -221,7 +362,8 @@ function extraRule(r) {
     maxHoursPerDay: Number(r.maxHoursPerDay) > 0 ? Number(r.maxHoursPerDay) : 0,
     dateRanges: ranges.length ? ranges : [{ start: '', end: '', range: [] }],
     holidayKey: r.holidayKey || '',
-    venueIds: Array.isArray(r.venueIds) ? r.venueIds.slice() : []
+    venueIds: Array.isArray(r.venueIds) ? r.venueIds.slice() : [],
+    courtTypes: Array.isArray(r.courtTypes) ? r.courtTypes.slice() : []
   }
 }
 function parseRule(raw) {
@@ -244,7 +386,8 @@ function parseRule(raw) {
 }
 const emptyForm = () => ({
   _id: '', name: '', type: 'times', totalTimes: 10, durationDays: 30,
-  timeRule: { mode: 'unlimited', rules: [emptyRule()], maxHoursPerDay: 0, dateRanges: [{ start: '', end: '', range: [] }], holidayKey: '', venueIds: [] },
+  timeRule: { mode: 'unlimited', rules: [emptyRule()], maxHoursPerDay: 0, dateRanges: [{ start: '', end: '', range: [] }], holidayKey: '', venueIds: [], courtTypes: [] },
+  venueScope: 'all',
   price: 0, activateMode: 'now', active: true, description: '', syncIssued: false
 })
 const venueList = ref([])
@@ -288,29 +431,39 @@ function normalizeType(t) {
   if (t === '教练卡') return 'coach'
   if (t === '团课' || t === '团课卡') return 'group'
   if (t === '时间卡' || t === '月卡') return 'time'
+  if (t === '储值卡') return 'stored'
   return 'times'
 }
 function isTimesLike(t) { const x = normalizeType(t); return x === 'times' || x === 'coach' || x === 'group' }
-function typeLabel(t) { return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡' }[normalizeType(t)] || t }
-function typeTag(t) { return { times: 'success', coach: 'warning', group: 'danger', time: 'primary' }[normalizeType(t)] || 'info' }
+function typeLabel(t) { return { times: '次卡', coach: '教练卡', group: '团课', time: '时间卡', stored: '储值卡' }[normalizeType(t)] || t }
+function typeTag(t) { return { times: 'success', coach: 'warning', group: 'danger', time: 'primary', stored: 'info' }[normalizeType(t)] || 'info' }
 function weekdayText(days) {
   const map = { 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六', 7: '日' }
   return (days || []).map((d) => map[d] || d).join('')
 }
+function venueText(rule) {
+  const r = parseRule(rule)
+  const ids = r.venueIds || []
+  if (!ids.length) return '全门店通用'
+  const names = ids.map((id) => {
+    const v = venueList.value.find((x) => String(x.venueId || x._id) === String(id))
+    return v ? v.name : id
+  })
+  return names.join('、')
+}
 function timeRuleText(rule) {
   const r = parseRule(rule)
   const cap = r.maxHoursPerDay > 0 ? `（每天最多${r.maxHoursPerDay}小时）` : ''
-  const shops = (r.venueIds && r.venueIds.length) ? ' ·限指定门店' : ''
-  if (r.mode === 'unlimited') return '有效期内任意时间' + cap + shops
+  if (r.mode === 'unlimited') return '有效期内任意时间' + cap
   if (r.mode === 'dates') {
     const segs = (r.dateRanges || []).filter((x) => x.start && x.end).map((x) => x.start + '至' + x.end)
-    return (segs.length ? segs.join('；') : '指定日期') + cap + shops
+    return (segs.length ? segs.join('；') : '指定日期') + cap
   }
   return r.rules.map((g) => {
     const days = weekdayText(g.weekdays) || '未选星期'
     const slots = (g.timeSlots || []).map((s) => `${s.start}-${s.end}`).join('、') || '全天'
     return `周${days} ${slots}`
-  }).join('；') + cap + shops
+  }).join('；') + cap
 }
 function addRule() { form.value.timeRule.rules.push(emptyRule()) }
 function removeRule(i) { form.value.timeRule.rules.splice(i, 1) }
@@ -318,6 +471,23 @@ function addSlot(rule) { rule.timeSlots.push({ start: '10:00', end: '18:00' }) }
 function removeSlot(rule, i) {
   if (rule.timeSlots.length <= 1) { rule.timeSlots = [{ start: '10:00', end: '18:00' }]; return }
   rule.timeSlots.splice(i, 1)
+}
+const filteredList = computed(() => {
+  const name = String(filters.value.name || '').trim()
+  const type = filters.value.type
+  const status = filters.value.status
+  return list.value.filter((row) => {
+    if (name && !String(row.name || '').includes(name)) return false
+    if (type && row.type !== type) return false
+    if (status && row.status !== status) return false
+    return true
+  })
+})
+function isFirst(row) {
+  return !list.value.length || String(list.value[0]._id) === String(row._id)
+}
+function isLast(row) {
+  return !list.value.length || String(list.value[list.value.length - 1]._id) === String(row._id)
 }
 async function post(path, body = {}) {
   const res = await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -347,18 +517,32 @@ async function loadData() {
     const result = await post('/adminGetCardTemplates', {})
     if (!result.ok) { ElMessage.error(result.msg || '加载失败'); return }
     list.value = (result.list || []).map((row) => ({ ...row, type: normalizeType(row.type) }))
+    setTimeout(bindTableDrag, 0)
   } catch (e) { ElMessage.error(e.message || '网络错误') }
   finally { loading.value = false }
 }
+async function moveRow(row, direction) {
+  if (moving.value) return
+  moving.value = true
+  try {
+    const result = await post('/adminSaveCardTemplate', { action: 'move', id: row._id, direction })
+    if (!result.ok) { ElMessage.error(result.msg || '调整失败'); return }
+    await loadData()
+  } catch (e) { ElMessage.error(e.message || '调整失败') }
+  finally { moving.value = false }
+}
 function openAdd() { form.value = emptyForm(); visible.value = true }
 function openEdit(row) {
+  const timeRule = parseRule(row.timeRule)
+  timeRule.courtTypes = formCourtTypesForEdit(row.timeRule, row.name, row.type)
   form.value = {
     _id: row._id,
     name: row.name || '',
     type: normalizeType(row.type),
     totalTimes: row.totalTimes || 10,
     durationDays: row.durationDays || 30,
-    timeRule: parseRule(row.timeRule),
+    timeRule,
+    venueScope: (timeRule.venueIds && timeRule.venueIds.length) ? 'selected' : 'all',
     active: row.status === 'active',
     description: row.description || '',
     activateMode: (row.timeRule && row.timeRule.activateMode) || 'now',
@@ -369,6 +553,10 @@ function openEdit(row) {
 }
 async function save() {
   if (!form.value.name) { ElMessage.warning('请填写卡名称'); return }
+  if (form.value.venueScope === 'selected' && !(form.value.timeRule.venueIds || []).length) {
+    ElMessage.warning('请选择至少一家门店，或改回全门店通用')
+    return
+  }
   if (form.value.timeRule.mode === 'rules') {
     for (const r of form.value.timeRule.rules) {
       if (!(r.weekdays || []).length) { ElMessage.warning('请至少选一个星期'); return }
@@ -377,20 +565,20 @@ async function save() {
   }
   saving.value = true
   try {
-    const payloadRule = form.value.type === 'group'
-      ? { venueIds: form.value.timeRule.venueIds || [] }
-      : {
-          mode: form.value.timeRule.mode || 'unlimited',
-          rules: form.value.timeRule.rules,
-          maxHoursPerDay: Number(form.value.timeRule.maxHoursPerDay) || 0,
-          dateRanges: (form.value.timeRule.dateRanges || [])
-            .filter((x) => x.start && x.end)
-            .map((x) => ({ start: x.start, end: x.end })),
-          holidayKey: form.value.timeRule.holidayKey || '',
-          venueIds: form.value.timeRule.venueIds || [],
-          activateMode: form.value.activateMode || 'now',
-          durationDays: Number(form.value.durationDays) || 0
-        }
+    const venueIds = form.value.venueScope === 'selected' ? (form.value.timeRule.venueIds || []) : []
+    const payloadRule = {
+      mode: form.value.timeRule.mode || 'unlimited',
+      rules: form.value.timeRule.rules,
+      maxHoursPerDay: Number(form.value.timeRule.maxHoursPerDay) || 0,
+      dateRanges: (form.value.timeRule.dateRanges || [])
+        .filter((x) => x.start && x.end)
+        .map((x) => ({ start: x.start, end: x.end })),
+      holidayKey: form.value.timeRule.holidayKey || '',
+      venueIds,
+      courtTypes: normalizeCourtTypes(form.value.timeRule.courtTypes || []) || [],
+      activateMode: form.value.activateMode || 'now',
+      durationDays: Number(form.value.durationDays) || 0
+    }
     if (form.value.timeRule.mode === 'dates') {
       const segs = payloadRule.dateRanges
       if (!segs.length) { ElMessage.warning('请填写节假日可用日期'); saving.value = false; return }
@@ -454,15 +642,38 @@ async function loadVenues() {
     venueList.value = result.list || []
   } catch (e) { venueList.value = [] }
 }
-onMounted(() => { loadData(); loadVenues() })
+onMounted(() => {
+  loadData()
+  loadVenues()
+  bindTableDrag()
+})
+onBeforeUnmount(() => {
+  const el = tableRef.value && tableRef.value.$el
+  if (el) el._tplDragBound = false
+})
+
 </script>
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
+.filters { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .hint { margin-left: 8px; color: #999; font-size: 12px; }
 .rules-box { background: #f7faf8; border-radius: 10px; padding: 12px; margin: 0 0 16px 110px; }
 .rule-card { background: #fff; border: 1px solid #e8eee9; border-radius: 8px; padding: 10px 12px 4px; margin-bottom: 10px; }
 .rule-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .slots { display: flex; flex-direction: column; gap: 8px; }
 .slot-row { display: flex; align-items: center; gap: 8px; }
+.drag-tip { margin: 0 0 10px; color: #888; font-size: 13px; }
+.drag-handle {
+  display: inline-block;
+  width: 22px;
+  text-align: center;
+  cursor: grab;
+  color: #999;
+  letter-spacing: -2px;
+  user-select: none;
+  margin-right: 4px;
+}
+.drag-handle:active { cursor: grabbing; }
+.drag-handle.disabled { cursor: not-allowed; color: #ddd; }
 </style>

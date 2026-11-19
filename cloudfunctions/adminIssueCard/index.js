@@ -11,6 +11,133 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
+
+function parseRuleObj(v) {
+  if (!v) return null
+  if (typeof v === 'object') return v
+  try { return JSON.parse(v) } catch (e) { return null }
+}
+function ymdNowLocal() {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date())
+  } catch (e) {
+    const d = new Date(Date.now() + 8 * 3600 * 1000)
+    return d.toISOString().slice(0, 10)
+  }
+}
+function normYmd(v) {
+  if (!v) return ''
+  const m = String(v).match(/^(\d{4}-\d{2}-\d{2})/)
+  return m ? m[1] : ''
+}
+function addDaysYmd(ymd, days) {
+  const base = normYmd(ymd) || ymdNowLocal()
+  const d = new Date(base.replace(/-/g, '/') + ' 00:00:00')
+  d.setDate(d.getDate() + Number(days || 0))
+  const p = (n) => (n < 10 ? '0' + n : '' + n)
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+function appendRemarkTag(remark, tag) {
+  const s = String(remark || '')
+  if (s.indexOf(tag) >= 0) return s
+  return (s ? s.replace(/\s+$/, '') + ' ' : '') + tag
+}
+// Existing convention: validTo = start + durationDays (e.g. Nov 17 + 30 = Dec 17).
+function templateDefaultIssueDates(tpl, opts) {
+  const rule = parseRuleObj(tpl && (tpl.time_rule || tpl.timeRule)) || {}
+  const opt = opts || {}
+  const mode = opt.activateMode || rule.activateMode || 'now'
+  const daysRaw = opt.durationDays != null && opt.durationDays !== ''
+    ? Number(opt.durationDays)
+    : (Number(tpl && (tpl.duration_days != null ? tpl.duration_days : tpl.durationDays)) || Number(rule.durationDays) || 0)
+  const days = Number.isFinite(daysRaw) ? daysRaw : 0
+  const today = opt.today || ymdNowLocal()
+  if (mode === 'first_use') return { from: '', to: '', mode, days }
+  if (rule.mode === 'dates' && Array.isArray(rule.dateRanges) && rule.dateRanges.length) {
+    const starts = rule.dateRanges.map((x) => x && x.start).filter(Boolean).sort()
+    const ends = rule.dateRanges.map((x) => x && x.end).filter(Boolean).sort()
+    return { from: starts[0] || today, to: ends.length ? ends[ends.length - 1] : '', mode: 'now', days }
+  }
+  if (days > 0) return { from: today, to: addDaysYmd(today, days), mode, days }
+  return { from: '', to: '', mode, days: 0 }
+}
+function resolveIssueDates(tpl, clientFrom, clientTo, opts) {
+  const def = templateDefaultIssueDates(tpl, opts)
+  const mode = (opts && opts.activateMode) || def.mode || 'now'
+  if (mode === 'first_use') {
+    return { from: null, to: null, datesEdited: false, def }
+  }
+  const from = normYmd(clientFrom)
+  const to = normYmd(clientTo)
+  const omitted = !from && !to
+  if (omitted) {
+    return { from: def.from || null, to: def.to || null, datesEdited: false, def }
+  }
+  const edited = from !== (def.from || '') || to !== (def.to || '')
+  return { from: from || null, to: to || null, datesEdited: edited, def }
+}
+function templateVenueIds(tpl) {
+  const rule = parseRuleObj(tpl && (tpl.time_rule || tpl.timeRule)) || {}
+  return (Array.isArray(rule.venueIds) ? rule.venueIds : []).map((x) => String(x)).filter(Boolean)
+}
+function datesEditedFlag(card, tpl) {
+  const remark = String((card && card.remark) || '')
+  if (/\[已改有效期\]/.test(remark)) return true
+  if (!tpl) return false
+  const rule = parseRuleObj(tpl.time_rule || tpl.timeRule) || {}
+  const mode = rule.activateMode || 'now'
+  if (mode === 'first_use') return false
+  const days = Number(tpl.duration_days != null ? tpl.duration_days : (tpl.durationDays || rule.durationDays) || 0)
+  const from = normYmd(card.valid_from || card.validFrom)
+  const to = normYmd(card.valid_to || card.validTo)
+  if (rule.mode === 'dates' && Array.isArray(rule.dateRanges) && rule.dateRanges.length) {
+    const starts = rule.dateRanges.map((x) => x && x.start).filter(Boolean).sort()
+    const ends = rule.dateRanges.map((x) => x && x.end).filter(Boolean).sort()
+    return from !== (starts[0] || '') || to !== (ends[ends.length - 1] || '')
+  }
+  if (days > 0) {
+    if (!from) return true
+    return to !== addDaysYmd(from, days)
+  }
+  return !!to
+}
+
+const FN_VER = 'issueCard-20261117b'
+
+async function loadVenueNames(ids) {
+  const list = (ids || []).map(String).filter(Boolean)
+  if (!list.length) return {}
+  const ph = list.map(() => '?').join(',')
+  const map = {}
+  try {
+    const [rows] = await pool.query(
+      `SELECT venue_id, id, name FROM venues WHERE venue_id IN (${ph}) OR id IN (${ph})`,
+      list.concat(list)
+    )
+    ;(rows || []).forEach((r) => {
+      const name = r.name || ''
+      if (r.venue_id) map[String(r.venue_id)] = name
+      if (r.id != null) map[String(r.id)] = name
+    })
+  } catch (e) {}
+  return map
+}
+
+async function templateIssueVenueError(tpl, venueId) {
+  const ids = templateVenueIds(tpl)
+  if (!ids.length) return ''
+  if (ids.indexOf(String(venueId || '')) >= 0) return ''
+  const namesMap = await loadVenueNames(ids)
+  const names = ids.map((id) => namesMap[id] || '').filter(Boolean)
+  const label = names.length ? names.join('、') : '指定'
+  return '该卡券仅限' + label + '店发放'
+}
+
 exports.main = async (event) => {
   try {
     let body = event
@@ -36,13 +163,13 @@ exports.main = async (event) => {
     } = body || {}
 
     if (!templateId || !userId) {
-      return { ok: false, msg: '参数不完整' }
+      return { ok: false, msg: '参数不完整', fnVer: FN_VER }
     }
     if (!venueId) {
-      return { ok: false, msg: '请选择发卡场馆' }
+      return { ok: false, msg: '请选择发卡场馆', fnVer: FN_VER }
     }
     if (!issuerName) {
-      return { ok: false, msg: '请填写发卡人' }
+      return { ok: false, msg: '请填写发卡人', fnVer: FN_VER }
     }
     if (body.useBalance) {
       return { ok: false, msg: '余额只能订场，不能买卡' }
@@ -65,7 +192,10 @@ exports.main = async (event) => {
       [templateId]
     )
     const tpl = tplRows && tplRows[0]
-    if (!tpl) return { ok: false, msg: '卡模板不存在' }
+    if (!tpl) return { ok: false, msg: '卡模板不存在', fnVer: FN_VER }
+
+    const venueErr = await templateIssueVenueError(tpl, venueId)
+    if (venueErr) return { ok: false, msg: venueErr, fnVer: FN_VER }
 
     const times = totalTimes || tpl.total_times || 0
     let ruleObj = tpl.time_rule
@@ -79,29 +209,12 @@ exports.main = async (event) => {
     if (body.activateMode) ruleObj.activateMode = body.activateMode
     if (body.durationDays != null) ruleObj.durationDays = Number(body.durationDays) || 0
     let timeRule = JSON.stringify(ruleObj)
-    let from = validFrom || null
-    let to = validTo || null
-    if (body.activateMode === 'first_use') {
-      from = null
-      to = null
-    } else if ((!from || !to) && Number(body.durationDays || tpl.duration_days) > 0 && body.activateMode !== 'first_use') {
-      const days = Number(body.durationDays || tpl.duration_days)
-      const now = new Date()
-      const p = (n) => (n < 10 ? '0' + n : '' + n)
-      const ymd = (d) => d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-      if (!from) from = ymd(now)
-      if (!to) {
-        const end = new Date(now)
-        end.setDate(end.getDate() + days)
-        to = ymd(end)
-      }
-    }
-    if ((!from || !to) && Array.isArray(ruleObj.dateRanges) && ruleObj.dateRanges.length) {
-      const starts = ruleObj.dateRanges.map((x) => x.start).filter(Boolean).sort()
-      const ends = ruleObj.dateRanges.map((x) => x.end).filter(Boolean).sort()
-      if (!from && starts[0]) from = starts[0]
-      if (!to && ends.length) to = ends[ends.length - 1]
-    }
+    const resolved = resolveIssueDates(tpl, validFrom, validTo, {
+      activateMode: body.activateMode || ruleObj.activateMode || 'now',
+      durationDays: body.durationDays != null ? body.durationDays : (tpl.duration_days || ruleObj.durationDays)
+    })
+    let from = resolved.from || null
+    let to = resolved.to || null
     const payPrice = Number(price) || 0
     const mt = Number(payMeituan) || 0
     const dy = Number(payDouyin) || 0
@@ -111,6 +224,8 @@ exports.main = async (event) => {
     if (dy > 0) parts.push('抖音' + dy)
     if (off > 0) parts.push('线下' + off)
     const sourceText = parts.length ? ' [' + parts.join('+') + ']' : ''
+    let remarkText = remark || ''
+    if (resolved.datesEdited) remarkText = appendRemarkTag(remarkText, '[已改有效期]')
     const tplPrice = Number(tpl.price) || 0
     const mismatch = tplPrice > 0 && Math.abs(payPrice - tplPrice) > 0.01
 
@@ -134,7 +249,7 @@ exports.main = async (event) => {
         from,
         to,
         timeRule || null,
-        (remark || '') + sourceText,
+        remarkText + sourceText,
         issuerName,
         payPrice
       ]
@@ -194,9 +309,9 @@ exports.main = async (event) => {
       await pool.query('UPDATE users SET balance=IFNULL(balance,0)+?, updated_at=NOW() WHERE id=?', [payPrice, userId])
     }
 
-    return { ok: true, id: String(res.insertId) }
+    return { ok: true, id: String(res.insertId), datesEdited: !!resolved.datesEdited, fnVer: FN_VER }
   } catch (e) {
     console.error(e)
-    return { ok: false, msg: e.message || '发卡失败' }
+    return { ok: false, msg: e.message || '发卡失败', fnVer: FN_VER }
   }
 }

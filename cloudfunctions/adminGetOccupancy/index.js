@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise')
+const lib = require('./occupancyLib')
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -11,19 +12,8 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
-const ALL_SLOTS = [
-  '08:00-09:00',
-  '09:00-10:00',
-  '10:00-11:00',
-  '11:00-12:00',
-  '14:00-15:00',
-  '15:00-16:00',
-  '16:00-17:00',
-  '17:00-18:00',
-  '18:00-19:00',
-  '19:00-20:00',
-  '20:00-21:00'
-]
+const FN_VER = 'occupancy-20261116a'
+const ALL_SLOTS = lib.ALL_SLOTS
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -37,64 +27,16 @@ function parseEvent(event) {
   return event || {}
 }
 
-function pad(n) {
-  return n < 10 ? '0' + n : '' + n
-}
-
-function ymd(d) {
-  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
-}
-
-function fmtDate(v) {
-  if (!v) return ''
-  if (typeof v === 'string') {
-    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/)
-    if (m) return m[0]
-  }
-  const d = v instanceof Date ? v : new Date(String(v).replace(/-/g, '/'))
-  if (Number.isNaN(d.getTime())) return ''
-  return ymd(d)
-}
-
-function listDates(start, end) {
-  const out = []
-  const a = new Date(fmtDate(start).replace(/-/g, '/'))
-  const b = new Date(fmtDate(end).replace(/-/g, '/'))
-  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime()) || a > b) return out
-  const cur = new Date(a)
-  while (cur <= b) {
-    out.push(ymd(cur))
-    cur.setDate(cur.getDate() + 1)
-  }
-  return out
-}
-
-function rateOf(occ, cap) {
-  if (!cap) return 0
-  return Math.round((occ / cap) * 1000) / 10
-}
-
-function weekdayMon1(dateStr) {
-  const d = new Date(String(dateStr).replace(/-/g, '/'))
-  if (Number.isNaN(d.getTime())) return 0
-  const w = d.getDay()
-  return w === 0 ? 7 : w
-}
-
-function slotSort(a, b) {
-  return String(a).localeCompare(String(b))
-}
-
 exports.main = async (event) => {
   const e = parseEvent(event)
-  const startDate = fmtDate(e.startDate)
-  const endDate = fmtDate(e.endDate)
+  const startDate = lib.fmtDate(e.startDate)
+  const endDate = lib.fmtDate(e.endDate)
   if (!startDate || !endDate) {
-    return { ok: false, msg: '请选择开始和结束日期' }
+    return { ok: false, msg: '请选择开始和结束日期', fnVer: FN_VER }
   }
-  const dates = listDates(startDate, endDate)
-  if (!dates.length) return { ok: false, msg: '日期区间无效' }
-  if (dates.length > 93) return { ok: false, msg: '一次最多查 93 天' }
+  const dates = lib.listDates(startDate, endDate)
+  if (!dates.length) return { ok: false, msg: '日期区间无效', fnVer: FN_VER }
+  if (dates.length > 93) return { ok: false, msg: '一次最多查 93 天', fnVer: FN_VER }
 
   let venueIds = []
   if (Array.isArray(e.venueIds) && e.venueIds.length) {
@@ -109,6 +51,14 @@ exports.main = async (event) => {
   if (Array.isArray(e.courts) && e.courts.length) {
     courtFilter = e.courts.map(String).filter(Boolean)
   }
+
+  const emptyMatrix = lib.buildMatrix({
+    venues: [],
+    courts: [],
+    dates,
+    ctx: { useHours: false, hourSet: new Set(), usePrice: false, openSet: new Set(), slots: ALL_SLOTS, slotFilter },
+    occupiedSet: new Set()
+  })
 
   try {
     let venues
@@ -129,11 +79,14 @@ exports.main = async (event) => {
     if (!venues.length) {
       return {
         ok: true,
+        fnVer: FN_VER,
         summary: { capacity: 0, occupied: 0, rate: 0, days: dates.length, courts: 0, bookedCount: 0 },
         byVenue: [],
         byCourt: [],
         byTime: [],
+        byDate: dates.map((d) => ({ date: d, capacity: 0, occupied: 0, rate: 0 })),
         heatmap: [],
+        matrix: emptyMatrix,
         slots: ALL_SLOTS,
         dates
       }
@@ -141,37 +94,16 @@ exports.main = async (event) => {
 
     const vids = venues.map((v) => v.venueId)
     const [courtRows] = await pool.query(
-      `SELECT venue_id AS venueId, name FROM courts
+      `SELECT venue_id AS venueId, name, type, status, remark FROM courts
        WHERE venue_id IN (${vids.map(() => '?').join(',')})
-         AND (status IS NULL OR status IN ('active','open','启用','开放',''))
        ORDER BY venue_id, id`,
       vids
     )
 
-    let courts = courtRows
+    let courts = (courtRows || []).filter((c) => String(c.name || '').trim() !== '外场')
     if (courtFilter.length) {
       const cf = new Set(courtFilter)
       courts = courts.filter((c) => cf.has(c.name))
-    }
-
-    if (!courts.length) {
-      return {
-        ok: true,
-        summary: { capacity: 0, occupied: 0, rate: 0, days: dates.length, courts: 0, bookedCount: 0 },
-        byVenue: venues.map((v) => ({
-          venueId: v.venueId,
-          venueName: v.name,
-          capacity: 0,
-          occupied: 0,
-          rate: 0,
-          courts: 0
-        })),
-        byCourt: [],
-        byTime: ALL_SLOTS.map((t) => ({ time: t, capacity: 0, occupied: 0, rate: 0 })),
-        heatmap: [],
-        slots: ALL_SLOTS,
-        dates
-      }
     }
 
     let hourRows = []
@@ -211,13 +143,13 @@ exports.main = async (event) => {
     const pricedSlots = new Set()
     priceRows.forEach((row) => {
       if (Number(row.price) > 0) {
-        openSet.add(String(row.venueId) + '|' + String(row.court) + '|' + String(row.weekday) + '|' + String(row.timeSlot))
+        openSet.add(String(row.venueId) + '|' + lib.normCourt(row.court) + '|' + String(row.weekday) + '|' + String(row.timeSlot))
         pricedSlots.add(String(row.timeSlot))
       }
     })
     const usePrice = openSet.size > 0
 
-    let slots = useHours ? Array.from(hourSlots).sort(slotSort) : Array.from(pricedSlots).sort(slotSort)
+    let slots = useHours ? Array.from(hourSlots).sort(lib.slotSort) : Array.from(pricedSlots).sort(lib.slotSort)
     if (!slots.length) slots = ALL_SLOTS.slice()
     if (slotFilter.length) {
       const allow = new Set(slotFilter)
@@ -225,192 +157,131 @@ exports.main = async (event) => {
       if (!slots.length) slots = slotFilter.slice()
     }
 
-    function isOpen(vid, court, date, time) {
-      if (slotFilter.length && !slotFilter.includes(time)) return false
-      const w = weekdayMon1(date)
-      if (useHours && !hourSet.has(String(vid) + '|' + w + '|' + time)) return false
-      if (usePrice) return openSet.has(String(vid) + '|' + String(court) + '|' + w + '|' + time)
-      return slots.includes(time)
-    }
+    const ctx = { useHours, hourSet, usePrice, openSet, slots, slotFilter }
 
-    const [bookRows] = await pool.query(
-      `SELECT venue_id AS venueId, court, DATE_FORMAT(date,'%Y-%m-%d') AS d, time
-       FROM bookings
-       WHERE status = 'booked'
-         AND date >= ? AND date <= ?
-         AND venue_id IN (${vids.map(() => '?').join(',')})
-         AND time IN (${slots.map(() => '?').join(',')})`,
-      [startDate, endDate, ...vids, ...slots]
-    )
+    const bookableCourts = courts.filter((c) => lib.isBookableCourtStatus(c.status))
+    const courtKeySet = new Set(bookableCourts.map((c) => String(c.venueId) + '|' + lib.normCourt(c.name)))
+
+    const slotIn = slots.length ? slots : ALL_SLOTS
+    let bookRows = []
+    if (bookableCourts.length) {
+      const [br] = await pool.query(
+        `SELECT venue_id AS venueId, court, DATE_FORMAT(date,'%Y-%m-%d') AS d, time
+         FROM bookings
+         WHERE status IN ('booked','locked','pending_pay')
+           AND date >= ? AND date <= ?
+           AND venue_id IN (${vids.map(() => '?').join(',')})`,
+        [startDate, endDate, ...vids]
+      )
+      bookRows = br
+    }
 
     let groupRows = []
-    try {
-      const [g] = await pool.query(
-        `SELECT venue_id AS venueId, court, DATE_FORMAT(date,'%Y-%m-%d') AS d, time
-         FROM group_classes
-         WHERE status = 'open'
-           AND date >= ? AND date <= ?
-           AND venue_id IN (${vids.map(() => '?').join(',')})
-           AND time IN (${slots.map(() => '?').join(',')})`,
-        [startDate, endDate, ...vids, ...slots]
-      )
-      groupRows = g
-    } catch (err) {
-      groupRows = []
+    if (bookableCourts.length) {
+      try {
+        const [g] = await pool.query(
+          `SELECT venue_id AS venueId, court, DATE_FORMAT(date,'%Y-%m-%d') AS d, time
+           FROM group_classes
+           WHERE status = 'open'
+             AND date >= ? AND date <= ?
+             AND venue_id IN (${vids.map(() => '?').join(',')})`,
+          [startDate, endDate, ...vids]
+        )
+        groupRows = g
+      } catch (err) {
+        groupRows = []
+      }
     }
 
-    const courtKeySet = new Set(courts.map((c) => c.venueId + '|' + c.name))
     const occupiedSet = new Set()
-    function mark(rows) {
-      for (const r of rows) {
-        const key = String(r.venueId) + '|' + String(r.court)
-        if (!courtKeySet.has(key)) continue
-        if (!slots.includes(r.time)) continue
-        occupiedSet.add(key + '|' + r.d + '|' + r.time)
-      }
-    }
-    mark(bookRows)
-    mark(groupRows)
+    lib.markOccupied(occupiedSet, courtKeySet, slotIn, bookRows)
+    lib.markOccupied(occupiedSet, courtKeySet, slotIn, groupRows)
 
-    let capacity = 0
-    let occupied = 0
-    for (const c of courts) {
-      for (const d of dates) {
-        for (const t of slots) {
-          if (!isOpen(c.venueId, c.name, d, t)) continue
-          capacity += 1
-          if (occupiedSet.has(c.venueId + '|' + c.name + '|' + d + '|' + t)) occupied += 1
-        }
-      }
-    }
+    const matrix = lib.buildMatrix({ venues, courts, dates, ctx, occupiedSet })
+
+    const hourly = lib.hourlyStats(courts, dates, slots, ctx, occupiedSet)
     const summary = {
-      capacity,
-      occupied,
-      rate: rateOf(occupied, capacity),
+      capacity: hourly.capacity,
+      occupied: hourly.occupied,
+      rate: hourly.rate,
       days: dates.length,
-      courts: courts.length,
+      courts: bookableCourts.length,
       bookedCount: bookRows.length,
       openByPrice: usePrice
     }
 
     const byVenue = venues.map((v) => {
-      const vCourts = courts.filter((c) => c.venueId === v.venueId)
-      let cap = 0
-      let occ = 0
-      for (const c of vCourts) {
-        for (const d of dates) {
-          for (const t of slots) {
-            if (!isOpen(v.venueId, c.name, d, t)) continue
-            cap += 1
-            if (occupiedSet.has(v.venueId + '|' + c.name + '|' + d + '|' + t)) occ += 1
-          }
-        }
-      }
+      const vCourts = bookableCourts.filter((c) => c.venueId === v.venueId)
+      const st = lib.hourlyStats(vCourts, dates, slots, ctx, occupiedSet)
       return {
         venueId: v.venueId,
         venueName: v.name,
-        capacity: cap,
-        occupied: occ,
-        rate: rateOf(occ, cap),
+        capacity: st.capacity,
+        occupied: st.occupied,
+        rate: st.rate,
         courts: vCourts.length
       }
     })
 
-    const byCourt = courts.map((c) => {
-      let cap = 0
-      let occ = 0
-      for (const d of dates) {
-        for (const t of slots) {
-          if (!isOpen(c.venueId, c.name, d, t)) continue
-          cap += 1
-          if (occupiedSet.has(c.venueId + '|' + c.name + '|' + d + '|' + t)) occ += 1
-        }
-      }
+    const byCourt = bookableCourts.map((c) => {
+      const st = lib.hourlyStats([c], dates, slots, ctx, occupiedSet)
       const v = venues.find((x) => x.venueId === c.venueId)
       return {
         venueId: c.venueId,
         venueName: (v && v.name) || '',
         court: c.name,
-        capacity: cap,
-        occupied: occ,
-        rate: rateOf(occ, cap)
+        type: c.type || '',
+        capacity: st.capacity,
+        occupied: st.occupied,
+        rate: st.rate
       }
     })
 
     const byTime = slots.map((t) => {
-      let cap = 0
-      let occ = 0
-      for (const c of courts) {
-        for (const d of dates) {
-          if (!isOpen(c.venueId, c.name, d, t)) continue
-          cap += 1
-          if (occupiedSet.has(c.venueId + '|' + c.name + '|' + d + '|' + t)) occ += 1
-        }
-      }
-      return { time: t, capacity: cap, occupied: occ, rate: rateOf(occ, cap) }
+      const st = lib.hourlyStats(bookableCourts, dates, [t], ctx, occupiedSet)
+      return { time: t, capacity: st.capacity, occupied: st.occupied, rate: st.rate }
     }).filter((row) => row.capacity > 0)
 
-    // 热力图：按「时段 x 星期」汇总占用率（多日平均）
     const weekdayNames = ['', '一', '二', '三', '四', '五', '六', '日']
     const heatMap = []
     for (let w = 1; w <= 7; w++) {
-      const daysOfW = dates.filter((d) => {
-        const day = new Date(d.replace(/-/g, '/')).getDay()
-        const mon1 = day === 0 ? 7 : day
-        return mon1 === w
-      })
+      const daysOfW = dates.filter((d) => lib.weekdayMon1(d) === w)
       if (!daysOfW.length) continue
       for (const t of slots) {
-        let cap = 0
-        let occ = 0
-        for (const c of courts) {
-          for (const d of daysOfW) {
-            if (!isOpen(c.venueId, c.name, d, t)) continue
-            cap += 1
-            if (occupiedSet.has(c.venueId + '|' + c.name + '|' + d + '|' + t)) occ += 1
-          }
-        }
-        if (!cap) continue
+        const st = lib.hourlyStats(bookableCourts, daysOfW, [t], ctx, occupiedSet)
+        if (!st.capacity) continue
         heatMap.push({
           weekday: w,
           weekdayLabel: '周' + weekdayNames[w],
           time: t,
-          capacity: cap,
-          occupied: occ,
-          rate: rateOf(occ, cap)
+          capacity: st.capacity,
+          occupied: st.occupied,
+          rate: st.rate
         })
       }
     }
 
-    // 按日趋势
     const byDate = dates.map((d) => {
-      let cap = 0
-      let occ = 0
-      for (const c of courts) {
-        for (const t of slots) {
-          if (!isOpen(c.venueId, c.name, d, t)) continue
-          cap += 1
-          if (occupiedSet.has(c.venueId + '|' + c.name + '|' + d + '|' + t)) occ += 1
-        }
-      }
-      return { date: d, capacity: cap, occupied: occ, rate: rateOf(occ, cap) }
+      const st = lib.hourlyStats(bookableCourts, [d], slots, ctx, occupiedSet)
+      return { date: d, capacity: st.capacity, occupied: st.occupied, rate: st.rate }
     })
 
     return {
       ok: true,
-      fnVer: 'occupancy-20260911d',
+      fnVer: FN_VER,
       summary,
       byVenue,
       byCourt,
       byTime,
       byDate,
       heatmap: heatMap,
+      matrix,
       slots,
       dates,
-      courts: courts.map((c) => ({ venueId: c.venueId, name: c.name }))
+      courts: bookableCourts.map((c) => ({ venueId: c.venueId, name: c.name, type: c.type || '' }))
     }
   } catch (err) {
     console.error(err)
-    return { ok: false, msg: err.message || '查询失败' }
+    return { ok: false, msg: err.message || '查询失败', fnVer: FN_VER }
   }
 }

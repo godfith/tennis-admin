@@ -29,7 +29,7 @@ const LOGIN_URL = import.meta.env.DEV
   ? '/api/adminLogin'
   : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com/adminLogin'
 
-const VENUE_KEYS = ['admin_venue_id', 'admin_venue_name', 'venue_id', 'venue_name']
+const VENUE_KEYS = ['admin_venue_id', 'admin_venue_name', 'admin_venue_ids', 'venue_id', 'venue_name']
 
 async function onLogin() {
   if (!username.value || !password.value) {
@@ -55,12 +55,22 @@ async function onLogin() {
     localStorage.setItem('admin_name', admin.name || admin.username || '')
     localStorage.setItem('admin_role', admin.role || 'admin')
     localStorage.setItem('admin_perms', JSON.stringify(admin.permissions || []))
+    const perms = Array.isArray(admin.permissions) ? admin.permissions : []
+    const fromPerms = perms.filter((p) => String(p).startsWith('venue:')).map((p) => String(p).slice(6)).filter(Boolean)
+    const fromField = Array.isArray(admin.venueIds) ? admin.venueIds.map(String).filter(Boolean) : []
     const vid = admin.venueId || admin.venue_id || ''
     const vname = admin.venueName || admin.venue_name || ''
-    if (vid) {
-      localStorage.setItem('admin_venue_id', vid)
+    const venueIds = []
+    for (const id of (fromField.length ? fromField : fromPerms)) {
+      if (id && !venueIds.includes(id)) venueIds.push(id)
+    }
+    if (vid && !venueIds.includes(String(vid))) venueIds.unshift(String(vid))
+    if (venueIds.length) localStorage.setItem('admin_venue_ids', JSON.stringify(venueIds))
+    const useId = vid || venueIds[0] || ''
+    if (useId) {
+      localStorage.setItem('admin_venue_id', useId)
       localStorage.setItem('admin_venue_name', vname)
-      localStorage.setItem('venue_id', vid)
+      localStorage.setItem('venue_id', useId)
       localStorage.setItem('venue_name', vname)
     }
     ElMessage.success('登录成功')

@@ -40,6 +40,7 @@
       <el-form-item label="快捷">
         <el-button-group>
           <el-button size="small" @click="setRange('week')">本周</el-button>
+          <el-button size="small" @click="setRange('lastWeek')">上周</el-button>
           <el-button size="small" @click="setRange('month')">本月</el-button>
           <el-button size="small" @click="setRange('last7')">近7天</el-button>
         </el-button-group>
@@ -137,6 +138,13 @@ function setRange(type) {
   const now = new Date()
   if (type === 'week') {
     const s = startOfWeek(now)
+    const e = new Date(s)
+    e.setDate(s.getDate() + 6)
+    filters.startDate = fmt(s)
+    filters.endDate = fmt(e)
+  } else if (type === 'lastWeek') {
+    const s = startOfWeek(now)
+    s.setDate(s.getDate() - 7)
     const e = new Date(s)
     e.setDate(s.getDate() + 6)
     filters.startDate = fmt(s)

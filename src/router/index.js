@@ -10,6 +10,7 @@ const routes = [
     children: [
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
       { path: 'activity', name: 'Activity', component: () => import('../views/Activity.vue') },
+      { path: 'op-logs', name: 'OpLogs', component: () => import('../views/OpLogs.vue') },
       { path: 'finance', name: 'Finance', component: () => import('../views/Finance.vue') },
       { path: 'occupancy', name: 'Occupancy', component: () => import('../views/Occupancy.vue') },
       { path: 'bookings', name: 'Bookings', component: () => import('../views/Bookings.vue') },

@@ -1,10 +1,53 @@
 const crypto = require('crypto')
 const mysql = require('mysql2/promise')
 
+const PAYNOTIFY_FN_VER = 'payNotify-20261108a'
+const BUSY_SQL = "('booked','locked','pending_pay')"
+
 function normCourt(c) {
-  return String(c || '').trim().replace(/场$/u, '')
+  return String(c || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
 }
 
+async function resolveCourtName(conn, venueId, court) {
+  const raw = String(court || '').trim()
+  if (!raw) return ''
+  const n = normCourt(raw)
+  try {
+    const [rows] = await conn.query(
+      `SELECT name FROM courts
+        WHERE venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用')
+          AND (name=? OR name=? OR TRIM(TRAILING '场' FROM name)=?)
+        ORDER BY (name=?) DESC, (name=?) DESC, id ASC LIMIT 1`,
+      [venueId, raw, n + '场', n, raw, n + '场']
+    )
+    if (rows && rows[0] && rows[0].name) return String(rows[0].name)
+  } catch (e) {}
+  return raw
+}
+
+function slotLockName(venueId, dateYmd, time, court) {
+  const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
+  if (raw.length <= 64) return raw
+  return 'book:' + crypto.createHash('sha1').update(raw).digest('hex')
+}
+
+async function acquireSlotLock(conn, venueId, dateYmd, time, court) {
+  const name = slotLockName(venueId, dateYmd, time, court)
+  const [rows] = await conn.query('SELECT GET_LOCK(?, 10) AS ok', [name])
+  if (!rows[0] || Number(rows[0].ok) !== 1) {
+    const err = new Error('系统繁忙，请稍后重试')
+    err.code = 'SLOT_LOCK'
+    throw err
+  }
+  return name
+}
+
+async function releaseSlotLock(conn, name) {
+  if (!name) return
+  try {
+    await conn.query('SELECT RELEASE_LOCK(?)', [name])
+  } catch (e) {}
+}
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -69,8 +112,169 @@ function parseBody(rawEvent) {
   return rawEvent
 }
 
+async function ensureLedgerCourtPay(conn, o, bookingId, outTradeNo) {
+  const [exist] = await conn.query(
+    `SELECT id FROM finance_ledger WHERE pay_order_id=? AND type='court_pay' LIMIT 1`,
+    [o.id]
+  )
+  if (exist && exist[0]) return
+  const amt = Math.round(Number(o.amount_fen) || 0) / 100
+  await conn.query(
+    `INSERT INTO finance_ledger
+      (biz_date, type, amount, venue_id, venue_name, user_id, user_name,
+       operator_name, card_id, booking_id, pay_order_id, remark)
+     VALUES (?, 'court_pay', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+    [
+      o.book_date || new Date(),
+      amt,
+      o.venue_id || '',
+      o.venue_name || '',
+      Number(o.user_id) > 0 ? Number(o.user_id) : null,
+      o.user_name || '',
+      '微信支付',
+      bookingId || null,
+      o.id,
+      (o.court || '') + ' ' + (o.book_time || '') + ' ' + (outTradeNo || o.out_trade_no || '')
+    ]
+  )
+}
+
+async function writeBookingLog(conn, o) {
+  try {
+    const amt = Math.round(Number(o.amount_fen) || 0) / 100
+    await conn.query(
+      `INSERT INTO activity_logs
+        (type, user_name, operator_name, phone, detail, venue_id, venue_name, amount, card_name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        'booking_add',
+        o.user_name || '',
+        o.user_name || '用户',
+        o.phone || '',
+        `预约 ${o.court || ''} ${o.book_date || ''} ${o.book_time || ''} · 微信支付`,
+        o.venue_id || '',
+        o.venue_name || '',
+        amt,
+        ''
+      ]
+    )
+  } catch (e) {
+    console.warn('activity_logs', e.message || e)
+  }
+}
+
+async function fulfillPaidOrder(conn, o) {
+  if (!o || !o.id) return { ok: false }
+  const amt = Math.round(Number(o.amount_fen) || 0) / 100
+  const courtNorm = normCourt(o.court)
+  const courtName = (await resolveCourtName(conn, o.venue_id, o.court)) || o.court
+  let bookingId = o.booking_id ? Number(o.booking_id) : null
+  let created = false
+
+  if (bookingId) {
+    const [bk] = await conn.query('SELECT * FROM bookings WHERE id=? LIMIT 1', [bookingId])
+    const b = bk && bk[0]
+    if (b) {
+      if (b.status === 'pending_pay' || b.status === 'booked') {
+        if (b.status === 'pending_pay') {
+          await conn.query(
+            `UPDATE bookings
+                SET status='booked', amount=?, pay_order_id=?, updated_at=NOW()
+              WHERE id=? AND status='pending_pay'`,
+            [amt, o.id, bookingId]
+          )
+          created = true
+        } else {
+          await conn.query(
+            `UPDATE bookings SET pay_order_id=?, amount=? WHERE id=?`,
+            [o.id, amt, bookingId]
+          )
+        }
+        await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
+        await ensureLedgerCourtPay(conn, o, bookingId, o.out_trade_no)
+        if (created) await writeBookingLog(conn, o)
+        return { ok: true, bookingId, created }
+      }
+      if (b.status === 'cancelled') bookingId = null
+    } else {
+      bookingId = null
+    }
+  }
+
+  if (!bookingId) {
+    const [pend] = await conn.query(
+      `SELECT id FROM bookings WHERE pay_order_id=? AND status='pending_pay' ORDER BY id DESC LIMIT 1`,
+      [o.id]
+    )
+    if (pend[0] && pend[0].id) {
+      bookingId = Number(pend[0].id)
+      await conn.query(
+        `UPDATE bookings
+            SET status='booked', amount=?, pay_order_id=?, updated_at=NOW()
+          WHERE id=? AND status='pending_pay'`,
+        [amt, o.id, bookingId]
+      )
+      await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
+      await ensureLedgerCourtPay(conn, o, bookingId, o.out_trade_no)
+      await writeBookingLog(conn, o)
+      return { ok: true, bookingId, created: true }
+    }
+  }
+
+  if (o.venue_id && o.book_date && o.book_time && courtNorm) {
+    const [busy] = await conn.query(
+      `SELECT id, status FROM bookings
+        WHERE venue_id=? AND date=? AND time=?
+          AND (court=? OR court=CONCAT(?,'场'))
+          AND status IN ${BUSY_SQL}
+        LIMIT 1`,
+      [o.venue_id, o.book_date, o.book_time, courtNorm, courtNorm]
+    )
+    if (busy.length) {
+      await ensureLedgerCourtPay(conn, o, null, o.out_trade_no)
+      console.error('payNotify paid_no_slot', o.out_trade_no, busy[0])
+      return { ok: false, paidNoSlot: true, conflictId: busy[0].id }
+    }
+  }
+
+  const userIdVal = Number(o.user_id) > 0 ? Number(o.user_id) : null
+  const remarkBase = String(o.description || '').indexOf('匹克') >= 0 ? '匹克球 ' : ''
+  const [res] = await conn.query(
+    `INSERT INTO bookings (
+      venue_id, venue_name, court, date, time,
+      user_id, openid, user_name, phone, status,
+      card_id, card_name, card_type,
+      coach_id, coach_name, source, remark, amount, pay_order_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', NULL, '', '', NULL, '', 'user', ?, ?, ?)`,
+    [
+      o.venue_id || '',
+      o.venue_name || '',
+      courtName,
+      o.book_date,
+      o.book_time,
+      userIdVal,
+      o.openid || '',
+      o.user_name || '',
+      o.phone || '',
+      remarkBase + '[微信支付]',
+      amt,
+      o.id
+    ]
+  )
+  bookingId = Number(res.insertId)
+  await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
+  await ensureLedgerCourtPay(conn, o, bookingId, o.out_trade_no)
+  await writeBookingLog(conn, o)
+  return { ok: true, bookingId, created: true }
+}
+
 exports.main = async (rawEvent) => {
   try {
+    // Lightweight ver probe (HTTP GET without resource still returns FAIL empty; use query action via cloud invoke)
+    if (rawEvent && rawEvent.action === 'ver') {
+      return { ok: true, fnVer: PAYNOTIFY_FN_VER }
+    }
+
     const body = parseBody(rawEvent)
     if (!body || !body.resource) {
       return { code: 'FAIL', message: 'empty' }
@@ -98,80 +302,59 @@ exports.main = async (rawEvent) => {
     const tradeState = plain.trade_state
     const transactionId = plain.transaction_id || ''
     if (tradeState === 'SUCCESS' && outTradeNo) {
-      const [upd] = await pool.query(
-        `UPDATE pay_orders
-           SET status='paid', transaction_id=?, paid_at=NOW(), updated_at=NOW()
-         WHERE out_trade_no=? AND status<>'paid'`,
-        [transactionId, outTradeNo]
-      )
-      if (upd && upd.affectedRows) {
-        try {
-          const [rows] = await pool.query(
+      const conn = await pool.getConnection()
+      let slotLock = null
+      try {
+        await conn.query(
+          `UPDATE pay_orders
+             SET status='paid', transaction_id=?, paid_at=NOW(), updated_at=NOW()
+           WHERE out_trade_no=? AND status IN ('pending','failed')`,
+          [transactionId, outTradeNo]
+        )
+        const [rows] = await conn.query(
+          'SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1',
+          [outTradeNo]
+        )
+        const o = rows[0]
+        if (o) {
+          if (o.status === 'refunded') {
+            // late notify after refund — ignore
+          } else {
+          if (transactionId && o.status !== 'paid') {
+            await conn.query(
+              `UPDATE pay_orders SET status='paid', transaction_id=?, paid_at=IFNULL(paid_at,NOW()), updated_at=NOW()
+                WHERE id=? AND status IN ('pending','failed')`,
+              [transactionId, o.id]
+            )
+            o.status = 'paid'
+            o.transaction_id = transactionId
+          } else if (transactionId && !o.transaction_id) {
+            await conn.query(`UPDATE pay_orders SET transaction_id=? WHERE id=?`, [transactionId, o.id])
+            o.transaction_id = transactionId
+          }
+          try {
+            slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+          } catch (e) {
+            console.warn('payNotify GET_LOCK', e.message || e)
+          }
+          const [rows2] = await conn.query(
             'SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1',
             [outTradeNo]
           )
-          const o = rows[0]
-          if (o) {
-            const amt = Math.round(Number(o.amount_fen) || 0) / 100
-            let bookingId = o.booking_id || null
-            if (!bookingId && o.venue_id && o.book_date && o.book_time && o.court) {
-              const uid = Number(o.user_id) > 0 ? Number(o.user_id) : null
-              const courtNorm = normCourt(o.court)
-              const [bk] = await pool.query(
-                `SELECT id FROM bookings
-                  WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status='booked'
-                    AND (pay_order_id IS NULL OR pay_order_id=0)
-                    AND (
-                      (? <> '' AND openid=?)
-                      OR (? IS NOT NULL AND user_id=?)
-                    )
-                  ORDER BY id DESC LIMIT 1`,
-                [
-                  o.venue_id,
-                  o.book_date,
-                  o.book_time,
-                  courtNorm,
-                  courtNorm,
-                  o.openid || '',
-                  o.openid || '',
-                  uid,
-                  uid
-                ]
-              )
-              if (bk[0] && bk[0].id) bookingId = bk[0].id
-            }
-            if (bookingId) {
-              await pool.query(
-                'UPDATE bookings SET pay_order_id=?, amount=? WHERE id=?',
-                [o.id, amt, bookingId]
-              )
-              await pool.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
-            }
-            await pool.query(
-              `INSERT INTO finance_ledger
-                (biz_date, type, amount, venue_id, venue_name, user_id, user_name,
-                 operator_name, card_id, booking_id, pay_order_id, remark)
-               VALUES (?, 'court_pay', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-              [
-                o.book_date || new Date(),
-                amt,
-                o.venue_id || '',
-                o.venue_name || '',
-                Number(o.user_id) > 0 ? Number(o.user_id) : null,
-                o.user_name || '',
-                '微信支付',
-                bookingId,
-                o.id,
-                (o.court || '') + ' ' + (o.book_time || '') + ' ' + outTradeNo
-              ]
-            )
+          const o2 = rows2[0] || o
+          if (o2.status !== 'refunded') {
+            await fulfillPaidOrder(conn, o2)
           }
-        } catch (e) {
-          console.error('ledger court_pay', e.message || e)
+          }
         }
+      } catch (e) {
+        console.error('payNotify fulfill', e.message || e)
+      } finally {
+        await releaseSlotLock(conn, slotLock)
+        conn.release()
       }
     }
-    return { code: 'SUCCESS', message: '成功' }
+    return { code: 'SUCCESS', message: '成功', fnVer: PAYNOTIFY_FN_VER }
   } catch (e) {
     console.error(e)
     return { code: 'FAIL', message: e.message || 'notify error' }

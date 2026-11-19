@@ -1,4 +1,8 @@
 const mysql = require('mysql2/promise')
+const settingsLib = require('./groupClassSettings')
+
+
+const FN_VER = 'saveGroupClass-20261119b'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -11,31 +15,106 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
-async function checkConflict(data, excludeId) {
-  // 场地：已有普通预约
-  const [bCourt] = await pool.query(
-    `SELECT id FROM bookings
-     WHERE venue_id=? AND date=? AND time=? AND court=? AND status='booked'
-     LIMIT 1`,
-    [data.venueId, data.date, data.time, data.court]
-  )
-  if (bCourt.length) return '该时段场地已有预约，无法排团课'
 
-  // 教练：已有普通预约
+
+const {
+  intOr,
+  fmtDate,
+  datesInRange,
+  normClassType,
+  venueLimits,
+  rotationVenueForDate,
+  loadSettings,
+  saveSettings,
+  isOutdoorCourtName,
+  pickInternalClassCourt
+} = settingsLib
+
+function readMinEnrollment(data, fallback) {
+  if (!data) return fallback == null ? 0 : fallback
+  if (data.minEnrollment != null && data.minEnrollment !== '') return intOr(data.minEnrollment, fallback == null ? 0 : fallback, 0, 30)
+  if (data.min_enrollment != null && data.min_enrollment !== '') return intOr(data.min_enrollment, fallback == null ? 0 : fallback, 0, 30)
+  return fallback == null ? 0 : fallback
+}
+
+function readCancelBeforeHours(data, fallback) {
+  const dft = fallback == null ? 2 : fallback
+  if (!data) return dft
+  if (data.cancelBeforeHours != null && data.cancelBeforeHours !== '') return intOr(data.cancelBeforeHours, dft, 0, 72)
+  if (data.cancel_before_hours != null && data.cancel_before_hours !== '') return intOr(data.cancel_before_hours, dft, 0, 72)
+  return dft
+}
+
+function readClassType(data) {
+  if (!data) return 'fixed'
+  return normClassType(data.classType || data.class_type || data.type)
+}
+
+function readTheme(data) {
+  if (!data || data.theme == null) return ''
+  return String(data.theme).trim().slice(0, 200)
+}
+
+function normCourt(c) {
+  return String(c || '')
+    .trim()
+    .replace(/^发球机/u, '')
+    .replace(/场$/u, '')
+}
+
+async function resolveCourtName(venueId, court) {
+  const raw = String(court || '').trim()
+  if (!raw || !venueId) return raw
+  const n = normCourt(raw)
+  try {
+    const [rows] = await pool.query(
+      `SELECT name FROM courts
+        WHERE venue_id=? AND (name=? OR name=? OR name=CONCAT(?,'场'))
+          AND IFNULL(status,'open') NOT IN ('disabled','closed','停用')
+        ORDER BY CASE WHEN name=? THEN 0 WHEN name=CONCAT(?,'场') THEN 1 ELSE 2 END
+        LIMIT 1`,
+      [venueId, raw, n, n, raw, n]
+    )
+    if (rows && rows[0] && rows[0].name) return String(rows[0].name)
+  } catch (e) {}
+  if (n && !/场$/u.test(raw)) return n + '场'
+  return raw
+}
+
+async function checkConflict(data, excludeId) {
+  const courtNorm = normCourt(data.court)
+  const courtName = data.courtName || data.court
+
+  const [bCourt] = await pool.query(
+    `SELECT id, status FROM bookings
+      WHERE venue_id=? AND date=? AND time=?
+        AND (court=? OR court=? OR court=CONCAT(?,'场'))
+        AND status IN ('booked','locked')
+      LIMIT 1`,
+    [data.venueId, data.date, data.time, courtName, courtNorm, courtNorm]
+  )
+  if (bCourt.length) {
+    return bCourt[0].status === 'locked'
+      ? '该时段场地已锁场，无法排团课'
+      : '该时段场地已有预约，无法排团课'
+  }
+
   if (data.coachId) {
     const [bCoach] = await pool.query(
       `SELECT id FROM bookings
-       WHERE venue_id=? AND date=? AND time=? AND coach_id=? AND status='booked'
-       LIMIT 1`,
+        WHERE venue_id=? AND date=? AND time=? AND coach_id=?
+          AND status IN ('booked','locked')
+        LIMIT 1`,
       [data.venueId, data.date, data.time, data.coachId]
     )
     if (bCoach.length) return '该时段教练已有预约，无法排团课'
   }
 
-  // 场地：已有其它团课
   let sql = `SELECT id FROM group_classes
-    WHERE venue_id=? AND date=? AND time=? AND court=? AND status!='cancelled'`
-  const params = [data.venueId, data.date, data.time, data.court]
+    WHERE venue_id=? AND date=? AND time=?
+      AND (court=? OR court=? OR court=CONCAT(?,'场'))
+      AND status!='cancelled'`
+  const params = [data.venueId, data.date, data.time, courtName, courtNorm, courtNorm]
   if (excludeId) {
     sql += ' AND id<>?'
     params.push(excludeId)
@@ -44,7 +123,6 @@ async function checkConflict(data, excludeId) {
   const [gCourt] = await pool.query(sql, params)
   if (gCourt.length) return '该时段场地已有团课'
 
-  // 教练：已有其它团课
   if (data.coachId) {
     let sql2 = `SELECT id FROM group_classes
       WHERE venue_id=? AND date=? AND time=? AND coach_id=? AND status!='cancelled'`
@@ -61,6 +139,225 @@ async function checkConflict(data, excludeId) {
   return null
 }
 
+async function insertGroupClass(row) {
+  const colsFull = `(venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
+             min_enrollment, cancel_before_hours, auto_cancel_exempt, class_type, theme)`
+  const vals = [
+    row.venueId,
+    row.name,
+    row.date,
+    row.time,
+    row.court,
+    row.coachId || null,
+    row.coachName || '',
+    row.capacity,
+    row.status || 'open',
+    row.remark || '',
+    row.minEnrollment,
+    row.cancelBeforeHours,
+    row.classType || 'fixed',
+    row.theme || ''
+  ]
+  try {
+    const [res] = await pool.query(
+      `INSERT INTO group_classes ${colsFull}
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?)`,
+      vals
+    )
+    return { ok: true, id: String(res.insertId) }
+  } catch (e) {
+    const msg = (e && e.message) || ''
+    if (msg.indexOf('class_type') < 0 && msg.indexOf('theme') < 0 && msg.indexOf('Unknown column') < 0) {
+      throw e
+    }
+    const [res] = await pool.query(
+      `INSERT INTO group_classes
+        (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
+         min_enrollment, cancel_before_hours, auto_cancel_exempt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)`,
+      vals.slice(0, 12)
+    )
+    return { ok: true, id: String(res.insertId), missingColumns: true }
+  }
+}
+
+async function updateGroupClass(id, row) {
+  try {
+    await pool.query(
+      `UPDATE group_classes SET
+        venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
+        capacity=?, status=?, remark=?,
+        min_enrollment=?, cancel_before_hours=?,
+        class_type=?, theme=?
+       WHERE id=?`,
+      [
+        row.venueId,
+        row.name,
+        row.date,
+        row.time,
+        row.court,
+        row.coachId || null,
+        row.coachName || '',
+        row.capacity,
+        row.status || 'open',
+        row.remark || '',
+        row.minEnrollment,
+        row.cancelBeforeHours,
+        row.classType || 'fixed',
+        row.theme || '',
+        id
+      ]
+    )
+    return { ok: true }
+  } catch (e) {
+    const msg = (e && e.message) || ''
+    if (msg.indexOf('Unknown column') < 0) throw e
+    await pool.query(
+      `UPDATE group_classes SET
+        venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
+        capacity=?, status=?, remark=?,
+        min_enrollment=?, cancel_before_hours=?
+       WHERE id=?`,
+      [
+        row.venueId,
+        row.name,
+        row.date,
+        row.time,
+        row.court,
+        row.coachId || null,
+        row.coachName || '',
+        row.capacity,
+        row.status || 'open',
+        row.remark || '',
+        row.minEnrollment,
+        row.cancelBeforeHours,
+        id
+      ]
+    )
+    return { ok: true, missingColumns: true }
+  }
+}
+
+async function loadVenueCourts(venueId) {
+  const [rows] = await pool.query(
+    `SELECT * FROM courts
+      WHERE venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用')
+      ORDER BY sort ASC, id ASC`,
+    [venueId]
+  )
+  return rows || []
+}
+
+async function venueExists(venueId) {
+  const [rows] = await pool.query('SELECT id, name FROM venues WHERE id=? LIMIT 1', [venueId])
+  return rows && rows[0] ? rows[0] : null
+}
+
+async function hasDuplicateClass(venueId, date, time) {
+  const [rows] = await pool.query(
+    `SELECT id FROM group_classes
+      WHERE venue_id=? AND date=? AND time=? AND status!='cancelled'
+      LIMIT 1`,
+    [venueId, date, time]
+  )
+  return !!(rows && rows[0])
+}
+
+async function generateRotation(data) {
+  const startDate = fmtDate(data && (data.startDate || data.start_date))
+  const endDate = fmtDate(data && (data.endDate || data.end_date))
+  const time = String((data && data.time) || '').trim()
+  if (!startDate || !endDate || !time) {
+    return { ok: false, msg: '请填写日期范围和时段', fnVer: FN_VER }
+  }
+  if (endDate < startDate) return { ok: false, msg: '结束日期不能早于开始日期', fnVer: FN_VER }
+  const dates = datesInRange(startDate, endDate)
+  if (!dates.length) return { ok: false, msg: '日期区间无效', fnVer: FN_VER }
+  if (dates.length > 62) return { ok: false, msg: '一次最多生成 62 天', fnVer: FN_VER }
+
+  const settings = await loadSettings(pool)
+  const classType = readClassType(data)
+  const theme = readTheme(data)
+  const defaultName = String((data && data.name) || '').trim() || (classType === 'self' ? '自组团课' : '固定团课')
+  const coachId = (data && (data.coachId || data.coach_id)) || null
+  const coachName = (data && (data.coachName || data.coach_name)) || ''
+  const cancelBeforeHours = readCancelBeforeHours(data, settings.defaultCancelBeforeHours)
+  const status = (data && data.status) || 'open'
+
+  const created = []
+  const skipped = []
+  for (const date of dates) {
+    const slot = rotationVenueForDate(settings, date)
+    if (!slot || !slot.venueId) {
+      skipped.push({ date, reason: '当天没有轮转门店' })
+      continue
+    }
+    const venue = await venueExists(slot.venueId)
+    if (!venue) {
+      skipped.push({ date, venueId: slot.venueId, reason: '门店不存在（请先执行空壳馆 SQL）' })
+      continue
+    }
+    if (await hasDuplicateClass(slot.venueId, date, time)) {
+      skipped.push({ date, venueId: slot.venueId, venueName: venue.name, reason: '该门店此时段已有团课' })
+      continue
+    }
+    const courts = await loadVenueCourts(slot.venueId)
+    const courtRow = pickInternalClassCourt(courts)
+    if (!courtRow) {
+      skipped.push({ date, venueId: slot.venueId, venueName: venue.name, reason: '没有可用的内部团课场地（不会使用外场）' })
+      continue
+    }
+    const courtName = courtRow.name
+    const payload = {
+      venueId: slot.venueId,
+      date,
+      time,
+      court: courtName,
+      courtName,
+      coachId
+    }
+    const err = await checkConflict(payload, null)
+    if (err) {
+      skipped.push({ date, venueId: slot.venueId, venueName: venue.name, reason: err })
+      continue
+    }
+    const limits = venueLimits(settings, slot.venueId)
+    const ins = await insertGroupClass({
+      venueId: slot.venueId,
+      name: defaultName,
+      date,
+      time,
+      court: courtName,
+      coachId,
+      coachName,
+      capacity: limits.capacity,
+      status,
+      remark: '',
+      minEnrollment: settings.defaultMinEnrollment,
+      cancelBeforeHours,
+      classType,
+      theme
+    })
+    created.push({
+      id: ins.id,
+      date,
+      venueId: slot.venueId,
+      venueName: venue.name,
+      court: courtName,
+      time,
+      classType
+    })
+  }
+  return {
+    ok: true,
+    fnVer: FN_VER,
+    created: created.length,
+    skipped: skipped.length,
+    list: created,
+    skippedList: skipped
+  }
+}
+
 exports.main = async (event) => {
   try {
     let body = event
@@ -68,55 +365,67 @@ exports.main = async (event) => {
       body = typeof event.body === 'string' ? JSON.parse(event.body) : event.body
     }
     const { action, id, data } = body || {}
-    if (!action) return { ok: false, msg: '缺少 action' }
+    if (!action) return { ok: false, msg: '缺少 action', fnVer: FN_VER }
+    if (action === 'ver' || action === '__ver__') return { ok: true, fnVer: FN_VER }
 
-    if (action === 'add') {
-      const err = await checkConflict(data, null)
-      if (err) return { ok: false, msg: err }
-
-      const [res] = await pool.query(
-        `INSERT INTO group_classes
-          (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-        [
-          data.venueId,
-          data.name,
-          data.date,
-          data.time,
-          data.court,
-          data.coachId || null,
-          data.coachName || '',
-          data.capacity || 6,
-          data.status || 'open',
-          data.remark || ''
-        ]
-      )
-      return { ok: true, id: String(res.insertId) }
+    if (action === 'getSettings') {
+      const settings = await loadSettings(pool)
+      return { ok: true, settings, fnVer: FN_VER }
     }
 
-    if (action === 'update') {
-      const err = await checkConflict(data, id)
-      if (err) return { ok: false, msg: err }
+    if (action === 'saveSettings') {
+      const out = await saveSettings(pool, data || body.settings || body)
+      if (!out.ok) return { ok: false, msg: out.msg || '保存失败', fnVer: FN_VER }
+      return { ok: true, settings: out.settings, fnVer: FN_VER }
+    }
 
-      await pool.query(
-        `UPDATE group_classes SET
-          name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
-          capacity=?, status=?, remark=?
-         WHERE id=?`,
-        [
-          data.name,
-          data.date,
-          data.time,
-          data.court,
-          data.coachId || null,
-          data.coachName || '',
-          data.capacity || 6,
-          data.status || 'open',
-          data.remark || '',
-          id
-        ]
-      )
-      return { ok: true }
+    if (action === 'generateRotation') {
+      return await generateRotation(data || body || {})
+    }
+
+    if (action === 'add' || action === 'update') {
+      if (!data || !data.venueId || !data.date || !data.time || !data.court) {
+        return { ok: false, msg: '参数不完整', fnVer: FN_VER }
+      }
+      const courtName = await resolveCourtName(data.venueId, data.court)
+      if (isOutdoorCourtName(courtName) && String(data.allowOutdoor || '') !== '1') {
+        // 允许显式传入，但不默认拦住已有「外场」课编辑；新增时仍可用，只是生成轮转不会选外场
+      }
+      const payload = Object.assign({}, data, { court: courtName, courtName })
+      const err = await checkConflict(payload, action === 'update' ? id : null)
+      if (err) return { ok: false, msg: err, fnVer: FN_VER }
+
+      const settings = await loadSettings(pool)
+      const limits = venueLimits(settings, payload.venueId)
+      const classType = readClassType(payload)
+      const theme = readTheme(payload)
+      const minEnrollment = readMinEnrollment(payload, 0)
+      const cancelBeforeHours = readCancelBeforeHours(payload, settings.defaultCancelBeforeHours)
+      const capacity = payload.capacity != null && payload.capacity !== ''
+        ? intOr(payload.capacity, limits.capacity || 1, 1, null)
+        : (limits.capacity || 1)
+      const row = {
+        venueId: payload.venueId,
+        name: payload.name,
+        date: payload.date,
+        time: payload.time,
+        court: courtName,
+        coachId: payload.coachId || null,
+        coachName: payload.coachName || '',
+        capacity,
+        status: payload.status || 'open',
+        remark: payload.remark || '',
+        minEnrollment,
+        cancelBeforeHours,
+        classType,
+        theme
+      }
+      if (action === 'add') {
+        const ins = await insertGroupClass(row)
+        return { ok: true, id: ins.id, fnVer: FN_VER }
+      }
+      const upd = await updateGroupClass(id, row)
+      return { ok: true, fnVer: FN_VER }
     }
 
     if (action === 'toggle') {
@@ -124,17 +433,34 @@ exports.main = async (event) => {
         `UPDATE group_classes SET status=? WHERE id=?`,
         [data.status, id]
       )
-      return { ok: true }
+      return { ok: true, fnVer: FN_VER }
+    }
+
+    if (action === 'restore') {
+      if (!id) return { ok: false, msg: '缺少团课ID', fnVer: FN_VER }
+      const [rows] = await pool.query('SELECT id, status FROM group_classes WHERE id=?', [id])
+      if (!rows[0]) return { ok: false, msg: '团课不存在', fnVer: FN_VER }
+      await pool.query(
+        `UPDATE group_classes SET status='open', auto_cancel_exempt=1 WHERE id=?`,
+        [id]
+      )
+      return { ok: true, fnVer: FN_VER, status: 'open', autoCancelExempt: 1 }
     }
 
     if (action === 'delete') {
+      if (!id) return { ok: false, msg: '缺少团课ID', fnVer: FN_VER }
+      const [rows] = await pool.query('SELECT enrolled FROM group_classes WHERE id=?', [id])
+      if (!rows[0]) return { ok: false, msg: '团课不存在', fnVer: FN_VER }
+      if ((rows[0].enrolled || 0) > 0) {
+        return { ok: false, msg: '该团课仍有报名学员，请先在名单中移除后再删除', fnVer: FN_VER }
+      }
       await pool.query(`DELETE FROM group_classes WHERE id=?`, [id])
-      return { ok: true }
+      return { ok: true, fnVer: FN_VER }
     }
 
-    return { ok: false, msg: '未知操作' }
+    return { ok: false, msg: '未知操作', fnVer: FN_VER }
   } catch (e) {
     console.error(e)
-    return { ok: false, msg: e.message || '操作失败' }
+    return { ok: false, msg: e.message || '操作失败', fnVer: FN_VER }
   }
 }

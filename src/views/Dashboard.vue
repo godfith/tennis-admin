@@ -27,7 +27,16 @@
               <template #default="{ row }">
                 <span v-if="row.isGroup">团课</span>
                 <span v-else-if="row.cardName">{{ row.cardName }}</span>
-                <span v-else class="muted">现金/微信</span>
+                <span v-else-if="row.payChannelLabel">{{ row.payChannelLabel }}</span>
+                <span v-else class="muted">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="资金来源" width="100">
+              <template #default="{ row }">
+                <span v-if="row.payChannel === 'wechat'">微信支付</span>
+                <span v-else-if="row.payChannel === 'offline'">线下支付</span>
+                <span v-else-if="row.payChannel === 'card'" class="muted">卡扣</span>
+                <span v-else class="muted">-</span>
               </template>
             </el-table-column>
             <el-table-column label="金额" width="80"><template #default="{ row }">{{ row.amount ? '¥' + row.amount : '-' }}</template></el-table-column>
@@ -45,7 +54,7 @@
               <el-tag size="small">{{ typeLabel(log.type) }}</el-tag>
               <span class="log-time">{{ log.timeText }}</span>
             </div>
-            <div class="log-detail">{{ log.userName || log.operatorName }} · {{ log.detail }}</div>
+            <div class="log-detail">{{ log.userName || log.operatorName }} · {{ log.detail }}<span v-if="log.payChannelLabel" class="muted"> · {{ log.payChannelLabel }}</span></div>
           </div>
         </div>
       </el-col>
@@ -70,7 +79,11 @@ function typeLabel(t) {
 const statCards = computed(() => [
   { key: 'today', label: '今日预约', value: stats.value.todayBookings || 0, color: '#1a5c3a' },
   { key: 'rev', label: '今日营收', value: '¥' + (stats.value.todayRevenue || 0), color: '#e6a23c' },
+  { key: 'wx', label: '今日微信支付', value: '¥' + (stats.value.todayWechatPay || 0), color: '#07c160' },
+  { key: 'off', label: '今日线下支付', value: '¥' + (stats.value.todayOfflinePay || 0), color: '#909399' },
   { key: 'mrev', label: '本月营收', value: '¥' + (stats.value.monthRevenue || 0), color: '#f56c6c' },
+  { key: 'mwx', label: '本月微信支付', value: '¥' + (stats.value.monthWechatPay || 0), color: '#07c160' },
+  { key: 'moff', label: '本月线下支付', value: '¥' + (stats.value.monthOfflinePay || 0), color: '#909399' },
   { key: 'group', label: '今日团课', value: stats.value.todayGroup || 0, color: '#409eff' },
   { key: 'card', label: '今日用卡', value: stats.value.todayCardBookings || 0, color: '#67c23a' },
   { key: 'week', label: '本周预约', value: stats.value.weekBookings || 0, color: '#909399' },

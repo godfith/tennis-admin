@@ -3,15 +3,21 @@
     <div class="page-header">
       <div>
         <h2>团课排期</h2>
-        <p class="tip">当前场馆：{{ venueName || '未选择' }} · 可查看报名名单并加减学员</p>
+        <p class="tip">全部门店共享课表 · 上课场地决定上课门店 · 可查看报名名单并加减学员</p>
       </div>
       <div>
         <el-button :loading="loading" @click="loadData">刷新</el-button>
+        <el-button @click="openSettings">团课设置</el-button>
+        <el-button @click="openGenerate">生成轮转排期</el-button>
         <el-button type="primary" @click="openAdd">新增团课</el-button>
       </div>
     </div>
 
     <div class="filters">
+      <el-select v-model="filterVenueId" placeholder="全部门店" clearable style="width:200px" @change="loadData">
+        <el-option label="全部门店" value="" />
+        <el-option v-for="v in venues" :key="v.venueId" :label="v.name" :value="String(v.venueId)" />
+      </el-select>
       <el-date-picker
         v-model="filterDate"
         type="date"
@@ -20,10 +26,31 @@
         clearable
         @change="loadData"
       />
+      <el-select v-model="filterType" placeholder="全部类型" clearable style="width:140px" @change="loadData">
+        <el-option label="全部类型" value="" />
+        <el-option label="固定团课" value="fixed" />
+        <el-option label="自组团课" value="self" />
+      </el-select>
     </div>
 
     <el-table :data="list" stripe border v-loading="loading">
       <el-table-column prop="name" label="名称" min-width="120" />
+      <el-table-column label="类型" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.classType === 'self' ? 'warning' : 'success'" size="small">
+            {{ row.classTypeLabel || (row.classType === 'self' ? '自组团课' : '固定团课') }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="主题" min-width="140">
+        <template #default="{ row }">{{ row.theme || '-' }}</template>
+      </el-table-column>
+      <el-table-column prop="venueName" label="上课门店" width="160">
+        <template #default="{ row }">
+          {{ row.venueName || venueLabel(row.venueId) || '-' }}
+          <el-tag v-if="isShellVenue(row.venueId)" size="small" type="info" style="margin-left:4px">空壳</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="日期" width="150">
         <template #default="{ row }">{{ formatDateCn(row.date) }}</template>
       </el-table-column>
@@ -32,23 +59,29 @@
       </el-table-column>
       <el-table-column prop="court" label="场地" width="100" />
       <el-table-column prop="coachName" label="教练" width="100" />
-      <el-table-column label="人数" width="100">
+      <el-table-column label="人数" width="120">
         <template #default="{ row }">
           {{ row.enrolled || 0 }} / {{ row.capacity || '-' }}
+          <el-tag v-if="isTempOver(row)" type="warning" size="small" style="margin-left:4px">临时</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="90">
+      <el-table-column label="开班规则" width="140">
         <template #default="{ row }">
-          <el-tag :type="row.status === 'open' ? 'success' : 'info'" size="small">
-            {{ row.status === 'open' ? '开放报名' : '已关闭' }}
-          </el-tag>
+          <span v-if="(row.minEnrollment || 0) > 0">满{{ row.minEnrollment }}人开 · 提前{{ row.cancelBeforeHours != null ? row.cancelBeforeHours : 2 }}小时</span>
+          <span v-else class="muted">不自动取消</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="280" fixed="right">
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <el-button link type="success" @click="openMembers(row)">名单</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="warning" @click="toggleStatus(row)">
+          <el-button v-if="row.status === 'cancelled'" link type="warning" @click="onRestore(row)">恢复</el-button>
+          <el-button v-else link type="warning" @click="toggleStatus(row)">
             {{ row.status === 'open' ? '关闭' : '开放' }}
           </el-button>
           <el-button link type="danger" @click="onDelete(row)">删除</el-button>
@@ -59,12 +92,26 @@
     <el-dialog
       v-model="visible"
       :title="form._id ? '编辑团课' : '新增团课'"
-      width="480px"
+      width="520px"
       destroy-on-close
     >
-      <el-form label-width="90px">
+      <el-form label-width="110px">
+        <el-form-item label="上课门店" required>
+          <el-select v-model="form.venueId" placeholder="选择门店" style="width:100%" @change="onFormVenueChange">
+            <el-option v-for="v in venues" :key="v.venueId" :label="v.name" :value="String(v.venueId)" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="如：周三晚提高班" />
+        </el-form-item>
+        <el-form-item label="类型" required>
+          <el-radio-group v-model="form.classType" @change="onClassTypeChange">
+            <el-radio-button value="fixed">固定团课</el-radio-button>
+            <el-radio-button value="self">自组团课</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="当日主题">
+          <el-input v-model="form.theme" placeholder="选填，如：发球与接发" maxlength="200" show-word-limit />
         </el-form-item>
         <el-form-item label="日期" required>
           <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" style="width:100%" />
@@ -79,13 +126,20 @@
             <el-option v-for="c in courts" :key="c._id" :label="c.name" :value="c.name" />
           </el-select>
         </el-form-item>
-        <el-form-item label="教练" required>
-          <el-select v-model="form.coachId" placeholder="选择教练" style="width:100%" @change="onCoachChange">
-            <el-option v-for="c in coaches" :key="c._id" :label="c.name" :value="c._id" />
+        <el-form-item label="教练">
+          <el-select v-model="form.coachId" placeholder="选择教练（可空）" clearable style="width:100%" @change="onCoachChange">
+            <el-option v-for="c in coaches" :key="c._id" :label="coachOptionLabel(c)" :value="c._id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="人数上限" required>
-          <el-input-number v-model="form.capacity" :min="1" :max="30" />
+        <el-form-item label="人数" required>
+          <el-input-number v-model="form.capacity" :min="1" :max="999" />
+        </el-form-item>
+        <el-form-item label="最低开班人数">
+          <el-input-number v-model="form.minEnrollment" :min="0" :max="999" />
+          <div class="field-hint">0 表示不自动取消；大于 0 时人数不足将在开课前自动取消</div>
+        </el-form-item>
+        <el-form-item label="提前取消(小时)">
+          <el-input-number v-model="form.cancelBeforeHours" :min="0" :max="72" />
         </el-form-item>
         <el-form-item label="状态">
           <el-switch v-model="form.open" active-text="开放报名" inactive-text="关闭" />
@@ -103,19 +157,29 @@
     <el-dialog
       v-model="memberVisible"
       :title="`报名名单 · ${currentClass.name || ''}`"
-      width="640px"
+      width="760px"
       destroy-on-close
     >
       <div class="member-toolbar">
-        <span>已报名 {{ members.length }} / {{ currentClass.capacity || '-' }}</span>
+        <span>
+          已报名 {{ members.length }} / {{ currentClass.capacity || '-' }}
+          <el-tag v-if="isTempOver(currentClass)" type="warning" size="small" style="margin-left:6px">临时</el-tag>
+          · {{ currentClass.venueName || venueLabel(currentClass.venueId) || '' }}
+        </span>
         <el-button type="primary" size="small" @click="openAddMember">添加学员</el-button>
       </div>
 
       <el-table :data="members" stripe border v-loading="memberLoading" size="small">
-        <el-table-column prop="userName" label="学员" min-width="120" />
+        <el-table-column prop="userName" label="学员" min-width="110" />
         <el-table-column prop="phone" label="手机" width="120" />
-        <el-table-column prop="cardName" label="使用卡" min-width="120" />
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="所属门店" width="120">
+          <template #default="{ row }">{{ row.userVenueName || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="cardName" label="使用卡" min-width="110" />
+        <el-table-column label="卡来源门店" width="120">
+          <template #default="{ row }">{{ row.cardVenueName || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
           <template #default="{ row }">
             <el-button link type="danger" @click="removeMember(row)">移除</el-button>
           </template>
@@ -161,12 +225,25 @@
             <el-option
               v-for="c in groupCards"
               :key="c._id"
-              :label="`${c.cardName}（剩${c.remainingTimes}次）`"
+              :label="cardLabel(c)"
               :value="c._id"
             />
           </el-select>
           <div v-if="addForm.memberKey && !cardLoading && groupCards.length === 0" class="hint-error">
             该会员没有可用团课卡
+          </div>
+        </el-form-item>
+        <el-form-item label="报名人数" required>
+          <el-input-number
+            v-model="addForm.seats"
+            :min="1"
+            :max="addMaxSeats"
+            :disabled="!addForm.cardId"
+          />
+          <div class="field-hint">
+            扣节数与名额相同，默认 1。同一学员可占多个名额。
+            <span v-if="addForm.cardId">当前最多 {{ addMaxSeats }}（卡剩 {{ selectedGroupRemain }} 次{{ addCapHint }}）。</span>
+            <span v-if="alreadySeatsForPick">该学员已占 {{ alreadySeatsForPick }} 个名额，可再加。</span>
           </div>
         </el-form-item>
       </el-form>
@@ -175,18 +252,121 @@
         <el-button type="primary" :loading="adding" @click="submitAddMember">确认添加</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="settingsVisible" title="团课设置" width="680px" destroy-on-close>
+      <p class="tip" style="margin-bottom:12px">轮转顺序、各店人数和报名规则都在这里改，不会写死在代码里。每家店的人数你自己填，1 个人也可以。循环周期等于参与轮转的门店数，没有休息日。</p>
+      <el-form label-width="150px">
+        <el-form-item label="轮转起始日">
+          <el-date-picker v-model="settingsForm.rotationStartDate" type="date" value-format="YYYY-MM-DD" />
+          <div class="field-hint">用来对齐「第几天轮到哪家店」。改日期会平移后续排期对应的门店。</div>
+        </el-form-item>
+        <el-form-item label="固定团课随时报">
+          <el-switch v-model="settingsForm.fixedOpenAnytime" active-text="有空位就可报" inactive-text="按提前天数" />
+        </el-form-item>
+        <el-form-item label="自组提前报名天数">
+          <el-input-number v-model="settingsForm.selfOrganizeAdvanceDays" :min="0" :max="30" />
+          <div class="field-hint">按自然日计算。例如提前 2 天，21 日的课最晚 19 日可报。成团后仍可由门店在后台加人直到满班。</div>
+        </el-form-item>
+        <el-form-item label="默认提前取消小时">
+          <el-input-number v-model="settingsForm.defaultCancelBeforeHours" :min="0" :max="72" />
+        </el-form-item>
+        <el-form-item label="默认最低开班人数">
+          <el-input-number v-model="settingsForm.defaultMinEnrollment" :min="0" :max="999" />
+          <div class="field-hint">生成排期时写入每节课。0 表示不自动取消；可随时改成 1 或其他数字。</div>
+        </el-form-item>
+      </el-form>
+      <div class="settings-head">
+        <span>轮转门店（可调顺序）</span>
+        <el-select v-model="settingsAddVenueId" placeholder="增加门店" clearable filterable style="width:240px" @change="addRotationVenue">
+          <el-option
+            v-for="v in venuesNotInRotation"
+            :key="v.venueId"
+            :label="v.name"
+            :value="v.venueId"
+          />
+        </el-select>
+      </div>
+      <el-table :data="settingsForm.rotationVenues" border size="small">
+        <el-table-column type="index" label="#" width="50" />
+        <el-table-column label="门店" min-width="180">
+          <template #default="{ row }">
+            {{ venueLabel(row.venueId) || row.venueId }}
+            <el-tag v-if="isShellVenue(row.venueId)" size="small" type="info" style="margin-left:4px">空壳</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="人数" width="150">
+          <template #default="{ row }">
+            <el-input-number v-model="row.capacity" :min="1" :max="999" size="small" />
+          </template>
+        </el-table-column>
+        <el-table-column label="排序" width="140">
+          <template #default="{ $index }">
+            <el-button link type="primary" :disabled="$index===0" @click="moveRotation($index,-1)">上移</el-button>
+            <el-button link type="primary" :disabled="$index===settingsForm.rotationVenues.length-1" @click="moveRotation($index,1)">下移</el-button>
+            <el-button link type="danger" @click="removeRotation($index)">移除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="settingsVisible=false">取消</el-button>
+        <el-button type="primary" :loading="settingsSaving" @click="saveSettings">保存设置</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="generateVisible" title="生成轮转排期" width="520px" destroy-on-close>
+      <el-form label-width="120px">
+        <el-form-item label="日期范围" required>
+          <el-date-picker
+            v-model="generateForm.range"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="开始"
+            end-placeholder="结束"
+            style="width:100%"
+          />
+        </el-form-item>
+        <el-form-item label="时段" required>
+          <el-select v-model="generateForm.time" placeholder="选择时段" style="width:100%">
+            <el-option v-for="slot in timeSlots" :key="slot" :label="formatTimeSlot(slot)" :value="slot" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="类型" required>
+          <el-radio-group v-model="generateForm.classType">
+            <el-radio-button value="fixed">固定团课</el-radio-button>
+            <el-radio-button value="self">自组团课</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="名称">
+          <el-input v-model="generateForm.name" placeholder="默认：固定团课 / 自组团课" />
+        </el-form-item>
+        <el-form-item label="当日主题">
+          <el-input v-model="generateForm.theme" placeholder="选填，生成后也可再改每节课" />
+        </el-form-item>
+        <el-form-item label="教练">
+          <el-select v-model="generateForm.coachId" placeholder="可空" clearable style="width:100%" @change="onGenerateCoachChange">
+            <el-option v-for="c in coaches" :key="c._id" :label="coachOptionLabel(c)" :value="c._id" />
+          </el-select>
+        </el-form-item>
+        <div class="field-hint">按当前设置的门店顺序逐日排课，已有相同门店+日期+时段的课会跳过。空壳馆使用内部「团课1号场」，不会使用「外场」。</div>
+      </el-form>
+      <template #footer>
+        <el-button @click="generateVisible=false">取消</el-button>
+        <el-button type="primary" :loading="generating" @click="submitGenerate">开始生成</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-const timeSlots = [
+const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
-  '18:00-19:00', '19:00-20:00', '20:00-21:00'
+  '18:00-19:00', '19:00-20:00', '20:00-21:00', '21:00-22:00'
 ]
+const timeSlots = ref(FALLBACK_SLOTS.slice())
 
 const weekNames = ['日', '一', '二', '三', '四', '五', '六']
 
@@ -208,18 +388,77 @@ function formatTimeSlot(t) {
   return String(t).replace('-', '–')
 }
 
+function statusLabel(s) {
+  if (s === 'open') return '开放报名'
+  if (s === 'cancelled') return '已取消'
+  return '已关闭'
+}
+function statusType(s) {
+  if (s === 'open') return 'success'
+  if (s === 'cancelled') return 'danger'
+  return 'info'
+}
+function isTempOver(row) {
+  return Number(row && row.enrolled || 0) > Number(row && row.capacity || 0)
+}
+
 const list = ref([])
 const courts = ref([])
 const coaches = ref([])
+const venues = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const visible = ref(false)
 const filterDate = ref('')
+const filterVenueId = ref('')
 const venueName = ref(localStorage.getItem('venue_name') || '')
 
 const form = ref({
   _id: '', name: '', date: '', time: '', court: '',
-  coachId: '', coachName: '', capacity: 6, open: true, remark: ''
+  coachId: '', coachName: '', capacity: 6, open: true, remark: '',
+  venueId: '', venueName: '', minEnrollment: 0, cancelBeforeHours: 2,
+  classType: 'fixed', theme: ''
+})
+const filterType = ref('')
+const settingsVisible = ref(false)
+const settingsSaving = ref(false)
+const settingsAddVenueId = ref('')
+const settingsForm = ref(emptySettings())
+const generateVisible = ref(false)
+const generating = ref(false)
+const generateForm = ref(emptyGenerate())
+
+function emptySettings() {
+  return {
+    rotationVenues: [],
+    rotationStartDate: '2026-11-16',
+    fixedOpenAnytime: true,
+    selfOrganizeAdvanceDays: 2,
+    defaultCancelBeforeHours: 2,
+    defaultMinEnrollment: 0
+  }
+}
+function emptyGenerate() {
+  return { range: [], time: '', classType: 'fixed', name: '', theme: '', coachId: '', coachName: '' }
+}
+function isShellVenue(id) {
+  const v = venues.value.find((x) => String(x.venueId) === String(id))
+  return !!(v && (v.isShell === 1 || v.bookingEnabled === 0))
+}
+function coachOptionLabel(c) {
+  if (!c) return ''
+  const store = c.venueName || venueLabel(c.venueId) || ''
+  return store ? (c.name + '（' + store + '）') : c.name
+}
+function venueLimitsOf(venueId) {
+  const list = (settingsForm.value && settingsForm.value.rotationVenues) || []
+  const hit = list.find((x) => String(x.venueId) === String(venueId))
+  if (hit) return { capacity: Number(hit.capacity) || 1, minEnrollment: Number(settingsForm.value.defaultMinEnrollment) || 0 }
+  return { capacity: 4, minEnrollment: Number(settingsForm.value.defaultMinEnrollment) || 0 }
+}
+const venuesNotInRotation = computed(() => {
+  const used = new Set((settingsForm.value.rotationVenues || []).map((x) => String(x.venueId)))
+  return (venues.value || []).filter((v) => !used.has(String(v.venueId)))
 })
 
 const memberVisible = ref(false)
@@ -228,19 +467,62 @@ const members = ref([])
 const currentClass = ref({})
 
 const addMemberVisible = ref(false)
-const addForm = ref({ memberKey: '', userName: '', openid: '', phone: '', cardId: '' })
+const addForm = ref({ memberKey: '', userName: '', openid: '', phone: '', cardId: '', seats: 1 })
 const memberOptions = ref([])
 const memberSearchLoading = ref(false)
 const groupCards = ref([])
 const cardLoading = ref(false)
 const adding = ref(false)
 
+const selectedGroupCard = computed(() => groupCards.value.find((c) => String(c._id) === String(addForm.value.cardId)))
+const selectedGroupRemain = computed(() => Number(selectedGroupCard.value && (selectedGroupCard.value.remainingTimes != null ? selectedGroupCard.value.remainingTimes : selectedGroupCard.value.remaining_times)) || 0)
+const addCapLeft = computed(() => {
+  const cap = Number(currentClass.value && currentClass.value.capacity) || 0
+  if (cap <= 0) return 0
+  const enrolled = Number((currentClass.value && currentClass.value.enrolled) || members.value.length || 0)
+  return Math.max(0, cap - enrolled)
+})
+const addMaxSeats = computed(() => {
+  const left = selectedGroupRemain.value
+  if (left <= 0) return 1
+  const capLeft = addCapLeft.value
+  const cap = Number(currentClass.value && currentClass.value.capacity) || 0
+  if (cap > 0 && capLeft <= 0) return left // 临时加人
+  if (cap > 0) return Math.max(1, Math.min(left, capLeft))
+  return left
+})
+const addCapHint = computed(() => {
+  const cap = Number(currentClass.value && currentClass.value.capacity) || 0
+  if (cap <= 0) return ''
+  const left = addCapLeft.value
+  return left > 0 ? '，课余 ' + left + ' 位' : '，名额已满可临时加人'
+})
+const alreadySeatsForPick = computed(() => {
+  const key = String(addForm.value.memberKey || '')
+  const phone = String(addForm.value.phone || '')
+  if (!key && !phone) return 0
+  return (members.value || []).filter((m) => {
+    const id = String(m.userId || m.user_id || m._userId || '')
+    const mid = String(m._id || m.id || '')
+    if (key && (id === key || mid === key || String(m.userId) === key)) return true
+    if (phone && String(m.phone || '') === phone) return true
+    return false
+  }).length
+})
+
+
 const base = import.meta.env.DEV
   ? '/api'
-  : 'https://cloud1-d0gmljq45868f5766-1312769671.ap-shanghai.app.tcloudbase.com'
+  : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 
 function venueId() {
   return localStorage.getItem('venue_id') || ''
+}
+
+function venueLabel(id) {
+  if (!id && id !== 0) return ''
+  const v = venues.value.find((x) => String(x.venueId) === String(id))
+  return v ? v.name : ''
 }
 
 async function post(path, body = {}) {
@@ -259,38 +541,125 @@ async function post(path, body = {}) {
 
 function memberLabel(m) {
   const name = m.nickName || m.nickname || m.name || ''
-  if (m.phone) return `${name}（${m.phone}）`
+  const phone = m.phone || ''
+  const store = m.venueName || venueLabel(m.venueId) || ''
+  const extra = [phone, store].filter(Boolean).join(' · ')
+  if (extra) return `${name || '未命名'}（${extra}）`
   return name || m.userId || m._id
 }
 
-async function loadMeta() {
-  if (!venueId()) return
+function cardLabel(c) {
+  const store = c.venueName || venueLabel(c.venueId) || ''
+  const left = c.remainingTimes != null ? c.remainingTimes : 0
+  if (store) return `${c.cardName}（${store}，剩${left}次）`
+  return `${c.cardName}（剩${left}次）`
+}
+
+async function loadVenues() {
   try {
-    const [cRes, coachRes] = await Promise.all([
-      post('/adminGetCourts', { venueId: venueId() }),
-      post('/adminGetCoaches', { venueId: venueId() })
-    ])
-    courts.value = cRes.list || []
-    coaches.value = (coachRes.list || []).filter(
-      (c) => c.status === 'active' || c.status === '在职' || !c.status
-    )
+    const result = await post('/adminGetVenues', {})
+    venues.value = (result.list || []).map((v) => ({
+      venueId: String(v.venueId || v._id || v.id || ''),
+      name: v.name || '',
+      isShell: Number(v.isShell) === 1 ? 1 : 0,
+      bookingEnabled: v.bookingEnabled === 0 || v.bookingEnabled === '0' ? 0 : 1
+    }))
+  } catch (e) {
+    venues.value = []
+  }
+}
+
+async function loadHours(vid) {
+  const id = vid || form.value.venueId || venueId()
+  if (!id) {
+    timeSlots.value = FALLBACK_SLOTS.slice()
+    return
+  }
+  try {
+    const result = await post('/adminGetVenueHours', { venueId: id })
+    const slots = (result && result.ok && Array.isArray(result.slots) && result.slots.length)
+      ? result.slots.slice()
+      : FALLBACK_SLOTS.slice()
+    slots.sort()
+    timeSlots.value = slots
+  } catch (e) {
+    timeSlots.value = FALLBACK_SLOTS.slice()
+  }
+}
+
+function isActiveCoach(c) {
+  return c && (c.status === 'active' || c.status === '在职' || !c.status)
+}
+
+async function loadAllCoaches() {
+  const ids = (venues.value || []).map((v) => v.venueId).filter(Boolean)
+  if (!ids.length) return
+  try {
+    const results = await Promise.all(ids.map((id) => post('/adminGetCoaches', { venueId: id })))
+    const map = {}
+    results.forEach((res, i) => {
+      const vid = ids[i]
+      const vname = venueLabel(vid)
+      ;(res.list || []).filter(isActiveCoach).forEach((c) => {
+        const key = String(c._id)
+        if (!map[key]) {
+          map[key] = Object.assign({}, c, { venueId: c.venueId || vid, venueName: c.venueName || vname })
+        }
+      })
+    })
+    coaches.value = Object.values(map)
   } catch (e) {
     console.error(e)
   }
 }
 
-async function loadData() {
-  venueName.value = localStorage.getItem('venue_name') || ''
-  if (!venueId()) {
-    list.value = []
-    ElMessage.warning('请先在顶部选择场馆')
+async function loadMeta(vid) {
+  const id = vid || form.value.venueId || venueId()
+  if (!id) {
+    await loadAllCoaches()
     return
   }
+  try {
+    const cRes = await post('/adminGetCourts', { venueId: id })
+    courts.value = cRes.list || []
+    await loadAllCoaches()
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+async function onFormVenueChange(id) {
+  const v = venues.value.find((x) => String(x.venueId) === String(id))
+  form.value.venueName = v ? v.name : ''
+  form.value.court = ''
+  form.value.time = ''
+  if (!form.value._id) applyVenueDefaults(id)
+  await Promise.all([loadHours(id), loadMeta(id)])
+}
+
+function applyVenueDefaults(id) {
+  const lim = venueLimitsOf(id)
+  form.value.capacity = lim.capacity
+  form.value.minEnrollment = lim.minEnrollment
+  if (settingsForm.value.defaultCancelBeforeHours != null) {
+    form.value.cancelBeforeHours = settingsForm.value.defaultCancelBeforeHours
+  }
+}
+
+function onClassTypeChange() {
+  if (!form.value.name || form.value.name === '固定团课' || form.value.name === '自组团课') {
+    form.value.name = form.value.classType === 'self' ? '自组团课' : '固定团课'
+  }
+}
+
+async function loadData() {
+  venueName.value = localStorage.getItem('venue_name') || ''
   loading.value = true
   try {
     const result = await post('/adminGetGroupClasses', {
-      venueId: venueId(),
-      date: filterDate.value || ''
+      venueId: filterVenueId.value || '',
+      date: filterDate.value || '',
+      classType: filterType.value || ''
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '加载失败')
@@ -304,17 +673,35 @@ async function loadData() {
   }
 }
 
+function emptyForm() {
+  const vid = venueId() ? String(venueId()) : ''
+  const lim = venueLimitsOf(vid)
+  return {
+    _id: '',
+    name: '固定团课',
+    date: new Date().toISOString().slice(0, 10),
+    time: '',
+    court: '',
+    coachId: '',
+    coachName: '',
+    capacity: lim.capacity || 4,
+    open: true,
+    remark: '',
+    venueId: vid,
+    venueName: localStorage.getItem('venue_name') || '',
+    minEnrollment: lim.minEnrollment || 0,
+    cancelBeforeHours: settingsForm.value.defaultCancelBeforeHours != null ? settingsForm.value.defaultCancelBeforeHours : 2,
+    classType: 'fixed',
+    theme: ''
+  }
+}
+
 function openAdd() {
-  if (!venueId()) {
-    ElMessage.warning('请先选择场馆')
-    return
-  }
-  form.value = {
-    _id: '', name: '', date: new Date().toISOString().slice(0, 10),
-    time: '', court: '', coachId: '', coachName: '', capacity: 6, open: true, remark: ''
-  }
+  form.value = emptyForm()
   visible.value = true
-  loadMeta()
+  const vid = form.value.venueId
+  loadHours(vid)
+  loadMeta(vid)
 }
 
 function openEdit(row) {
@@ -328,10 +715,17 @@ function openEdit(row) {
     coachName: row.coachName || '',
     capacity: row.capacity || 6,
     open: row.status === 'open',
-    remark: row.remark || ''
+    remark: row.remark || '',
+    venueId: row.venueId ? String(row.venueId) : '',
+    venueName: row.venueName || venueLabel(row.venueId),
+    minEnrollment: row.minEnrollment != null ? Number(row.minEnrollment) : 0,
+    cancelBeforeHours: row.cancelBeforeHours != null ? Number(row.cancelBeforeHours) : 2,
+    classType: row.classType === 'self' ? 'self' : 'fixed',
+    theme: row.theme || ''
   }
   visible.value = true
-  loadMeta()
+  loadHours(form.value.venueId)
+  loadMeta(form.value.venueId)
 }
 
 function onCoachChange(id) {
@@ -340,8 +734,8 @@ function onCoachChange(id) {
 }
 
 async function save() {
-  if (!form.value.name || !form.value.date || !form.value.time || !form.value.court || !form.value.coachId) {
-    ElMessage.warning('请填写完整信息')
+  if (!form.value.venueId || !form.value.name || !form.value.date || !form.value.time || !form.value.court) {
+    ElMessage.warning('请填写门店、名称、日期、时段和场地')
     return
   }
   saving.value = true
@@ -356,7 +750,12 @@ async function save() {
       capacity: form.value.capacity,
       status: form.value.open ? 'open' : 'closed',
       remark: form.value.remark,
-      venueId: venueId()
+      venueId: form.value.venueId,
+      venueName: form.value.venueName || venueLabel(form.value.venueId),
+      minEnrollment: form.value.minEnrollment || 0,
+      cancelBeforeHours: form.value.cancelBeforeHours != null ? form.value.cancelBeforeHours : 2,
+      classType: form.value.classType === 'self' ? 'self' : 'fixed',
+      theme: form.value.theme || ''
     }
     const result = form.value._id
       ? await post('/adminSaveGroupClass', { action: 'update', id: form.value._id, data })
@@ -376,6 +775,7 @@ async function save() {
 }
 
 async function toggleStatus(row) {
+  if (row.status === 'cancelled') return
   const next = row.status === 'open' ? 'closed' : 'open'
   try {
     const result = await post('/adminSaveGroupClass', {
@@ -394,8 +794,31 @@ async function toggleStatus(row) {
   }
 }
 
+async function onRestore(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定恢复团课「${row.name}」？恢复后不会自动再次取消（需管理员再次开启自动取消规则才生效）。已取消的原报名不会自动恢复。`,
+      '恢复团课',
+      { type: 'warning' }
+    )
+    const result = await post('/adminSaveGroupClass', { action: 'restore', id: row._id })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '恢复失败')
+      return
+    }
+    ElMessage.success('已恢复为开放报名')
+    loadData()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message || '失败')
+  }
+}
+
 async function onDelete(row) {
   try {
+    if ((row.enrolled || 0) > 0) {
+      ElMessage.warning('该团课仍有报名学员，请先在名单中移除后再删除')
+      return
+    }
     await ElMessageBox.confirm(`确定删除团课「${row.name}」？`, '警告', { type: 'warning' })
     const result = await post('/adminSaveGroupClass', { action: 'delete', id: row._id })
     if (!result.ok) {
@@ -439,7 +862,7 @@ async function loadMembers() {
 async function removeMember(row) {
   try {
     await ElMessageBox.confirm(
-      `确定移除「${row.userName || '该学员'}」？将取消报名并退还团课卡次数。`,
+      `确定移除「${row.userName || '该学员'}」的 1 个名额？将退还 1 节课并释放 1 个名额。同一个人的其他名额保留。`,
       '移除学员',
       { type: 'warning' }
     )
@@ -461,7 +884,7 @@ async function removeMember(row) {
 }
 
 function openAddMember() {
-  addForm.value = { memberKey: '', userName: '', openid: '', phone: '', cardId: '' }
+  addForm.value = { memberKey: '', userName: '', openid: '', phone: '', cardId: '', seats: 1 }
   memberOptions.value = []
   groupCards.value = []
   addMemberVisible.value = true
@@ -491,6 +914,7 @@ async function searchMembers(query) {
 
 async function onMemberPick(id) {
   addForm.value.cardId = ''
+  addForm.value.seats = 1
   groupCards.value = []
   const m = memberOptions.value.find((x) => x._id === id)
   if (!m) {
@@ -527,6 +951,30 @@ async function submitAddMember() {
     ElMessage.warning('请选择团课卡')
     return
   }
+  let seats = Math.floor(Number(addForm.value.seats) || 1)
+  if (seats < 1) seats = 1
+  if (seats > addMaxSeats.value) seats = addMaxSeats.value
+  addForm.value.seats = seats
+  const row = currentClass.value || {}
+  const enrolled = Number(row.enrolled || members.value.length || 0)
+  const cap = Number(row.capacity || 0)
+  try {
+    if (row.status === 'cancelled') {
+      await ElMessageBox.confirm(
+        '该团课已取消，添加学员将恢复课程并报名，是否继续？',
+        '恢复并添加',
+        { type: 'warning' }
+      )
+    } else if (cap > 0 && enrolled + seats > cap) {
+      await ElMessageBox.confirm(
+        `添加后人数将为 ${enrolled + seats}/${cap}，超出部分为临时加员，不会修改人数上限。确定继续？`,
+        '临时加员',
+        { type: 'warning' }
+      )
+    }
+  } catch (e) {
+    return
+  }
   adding.value = true
   try {
     const result = await post('/adminEnrollGroupClass', {
@@ -535,13 +983,16 @@ async function submitAddMember() {
       userName: addForm.value.userName,
       openid: addForm.value.openid,
       phone: addForm.value.phone,
-      cardId: addForm.value.cardId
+      cardId: addForm.value.cardId,
+      seats
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '添加失败')
       return
     }
-    ElMessage.success('已添加')
+    const n = Number(result.seats || seats) || seats
+    const mine = Number(result.mySeats || 0)
+    ElMessage.success(n > 1 || mine > 1 ? `已添加 ${n} 个名额` + (mine ? `，该学员共占 ${mine} 个名额` : '') : '已添加')
     addMemberVisible.value = false
     await loadMembers()
     loadData()
@@ -552,11 +1003,154 @@ async function submitAddMember() {
   }
 }
 
+async function loadSettingsSilent() {
+  try {
+    const result = await post('/adminSaveGroupClass', { action: 'getSettings' })
+    if (result && result.ok && result.settings) {
+      settingsForm.value = Object.assign(emptySettings(), result.settings, {
+        rotationVenues: (result.settings.rotationVenues || []).map((x) => ({
+          venueId: String(x.venueId || ''),
+          capacity: Number(x.capacity != null ? x.capacity : (x.maxCapacity != null ? x.maxCapacity : 4)) || 1
+        }))
+      })
+    }
+  } catch (e) {}
+}
+
+function openSettings() {
+  loadSettingsSilent()
+  settingsAddVenueId.value = ''
+  settingsVisible.value = true
+}
+
+function moveRotation(index, dir) {
+  const arr = settingsForm.value.rotationVenues || []
+  const j = index + dir
+  if (j < 0 || j >= arr.length) return
+  const copy = arr.slice()
+  const tmp = copy[index]
+  copy[index] = copy[j]
+  copy[j] = tmp
+  settingsForm.value.rotationVenues = copy
+}
+
+function removeRotation(index) {
+  settingsForm.value.rotationVenues = (settingsForm.value.rotationVenues || []).filter((_, i) => i !== index)
+}
+
+function addRotationVenue(id) {
+  if (!id) return
+  const exists = (settingsForm.value.rotationVenues || []).some((x) => String(x.venueId) === String(id))
+  if (exists) {
+    settingsAddVenueId.value = ''
+    return
+  }
+  settingsForm.value.rotationVenues = (settingsForm.value.rotationVenues || []).concat([
+    { venueId: String(id), capacity: 4 }
+  ])
+  settingsAddVenueId.value = ''
+}
+
+async function saveSettings() {
+  const rows = settingsForm.value.rotationVenues || []
+  for (const r of rows) {
+    if (!(Number(r.capacity) >= 1)) {
+      ElMessage.warning((venueLabel(r.venueId) || r.venueId) + ' 的人数至少为 1，也可以只设 1 个人')
+      return
+    }
+  }
+  settingsSaving.value = true
+  try {
+    const result = await post('/adminSaveGroupClass', {
+      action: 'saveSettings',
+      data: {
+        rotationVenues: rows,
+        rotationStartDate: settingsForm.value.rotationStartDate,
+        fixedOpenAnytime: !!settingsForm.value.fixedOpenAnytime,
+        selfOrganizeAdvanceDays: settingsForm.value.selfOrganizeAdvanceDays,
+        defaultCancelBeforeHours: settingsForm.value.defaultCancelBeforeHours,
+        defaultMinEnrollment: settingsForm.value.defaultMinEnrollment
+      }
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '保存失败，请先执行预览 SQL')
+      return
+    }
+    if (result.settings) {
+      settingsForm.value = Object.assign(emptySettings(), result.settings)
+    }
+    ElMessage.success('设置已保存')
+    settingsVisible.value = false
+  } catch (e) {
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    settingsSaving.value = false
+  }
+}
+
+function openGenerate() {
+  generateForm.value = emptyGenerate()
+  generateVisible.value = true
+  loadHours(venueId())
+  loadAllCoaches()
+}
+
+function onGenerateCoachChange(id) {
+  const c = coaches.value.find((x) => String(x._id) === String(id))
+  generateForm.value.coachName = c ? c.name : ''
+}
+
+async function submitGenerate() {
+  const range = generateForm.value.range || []
+  if (!range[0] || !range[1] || !generateForm.value.time) {
+    ElMessage.warning('请选择日期范围和时段')
+    return
+  }
+  generating.value = true
+  try {
+    const result = await post('/adminSaveGroupClass', {
+      action: 'generateRotation',
+      data: {
+        startDate: range[0],
+        endDate: range[1],
+        time: generateForm.value.time,
+        classType: generateForm.value.classType === 'self' ? 'self' : 'fixed',
+        name: generateForm.value.name || '',
+        theme: generateForm.value.theme || '',
+        coachId: generateForm.value.coachId || '',
+        coachName: generateForm.value.coachName || '',
+        cancelBeforeHours: settingsForm.value.defaultCancelBeforeHours
+      }
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '生成失败')
+      return
+    }
+    const created = Number(result.created || 0)
+    const skipped = Number(result.skipped || 0)
+    const firstReasons = (result.skippedList || []).slice(0, 3).map((x) => (x.date || '') + (x.venueName ? ' ' + x.venueName : '') + '：' + (x.reason || '')).join('；')
+    ElMessage.success('已生成 ' + created + ' 节' + (skipped ? '，跳过 ' + skipped + ' 天' + (firstReasons ? '（' + firstReasons + '）' : '') : ''))
+    generateVisible.value = false
+    loadData()
+  } catch (e) {
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    generating.value = false
+  }
+}
+
 onMounted(() => {
-  loadMeta()
+  loadVenues().then(() => {
+    loadSettingsSilent()
+    loadHours(venueId())
+    loadMeta(venueId())
+  })
   loadData()
   window.addEventListener('venue-changed', () => {
-    loadMeta()
+    loadVenues().then(() => {
+      loadHours(venueId())
+      loadMeta(venueId())
+    })
     loadData()
   })
 })
@@ -583,6 +1177,8 @@ h2 {
 }
 .filters {
   margin-bottom: 12px;
+  display: flex;
+  gap: 8px;
 }
 .member-toolbar {
   display: flex;
@@ -594,5 +1190,21 @@ h2 {
   color: #f56c6c;
   font-size: 12px;
   margin-top: 4px;
+}
+.field-hint {
+  color: #999;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+.muted {
+  color: #999;
+}
+.settings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 8px 0 10px;
+  font-size: 14px;
 }
 </style>

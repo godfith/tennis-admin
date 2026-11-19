@@ -15,6 +15,7 @@
         <el-option label="前台" value="front" />
         <el-option label="客服" value="service" />
         <el-option label="店长" value="manager" />
+            <el-option label="联营人" value="partner" />
         <el-option label="其他" value="other" />
       </el-select>
     </div>
@@ -40,7 +41,14 @@
       <el-table-column prop="username" label="登录账号" min-width="120" />
       <el-table-column prop="name" label="显示名" min-width="100" />
       <el-table-column label="角色" width="110"><template #default="{ row }"><el-tag size="small" :type="roleTag(row.role)">{{ roleLabel(row.role) }}</el-tag></template></el-table-column>
-      <el-table-column prop="venueName" label="所属场馆" min-width="160" />
+      <el-table-column label="可查看场馆" min-width="200">
+        <template #default="{ row }">{{ adminVenueText(row) }}</template>
+      </el-table-column>
+      <el-table-column label="权限" width="120">
+        <template #default="{ row }">
+          <el-tag size="small" :type="permTagType(row)">{{ permSummary(row) }}</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">{{ row.status === 'active' ? '启用' : '停用' }}</el-tag></template></el-table-column>
       <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
@@ -61,6 +69,7 @@
             <el-option label="前台 / 店员" value="front" />
             <el-option label="客服" value="service" />
             <el-option label="店长" value="manager" />
+            <el-option label="联营人" value="partner" />
             <el-option label="其他" value="other" />
           </el-select>
         </el-form-item>
@@ -84,22 +93,48 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="adminVisible" title="编辑登录账号" width="480px" destroy-on-close>
+    <el-dialog v-model="adminVisible" title="编辑登录账号" width="680px" destroy-on-close class="perm-dialog">
       <el-form label-width="100px">
         <el-form-item label="登录账号"><el-input :model-value="adminForm.username" disabled /></el-form-item>
         <el-form-item label="显示名"><el-input v-model="adminForm.name" /></el-form-item>
         <el-form-item label="角色">
-          <el-select v-model="adminForm.role" style="width: 100%" :disabled="adminForm.role === 'admin'">
+          <el-select v-model="adminForm.role" style="width: 100%" :disabled="adminForm.role === 'admin'" @change="onAdminRoleChange">
             <el-option label="前台 / 店员" value="front" />
             <el-option label="客服" value="service" />
             <el-option label="店长" value="manager" />
+            <el-option label="联营人" value="partner" />
           </el-select>
         </el-form-item>
-        <el-form-item label="权限">
-          <el-checkbox-group v-model="adminForm.perms">
-            <el-checkbox v-for="p in permOptions" :key="p.key" :label="p.key">{{ p.label }}</el-checkbox>
+        <el-form-item label="可查看场馆">
+          <el-checkbox-group v-model="adminForm.venueIds" class="venue-checks">
+            <el-checkbox v-for="v in venueOptions" :key="v.id" :label="v.id">{{ v.name }}</el-checkbox>
           </el-checkbox-group>
-          <div class="hint">不勾选则按角色默认。勾选后只开放勾了的菜单和操作。超管不受限制。</div>
+          <div class="hint">勾选多家后，对方重新登录即可在顶部切换；只选一家则不能切换。超管不受此限制。</div>
+        </el-form-item>
+        <el-form-item label="权限">
+          <el-radio-group v-model="permMode" @change="onPermModeChange">
+            <el-radio-button label="default" value="default">使用角色默认</el-radio-button>
+            <el-radio-button label="custom" value="custom">自定义权限</el-radio-button>
+          </el-radio-group>
+          <div class="hint">{{ permModeHint }}</div>
+          <div class="perm-toolbar" v-if="permMode === 'custom'">
+            <el-button size="small" @click="applyRoleDefaults">套用{{ roleLabel(adminForm.role) }}默认</el-button>
+          </div>
+          <el-checkbox-group v-model="adminForm.perms" :disabled="permMode === 'default'" class="perm-groups">
+            <div v-for="g in permGroups" :key="g.id" class="perm-group">
+              <div class="perm-group-hd">
+                <span>{{ g.title }}</span>
+                <span v-if="permMode === 'custom'" class="perm-group-actions">
+                  <el-button link type="primary" @click="setGroup(g, true)">全选</el-button>
+                  <el-button link @click="setGroup(g, false)">清空</el-button>
+                </span>
+              </div>
+              <div class="perm-grid">
+                <el-checkbox v-for="p in g.items" :key="p.key" :label="p.key" :class="{ 'perm-book': p.key === 'book' }">{{ p.label }}</el-checkbox>
+              </div>
+              <div v-if="g.id === 'actions' && showBookTip" class="perm-warn">已勾选「预约管理」，但未勾选「代客订场」，该账号打开预约页后只能查看，不能帮顾客订场。</div>
+            </div>
+          </el-checkbox-group>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -110,8 +145,8 @@
   </div>
 </template>
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { PERM_OPTIONS, ALLOWED } from '../utils/auth'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { PERM_GROUPS, defaultPermsForRole } from '../utils/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 const list = ref([])
 const admins = ref([])
@@ -121,19 +156,88 @@ const saving = ref(false)
 const visible = ref(false)
 const adminVisible = ref(false)
 const adminSaving = ref(false)
-const adminForm = ref({ _id: '', username: '', name: '', role: 'front', password: '', perms: [] })
-const permOptions = PERM_OPTIONS
+const adminForm = ref({ _id: '', username: '', name: '', role: 'front', password: '', perms: [], venueIds: [], homeVenueId: '' })
+const permMode = ref('default')
+const permGroups = PERM_GROUPS
+const venueOptions = ref([])
 const filterRole = ref('')
 const venueName = ref(localStorage.getItem('venue_name') || '')
 const form = ref({ _id: '', name: '', phone: '', role: 'front', specialty: '', sort: 0, active: true, remark: '', openLogin: true, username: '', password: '' })
 const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 function venueId() { return localStorage.getItem('venue_id') || '' }
-function roleLabel(r) { return { admin: '超管', front: '前台', service: '客服', manager: '店长', other: '其他' }[r] || r }
-function roleTag(r) { return { admin: 'danger', front: 'success', service: 'primary', manager: 'warning', other: 'info' }[r] || 'info' }
+function roleLabel(r) { return { admin: '超管', front: '前台', service: '客服', manager: '店长', partner: '联营人', other: '其他' }[r] || r }
+function roleTag(r) { return { admin: 'danger', front: 'success', service: 'primary', manager: 'warning', partner: 'info', other: 'info' }[r] || 'info' }
+function pagePerms(perms) {
+  return (perms || []).filter((p) => p && !String(p).startsWith('venue:'))
+}
+function venueIdsFromPerms(perms) {
+  return (perms || []).filter((p) => String(p).startsWith('venue:')).map((p) => String(p).slice(6)).filter(Boolean)
+}
+function adminVenueText(row) {
+  const ids = venueIdsFromPerms(row.perms)
+  if (!ids.length && row.venueId) ids.push(String(row.venueId))
+  if (!ids.length) return row.venueName || '-'
+  const names = ids.map((id) => {
+    const v = venueOptions.value.find((x) => x.id === String(id))
+    return v ? v.name : id
+  })
+  return names.join('、')
+}
+function permSummary(row) {
+  if (row.role === 'admin') return '全部权限'
+  const n = pagePerms(row.perms).length
+  if (!n) return '角色默认'
+  return '自定义 ' + n + ' 项'
+}
+function permTagType(row) {
+  if (row.role === 'admin') return 'danger'
+  if (!pagePerms(row.perms).length) return 'info'
+  return 'warning'
+}
+const permModeHint = computed(() => {
+  if (permMode.value === 'default') return '按「' + roleLabel(adminForm.value.role) + '」的默认权限开放，下面仅供查看，保存后不写入自定义列表。'
+  return '只开放下面勾选的菜单和操作。超管不受限制。'
+})
+const showBookTip = computed(() => {
+  const perms = adminForm.value.perms || []
+  return permMode.value === 'custom' && perms.includes('/bookings') && !perms.includes('book')
+})
+function onPermModeChange(mode) {
+  if (mode === 'default') {
+    adminForm.value.perms = defaultPermsForRole(adminForm.value.role)
+  } else if (!(adminForm.value.perms || []).length) {
+    adminForm.value.perms = defaultPermsForRole(adminForm.value.role)
+  }
+}
+function onAdminRoleChange(role) {
+  if (permMode.value === 'default') {
+    adminForm.value.perms = defaultPermsForRole(role)
+  }
+}
+function applyRoleDefaults() {
+  adminForm.value.perms = defaultPermsForRole(adminForm.value.role)
+}
+function setGroup(group, checked) {
+  const keys = (group.items || []).map((p) => p.key)
+  const cur = new Set(adminForm.value.perms || [])
+  keys.forEach((k) => { if (checked) cur.add(k); else cur.delete(k) })
+  adminForm.value.perms = Array.from(cur)
+}
 async function post(path, body = {}) {
   const res = await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const data = await res.json()
   return data.body ? (typeof data.body === 'string' ? JSON.parse(data.body) : data.body) : data
+}
+async function loadVenueOptions() {
+  try {
+    const result = await post('/adminGetVenues', {})
+    if (result.ok) {
+      venueOptions.value = (result.list || []).map((v) => ({
+        id: String(v.venueId || v._id || ''),
+        name: v.name || String(v.venueId || v._id || '')
+      })).filter((v) => v.id)
+    }
+  } catch (e) { /* 场馆列表失败时仍可编辑其它项 */ }
 }
 async function loadAdmins() {
   adminLoading.value = true
@@ -145,6 +249,7 @@ async function loadAdmins() {
 }
 async function loadData() {
   venueName.value = localStorage.getItem('venue_name') || ''
+  await loadVenueOptions()
   if (!venueId()) { list.value = []; ElMessage.warning('请先在顶部选择场馆'); return }
   loading.value = true
   try {
@@ -221,21 +326,41 @@ function openEditAdmin(row) {
     ElMessage.warning('超级管理员请在库里改，这里只改店员账号')
     return
   }
-  adminForm.value = { _id: row._id, username: row.username, name: row.name || '', role: row.role || 'front', password: '', perms: row.perms && row.perms.length ? row.perms.slice() : (ALLOWED[row.role] || []).slice() }
+  const pages = pagePerms(row.perms)
+  const custom = pages.length > 0
+  permMode.value = custom ? 'custom' : 'default'
+  const ids = venueIdsFromPerms(row.perms)
+  if (!ids.length && row.venueId) ids.push(String(row.venueId))
+  adminForm.value = {
+    _id: row._id,
+    username: row.username,
+    name: row.name || '',
+    role: row.role || 'front',
+    password: '',
+    perms: custom ? pages.slice() : defaultPermsForRole(row.role || 'front'),
+    venueIds: ids,
+    homeVenueId: String(row.venueId || ids[0] || '')
+  }
   adminVisible.value = true
 }
 async function saveAdmin() {
+  const venueIds = [...new Set((adminForm.value.venueIds || []).map(String).filter(Boolean))]
+  if (!venueIds.length) { ElMessage.warning('请至少选择一个可查看的场馆'); return }
   adminSaving.value = true
   try {
+    const pages = permMode.value === 'default' ? [] : pagePerms(adminForm.value.perms)
+    const perms = pages.concat(venueIds.map((id) => 'venue:' + id))
+    const homeId = venueIds.includes(adminForm.value.homeVenueId) ? adminForm.value.homeVenueId : venueIds[0]
+    const home = venueOptions.value.find((v) => v.id === homeId)
     const result = await post('/adminSaveAdmin', {
       action: 'update',
       id: adminForm.value._id,
       name: adminForm.value.name,
       role: adminForm.value.role,
       password: adminForm.value.password || '',
-      perms: adminForm.value.perms || [],
-      venueId: venueId(),
-      venueName: venueName.value
+      perms,
+      venueId: homeId,
+      venueName: home ? home.name : (homeId === venueId() ? venueName.value : '')
     })
     if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
     ElMessage.success('账号已更新')
@@ -277,4 +402,18 @@ h2 { margin: 0 0 4px; font-size: 20px; }
 .sub { margin: 28px 0 8px; font-size: 16px; }
 .tip { margin: 0 0 12px; color: #888; font-size: 13px; }
 .filters { margin-bottom: 12px; }
+.hint { margin: 8px 0 0; color: #888; font-size: 12px; line-height: 1.5; }
+.perm-toolbar { margin: 10px 0 4px; }
+.perm-groups { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; width: 100%; }
+.perm-group { padding: 10px 12px; background: #f6f8f6; border-radius: 8px; }
+.perm-group-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; color: #1a5c3a; font-size: 13px; }
+.perm-group-actions { font-weight: 400; }
+.perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.perm-book :deep(.el-checkbox__label) { font-weight: 600; color: #c45600; }
+.perm-warn { margin-top: 8px; color: #c45600; font-size: 12px; line-height: 1.5; }
+.venue-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; width: 100%; }
+@media (max-width: 720px) {
+  .perm-grid { grid-template-columns: 1fr; }
+  .venue-checks { grid-template-columns: 1fr; }
+}
 </style>

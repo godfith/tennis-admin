@@ -10,11 +10,16 @@
         </el-button-group>
         <el-date-picker v-model="dateObj" type="date" value-format="YYYY-MM-DD" @change="onDatePick" />
         <span class="date-label">{{ currentDate }} {{ weekLabel }}</span>
-        <span class="venue-tip">{{ venueName || '未选场馆' }}</span>
+        <el-button-group>
+          <el-button :type="viewMode === 'venue' ? 'primary' : ''" @click="setViewMode('venue')">本店排课</el-button>
+          <el-button :type="viewMode === 'outdoor' ? 'primary' : ''" @click="setViewMode('outdoor')">全店外场</el-button>
+        </el-button-group>
+        <span class="venue-tip">{{ viewMode === 'outdoor' ? '全店外场' : (venueName || '未选场馆') }}</span>
       </div>
       <el-button :loading="loading" @click="loadAll">刷新</el-button>
     </div>
-    <p class="hint">小程序暂不开放学员自约私教。这里按教练排课，占用场地并扣教练卡。</p>
+    <p class="hint" v-if="viewMode !== 'outdoor'">小程序暂不开放学员自约私教。这里按教练排课，占用场地并扣教练卡。</p>
+    <p class="hint" v-else>全店外场集中排课：各馆外场课显示在一起，排课时选择记到哪家店。同一教练同一时段不能在两家店重复排课。</p>
 
     <div class="grid-wrap" v-loading="loading">
       <div class="grid" :style="{ gridTemplateColumns: gridCols }">
@@ -29,13 +34,17 @@
             :class="cellClass(coach, t)"
             @click="onCellClick(coach, t)"
           >
-            <template v-if="getLesson(coach._id, t)">
-              <div class="booked-user">{{ getLesson(coach._id, t).userName || '私教' }}</div>
-              <div class="booked-status">{{ getLesson(coach._id, t).court }}</div>
+            <template v-if="getLesson(coach, t)">
+              <div class="booked-user">{{ getLesson(coach, t).userName || '私教' }}</div>
+              <div class="booked-status">{{ lessonPlace(getLesson(coach, t)) }}</div>
             </template>
-            <template v-else-if="getGroup(coach._id, t)">
-              <div class="booked-user">{{ getGroup(coach._id, t).name || '团课' }}</div>
-              <div class="booked-status">团课 · {{ getGroup(coach._id, t).court }}</div>
+            <template v-else-if="getOccupied(coach, t)">
+              <div class="booked-user">{{ occupiedTitle(getOccupied(coach, t)) }}</div>
+              <div class="booked-status">{{ occupiedPlace(getOccupied(coach, t)) }}</div>
+            </template>
+            <template v-else-if="getGroup(coach, t)">
+              <div class="booked-user">{{ getGroup(coach, t).name || '团课' }}</div>
+              <div class="booked-status">团课 · {{ getGroup(coach, t).court }}</div>
             </template>
             <template v-else>
               <div class="free-text">可排</div>
@@ -43,16 +52,25 @@
           </div>
         </template>
       </div>
-      <div v-if="!loading && coaches.length === 0" class="empty">当前场馆暂无教练</div>
+      <div v-if="!loading && coaches.length === 0" class="empty">{{ viewMode === 'outdoor' ? '暂无在职教练' : '当前场馆暂无教练' }}</div>
     </div>
 
     <el-dialog v-model="bookVisible" title="安排私教课" width="500px" destroy-on-close>
       <el-form label-width="96px">
-        <el-form-item label="教练"><el-input :model-value="bookForm.coachName" disabled /></el-form-item>
+        <el-form-item label="教练" required>
+          <el-select v-model="bookForm.coachId" filterable style="width: 100%" @change="onBookCoachChange">
+            <el-option v-for="c in coaches" :key="c._id" :label="c.name" :value="c._id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="日期"><el-input v-model="bookForm.date" disabled /></el-form-item>
         <el-form-item label="时段"><el-input v-model="bookForm.time" disabled /></el-form-item>
+        <el-form-item v-if="viewMode === 'outdoor'" label="记入门店" required>
+          <el-select v-model="bookForm.venueId" style="width: 100%" @change="onBookVenueChange">
+            <el-option v-for="v in outdoorVenues" :key="v.id" :label="v.shortName || v.name" :value="v.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="场地" required>
-          <el-select v-model="bookForm.court" filterable style="width: 100%">
+          <el-select v-model="bookForm.court" filterable style="width: 100%" :disabled="viewMode === 'outdoor'">
             <el-option v-for="c in freeCourts" :key="c._id" :label="c.name" :value="c.name" />
           </el-select>
         </el-form-item>
@@ -73,7 +91,7 @@
         </el-form-item>
         <el-form-item label="同时发卡">
           <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不另发卡，使用已有教练卡" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
-            <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+            <el-option v-for="t in issuableTemplates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
         </el-form-item>
         <template v-if="bookForm.issueTpl">
@@ -81,8 +99,8 @@
             <el-input-number v-model="bookForm.issuePrice" :min="0" :precision="2" :step="10" />
           </el-form-item>
         </template>
-        <el-form-item label="教练卡" required>
-          <el-select v-model="bookForm.cardId" style="width: 100%" :disabled="!coachCards.length">
+        <el-form-item v-else label="教练卡" required>
+          <el-select v-model="bookForm.cardId" style="width: 100%" :disabled="!coachCards.length" placeholder="请选择已有教练卡">
             <el-option
               v-for="c in coachCards" :key="c._id"
               :label="c.cardName + ' · 剩' + (c.remainingTimes || 0) + '次'" :value="c._id"
@@ -125,6 +143,7 @@
       <el-descriptions v-if="current" :column="1" border>
         <el-descriptions-item label="学员">{{ current.userName }}</el-descriptions-item>
         <el-descriptions-item label="教练">{{ current.coachName }}</el-descriptions-item>
+        <el-descriptions-item v-if="current.venueName || current.venueShort" label="门店">{{ current.venueShort || current.venueName }}</el-descriptions-item>
         <el-descriptions-item label="场地">{{ current.court }}</el-descriptions-item>
         <el-descriptions-item label="时段">{{ current.date }} {{ current.time }}</el-descriptions-item>
         <el-descriptions-item label="用卡">{{ current.cardName || '-' }}</el-descriptions-item>
@@ -140,11 +159,12 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { cardAllowsCourt } from '../utils/courtTypeRule.js'
 
 const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
-  '18:00-19:00', '19:00-20:00', '20:00-21:00'
+  '18:00-19:00', '19:00-20:00', '20:00-21:00', '21:00-22:00'
 ]
 const timeSlots = ref(FALLBACK_SLOTS.slice())
 
@@ -196,6 +216,10 @@ async function loadTemplates() {
   try {
     const r = await post('/adminGetCardTemplates', {})
     templates.value = (r.list || []).filter(t => t.type === 'coach' || t.type === 'times')
+    currentVenueId.value = venueId()
+    if (bookForm.value.issueTpl && !issuableTemplates.value.some(t => String(t._id) === String(bookForm.value.issueTpl))) {
+      bookForm.value.issueTpl = ''
+    }
   } finally { tplLoading.value = false }
 }
 function tplLabel(t) {
@@ -207,6 +231,12 @@ function tplLabel(t) {
 function onIssueTplChange(id) {
   const t = templates.value.find(x => String(x._id) === String(id))
   bookForm.value.issuePrice = t ? (Number(t.price) || 0) : 0
+  if (id) bookForm.value.cardId = ''
+}
+function onBookCoachChange(id) {
+  const c = (coaches.value || []).find((x) => String(x._id) === String(id))
+  bookForm.value.coachId = c ? c._id : id
+  bookForm.value.coachName = c ? (c.name || '') : ''
 }
 async function submitReg() {
   const phone = String(regForm.value.phone || '').replace(/\D/g, '')
@@ -237,6 +267,10 @@ const coaches = ref([])
 const courts = ref([])
 const bookings = ref([])
 const groups = ref([])
+const viewMode = ref('venue')
+const outdoorVenues = ref([])
+const outdoorBookings = ref([])
+const occupied = ref([])
 const bookVisible = ref(false)
 const detailVisible = ref(false)
 const current = ref(null)
@@ -245,11 +279,24 @@ const memberCards = ref([])
 const memberLoading = ref(false)
 const bookForm = ref({
   coachId: '', coachName: '', date: '', time: '', court: '',
+  venueId: '', venueName: '',
   memberKey: '', userName: '', userOpenid: '', cardId: '', remark: '',
   issueTpl: '', issuePrice: 0
 })
 
 const venueId = () => localStorage.getItem('venue_id') || ''
+const currentVenueId = ref(venueId())
+function templateAllowedAtVenue(tpl, vid) {
+  let rule = tpl && (tpl.timeRule || tpl.time_rule)
+  if (typeof rule === 'string') {
+    try { rule = JSON.parse(rule) } catch (e) { rule = {} }
+  }
+  const ids = (rule && Array.isArray(rule.venueIds) ? rule.venueIds : []).map((x) => String(x)).filter(Boolean)
+  if (!ids.length) return true
+  if (!vid) return false
+  return ids.indexOf(String(vid)) >= 0
+}
+const issuableTemplates = computed(() => templates.value.filter((t) => templateAllowedAtVenue(t, currentVenueId.value)))
 const venueName = computed(() => localStorage.getItem('venue_name') || '')
 const base = import.meta.env.DEV
   ? '/api'
@@ -263,13 +310,66 @@ const weekLabel = computed(() => {
   return '周' + w
 })
 const coachCards = computed(() =>
-  (memberCards.value || []).filter((c) => c.type === 'coach' && c.status === 'active' && (c.remainingTimes || 0) > 0)
+  (memberCards.value || []).filter((c) => c.type === 'coach' && c.status === 'active' && (c.remainingTimes || 0) > 0 && isCardUsable(c, bookForm.value.date, bookForm.value.time))
 )
+function isCardUsable(card, dateStr, timeStr) {
+  if (!card || card.status !== 'active') return false
+  if (card.validFrom && dateStr && dateStr < card.validFrom) return false
+  if (card.validTo && dateStr && dateStr > card.validTo) return false
+  if ((card.remainingTimes || 0) <= 0) return false
+  const rule = card.timeRule || card.time_rule
+  let ruleObj = rule
+  if (rule && typeof rule === 'string') {
+    try { ruleObj = JSON.parse(rule) } catch (e) { ruleObj = null }
+  }
+  if (ruleObj && Array.isArray(ruleObj.venueIds) && ruleObj.venueIds.length) {
+    const vid = bookForm.value.venueId || currentVenueId.value || venueId() || ''
+    if (vid && ruleObj.venueIds.map((x) => String(x)).indexOf(String(vid)) < 0) return false
+  }
+  const courtName = bookForm.value.court
+  if (courtName) {
+    const court = (courts.value || []).find((c) => String(c.name) === String(courtName)) || { name: courtName, type: '' }
+    if (!cardAllowsCourt(card, court, bookForm.value.remark || '')) return false
+  }
+  if (ruleObj && (ruleObj.mode === 'dates' || (ruleObj.dateRanges && ruleObj.dateRanges.length))) {
+    const hit = (ruleObj.dateRanges || []).some((rg) => rg.start && rg.end && dateStr >= rg.start && dateStr <= rg.end)
+    if (!hit) return false
+  }
+  if (ruleObj && ruleObj.mode !== 'unlimited' && ruleObj.mode !== 'all' && ruleObj.mode !== 'dates' && dateStr) {
+    const d = new Date(String(dateStr).replace(/-/g, '/'))
+    let weekday = d.getDay()
+    if (weekday === 0) weekday = 7
+    const slotStart = (timeStr || '').split('-')[0]
+    if (ruleObj.mode === 'rules' && Array.isArray(ruleObj.rules)) {
+      for (const r of ruleObj.rules) {
+        if (!(r.weekdays || []).includes(weekday)) continue
+        const slots = r.timeSlots || []
+        if (!slots.length) {
+          if (r.unlimited) return true
+          continue
+        }
+        for (const s of slots) {
+          if (slotStart >= s.start && slotStart < s.end) return true
+        }
+      }
+      return false
+    }
+  }
+  return true
+}
+function isOutdoorSharedCourt(name) {
+  return String(name || '').trim() === '外场'
+}
+function normCourt(name) {
+  return String(name || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
+}
+
 const freeCourts = computed(() => {
   const t = bookForm.value.time
   return (courts.value || []).filter((c) => {
-    const busy = bookings.value.find((b) => b.court === c.name && b.time === t && b.status === 'booked')
-    const g = groups.value.find((x) => x.court === c.name && x.time === t && x.status === 'open')
+    if (isOutdoorSharedCourt(c.name)) return true
+    const busy = bookings.value.find((b) => normCourt(b.court) === normCourt(c.name) && b.time === t && (b.status === 'booked' || b.status === 'locked'))
+    const g = groups.value.find((x) => normCourt(x.court) === normCourt(c.name) && x.time === t && x.status === 'open')
     return !busy && !g
   })
 })
@@ -309,23 +409,95 @@ async function post(path, body) {
   return data.body ? (typeof data.body === 'string' ? JSON.parse(data.body) : data.body) : data
 }
 
-function getLesson(coachId, time) {
-  return bookings.value.find(
-    (b) => String(b.coachId || b.coach_id) === String(coachId) && b.time === time && b.status === 'booked'
+function personIds(coach) {
+  if (!coach) return []
+  if (typeof coach === 'object') {
+    if (Array.isArray(coach.ids) && coach.ids.length) return coach.ids.map(String)
+    if (coach._id != null) return [String(coach._id)]
+  }
+  return [String(coach)]
+}
+function shortName(b) {
+  if (!b) return ''
+  return b.venueShort || shortVenue(b.venueName, b.venueId)
+}
+function shortVenue(name, id) {
+  const s = String(name || '')
+  const m = s.match(/[（(]([^）)]+)[）)]/)
+  if (m) return m[1].replace(/店$/, '')
+  return s || String(id || '')
+}
+function getLesson(coach, time) {
+  const ids = new Set(personIds(coach))
+  const list = viewMode.value === 'outdoor' ? outdoorBookings.value : bookings.value
+  return list.find((b) => ids.has(String(b.coachId || b.coach_id)) && b.time === time && b.status === 'booked')
+}
+function getOccupied(coach, time) {
+  if (viewMode.value !== 'outdoor') return null
+  const ids = new Set(personIds(coach))
+  return (occupied.value || []).find((b) => ids.has(String(b.coachId || b.coach_id)) && b.time === time)
+}
+function getGroup(coach, time) {
+  const ids = new Set(personIds(coach))
+  return groups.value.find(
+    (g) => ids.has(String(g.coachId || g.coach_id)) && g.time === time && g.status === 'open'
   )
 }
-function getGroup(coachId, time) {
-  return groups.value.find(
-    (g) => String(g.coachId || g.coach_id) === String(coachId) && g.time === time && g.status === 'open'
-  )
+function lessonPlace(b) {
+  if (!b) return ''
+  if (viewMode.value === 'outdoor') return (shortName(b) || '外场') + ' · 外场'
+  return b.court || ''
+}
+function occupiedTitle(o) {
+  if (!o) return ''
+  if (o.kind === 'group') return o.name || o.userName || '团课'
+  return o.userName || '已排课'
+}
+function occupiedPlace(o) {
+  if (!o) return ''
+  const place = shortName(o)
+  if (o.kind === 'group') return '团课' + (place ? ' · ' + place : '') + (o.court ? ' ' + o.court : '')
+  return (place ? place + ' · ' : '') + (o.court || '已排')
 }
 function cellClass(coach, t) {
-  if (getLesson(coach._id, t)) return 'booked'
-  if (getGroup(coach._id, t)) return 'group'
+  if (getLesson(coach, t)) return 'booked'
+  if (getOccupied(coach, t)) return 'busy'
+  if (getGroup(coach, t)) return 'group'
   return 'free'
+}
+function setViewMode(mode) {
+  if (viewMode.value === mode) return
+  viewMode.value = mode
+  loadAll()
+}
+
+async function loadOutdoor() {
+  if (!currentDate.value) return
+  loading.value = true
+  try {
+    const res = await post('/adminGetOutdoorSchedule', { date: currentDate.value })
+    if (!res.ok) { ElMessage.error(res.msg || '加载失败'); return }
+    coaches.value = res.coaches || []
+    outdoorBookings.value = res.bookings || []
+    occupied.value = res.occupied || []
+    outdoorVenues.value = res.venues || []
+    bookings.value = res.bookings || []
+    groups.value = []
+    courts.value = [{ _id: 'outdoor', name: '外场' }]
+    const slots = res.slots || []
+    timeSlots.value = slots.length ? slots.slice() : FALLBACK_SLOTS.slice()
+  } catch (e) {
+    ElMessage.error(e.message || '加载失败')
+  } finally {
+    loading.value = false
+  }
 }
 
 async function loadAll() {
+  if (viewMode.value === 'outdoor') {
+    await loadOutdoor()
+    return
+  }
   if (!venueId() || !currentDate.value) return
   loading.value = true
   try {
@@ -343,6 +515,8 @@ async function loadAll() {
     bookings.value = bRes.list || bRes.bookings || []
     groups.value = gRes.list || gRes.groupClasses || []
     courts.value = courtRes.list || []
+    outdoorBookings.value = []
+    occupied.value = []
     const savedSlots = (hRes && (hRes.byWeekday?.[wd] || hRes.slots)) || []
     timeSlots.value = savedSlots.length ? savedSlots.slice() : FALLBACK_SLOTS.slice()
   } catch (e) {
@@ -352,20 +526,49 @@ async function loadAll() {
   }
 }
 
+function onBookVenueChange(id) {
+  const v = (outdoorVenues.value || []).find((x) => x.id === id)
+  bookForm.value.venueName = v ? v.name : ''
+}
+
 function onCellClick(coach, time) {
-  const lesson = getLesson(coach._id, time)
+  const lesson = getLesson(coach, time)
   if (lesson) {
     current.value = lesson
     detailVisible.value = true
     return
   }
-  if (getGroup(coach._id, time)) {
+  const occ = getOccupied(coach, time)
+  if (occ) {
+    if (occ.kind === 'group') {
+      ElMessage.warning('该教练此时段已在' + (shortName(occ) || '其他门店') + '有团课')
+    } else {
+      ElMessage.warning('该教练此时段已在' + (shortName(occ) || '其他门店') + '排了' + (occ.court || '课'))
+    }
+    return
+  }
+  if (getGroup(coach, time)) {
     ElMessage.warning('该教练此时段有团课')
     return
   }
+  let defaultVenueId = venueId()
+  let defaultVenueName = venueName.value
+  if (viewMode.value === 'outdoor') {
+    const has = (outdoorVenues.value || []).find((v) => v.id === defaultVenueId)
+    if (!has) {
+      const first = (outdoorVenues.value || [])[0]
+      defaultVenueId = first ? first.id : ''
+      defaultVenueName = first ? first.name : ''
+    } else {
+      defaultVenueName = has.name
+    }
+  }
   bookForm.value = {
     coachId: coach._id, coachName: coach.name, date: currentDate.value, time,
-    court: '', memberKey: '', userName: '', userOpenid: '', cardId: '', remark: ''
+    court: viewMode.value === 'outdoor' ? '外场' : '',
+    venueId: defaultVenueId, venueName: defaultVenueName,
+    memberKey: '', userName: '', userOpenid: '', cardId: '', remark: '',
+    issueTpl: '', issuePrice: 0
   }
   memberOptions.value = []
   memberCards.value = []
@@ -408,6 +611,18 @@ async function submitLesson() {
   if (!bookForm.value.court) { ElMessage.warning('请选择场地'); return }
   if (!bookForm.value.memberKey || !bookForm.value.userName) { ElMessage.warning('请选择学员'); return }
   if (!bookForm.value.cardId && !bookForm.value.issueTpl) { ElMessage.warning('请选择教练卡或同时发卡'); return }
+  let useVenueId = venueId()
+  let useVenueName = venueName.value
+  let useCoachId = bookForm.value.coachId
+  if (viewMode.value === 'outdoor') {
+    if (!bookForm.value.venueId) { ElMessage.warning('请选择记入哪家店'); return }
+    useVenueId = bookForm.value.venueId
+    const picked = (outdoorVenues.value || []).find((v) => v.id === useVenueId)
+    useVenueName = bookForm.value.venueName || (picked ? picked.name : '')
+    const person = (coaches.value || []).find((c) => personIds(c).includes(String(bookForm.value.coachId)) || String(c._id) === String(bookForm.value.coachId))
+    const at = person && (person.venues || []).find((v) => v.id === useVenueId)
+    if (at && at.coachId) useCoachId = at.coachId
+  }
   saving.value = true
   try {
     let cardId = bookForm.value.cardId
@@ -418,9 +633,9 @@ async function submitLesson() {
         userId: bookForm.value.memberKey,
         templateId: bookForm.value.issueTpl,
         price: Number(bookForm.value.issuePrice) || 0,
-        venueId: venueId(),
+        venueId: useVenueId,
         issuerName: localStorage.getItem('admin_name') || '管理员',
-        venueName: venueName.value
+        venueName: useVenueName
       })
       if (!issueRes.ok) { ElMessage.error(issueRes.msg || '发卡失败'); return }
       cardId = issueRes.id
@@ -441,20 +656,23 @@ async function submitLesson() {
         userName: bookForm.value.userName,
         remark: bookForm.value.remark || '后台排私教',
         status: 'booked',
-        venueId: venueId(),
-        venueName: venueName.value,
+        venueId: useVenueId,
+        venueName: useVenueName,
         memberId: bookForm.value.memberKey,
         memberOpenid: bookForm.value.userOpenid,
         cardId: cardId,
         cardName: cardName,
         cardType: 'coach',
-        coachId: bookForm.value.coachId,
+        coachId: useCoachId,
         coachName: bookForm.value.coachName
       }
     })
     if (!result.ok) { ElMessage.error(result.msg || '排课失败'); return }
     ElMessage.success('已排课')
-    showNotify({ date: bookForm.value.date, time: bookForm.value.time, court: bookForm.value.court })
+    const notifyCourt = viewMode.value === 'outdoor'
+      ? ('外场（' + shortVenue(useVenueName, useVenueId) + '）')
+      : bookForm.value.court
+    showNotify({ date: bookForm.value.date, time: bookForm.value.time, court: notifyCourt })
     bookVisible.value = false
     loadAll()
   } catch (e) {
@@ -483,12 +701,19 @@ async function cancelLesson() {
   }
 }
 
+function onVenueChanged() {
+  currentVenueId.value = venueId()
+  if (bookForm.value.issueTpl && !issuableTemplates.value.some((t) => String(t._id) === String(bookForm.value.issueTpl))) {
+    bookForm.value.issueTpl = ''
+  }
+  loadAll()
+}
 onMounted(() => {
   loadTemplates()
   goToday()
-  window.addEventListener('venue-changed', loadAll)
+  window.addEventListener('venue-changed', onVenueChanged)
 })
-onUnmounted(() => window.removeEventListener('venue-changed', loadAll))
+onUnmounted(() => window.removeEventListener('venue-changed', onVenueChanged))
 </script>
 
 <style scoped>
@@ -509,6 +734,7 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .slot.free { background: #f8fbf8; }
 .slot.booked { background: #e8f3ec; }
 .slot.group { background: #fdecea; }
+.slot.busy { background: #f4f4f5; cursor: default; }
 .booked-user { font-weight: 600; color: #1a5c3a; }
 .booked-status { color: #909399; margin-top: 2px; }
 .free-text { color: #67c23a; }

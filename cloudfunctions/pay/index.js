@@ -18,9 +18,16 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
+const PAY_FN_VER = 'pay-20261116c'
+const PENDING_TTL_MIN = 30
+const BUSY_SQL = "('booked','locked','pending_pay')"
+
+function isOutdoorSharedCourt(courtName) {
+  return String(courtName || '').trim() === '外场'
+}
 
 function normCourt(c) {
-  return String(c || '').trim().replace(/场$/u, '')
+  return String(c || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
 }
 
 async function resolveCourtName(conn, venueId, court) {
@@ -41,10 +48,30 @@ async function resolveCourtName(conn, venueId, court) {
 }
 
 
+async function isCourtCustomerVisible(conn, venueId, court) {
+  const raw = String(court || '').trim()
+  if (isOutdoorSharedCourt(raw)) return false
+  if (!venueId || !raw) return true
+  try {
+    const n = normCourt(raw)
+    const [rows] = await conn.query(
+      `SELECT name, IFNULL(customer_visible, 1) AS v FROM courts
+        WHERE venue_id=? AND (name=? OR name=? OR TRIM(TRAILING '场' FROM name)=?)
+        ORDER BY (name=?) DESC, id ASC
+        LIMIT 1`,
+      [venueId, raw, n + '场', n, raw]
+    )
+    if (!rows || !rows[0]) return true
+    if (isOutdoorSharedCourt(rows[0].name)) return false
+    return Number(rows[0].v) !== 0
+  } catch (e) {
+    return !isOutdoorSharedCourt(raw)
+  }
+}
+
 function slotLockName(venueId, dateYmd, time, court) {
   const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
   if (raw.length <= 64) return raw
-  const crypto = require('crypto')
   return 'book:' + crypto.createHash('sha1').update(raw).digest('hex')
 }
 
@@ -66,7 +93,570 @@ async function releaseSlotLock(conn, name) {
   } catch (e) {}
 }
 
-const PAY_FN_VER = 'pay-20261104b'
+function money(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 0
+  return Math.round(n * 100) / 100
+}
+
+function weekdayMon1(dateStr) {
+  const s = String(dateStr || '').slice(0, 10)
+  if (!s) return 0
+  const d = new Date(s.replace(/-/g, '/'))
+  if (Number.isNaN(d.getTime())) return 0
+  const w = d.getDay()
+  return w === 0 ? 7 : w
+}
+
+async function getSlotPrice(conn, venueId, court, dateStr, timeStr) {
+  const wd = weekdayMon1(dateStr)
+  if (!venueId || !court || !wd || !timeStr) return 0
+  try {
+    const raw = String(court || '').trim()
+    const n = normCourt(raw)
+    const [rows] = await conn.query(
+      `SELECT price FROM court_prices
+        WHERE venue_id=? AND weekday=? AND time_slot=?
+          AND (court=? OR court=? OR court=CONCAT(?,'场'))
+        LIMIT 1`,
+      [venueId, wd, timeStr, raw, n, n]
+    )
+    return money(rows[0] && rows[0].price)
+  } catch (e) {
+    return 0
+  }
+}
+
+
+async function queryWxOrder(mch, outTradeNo) {
+  if (!mch || !outTradeNo) return { ok: false, msg: '缺少商户或单号' }
+  const privateKey = normalizePem(mch.keyPem)
+  if (!privateKey || !mch.mchid || !mch.serial) {
+    return { ok: false, msg: '支付证书未配置' }
+  }
+  const urlPath =
+    '/v3/pay/transactions/out-trade-no/' +
+    encodeURIComponent(outTradeNo) +
+    '?mchid=' +
+    encodeURIComponent(mch.mchid)
+  const authorization = authHeader(mch.mchid, mch.serial, privateKey, 'GET', urlPath, '')
+  const wxRes = await requestJson(
+    'GET',
+    'api.mch.weixin.qq.com',
+    urlPath,
+    { Accept: 'application/json', Authorization: authorization },
+    null
+  )
+  if (wxRes.status === 200 && wxRes.json) {
+    return { ok: true, data: wxRes.json }
+  }
+  return {
+    ok: false,
+    status: wxRes.status,
+    msg: (wxRes.json && (wxRes.json.message || wxRes.json.code)) || '查单失败',
+    data: wxRes.json || null
+  }
+}
+
+async function refundWxOrder(mch, opts) {
+  opts = opts || {}
+  if (!mch) return { ok: false, msg: '缺少商户' }
+  const privateKey = normalizePem(mch.keyPem)
+  if (!privateKey || !mch.mchid || !mch.serial) {
+    return { ok: false, msg: '支付证书未配置，无法退款' }
+  }
+  const outRefundNo = opts.outRefundNo || ('RF' + String(opts.outTradeNo || '').slice(0, 28))
+  const bodyObj = {
+    out_refund_no: outRefundNo,
+    reason: String(opts.reason || '取消订场退款').slice(0, 80),
+    amount: {
+      refund: Number(opts.refundFen) || 0,
+      total: Number(opts.amountFen) || 0,
+      currency: 'CNY'
+    }
+  }
+  if (opts.transactionId) bodyObj.transaction_id = opts.transactionId
+  else bodyObj.out_trade_no = opts.outTradeNo
+  if (!bodyObj.amount.refund || !bodyObj.amount.total) {
+    return { ok: false, msg: '退款金额无效' }
+  }
+  const wxBody = JSON.stringify(bodyObj)
+  const urlPath = '/v3/refund/domestic/refunds'
+  const authorization = authHeader(mch.mchid, mch.serial, privateKey, 'POST', urlPath, wxBody)
+  const wxRes = await requestJson(
+    'POST',
+    'api.mch.weixin.qq.com',
+    urlPath,
+    {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: authorization
+    },
+    wxBody
+  )
+  const j = wxRes.json || {}
+  // Already refunded with same out_refund_no
+  if (wxRes.status === 200 && (j.refund_id || j.status === 'SUCCESS' || j.status === 'PROCESSING' || j.out_refund_no)) {
+    return { ok: true, outRefundNo, refundId: j.refund_id || '', data: j }
+  }
+  {
+    const code = String(j.code || '')
+    const msg = String(j.message || '')
+    if (msg.indexOf('已退款') >= 0 || msg.indexOf('重复退款') >= 0 || (code === 'INVALID_REQUEST' && msg.indexOf('退款') >= 0)) {
+      return { ok: true, already: true, outRefundNo, data: j }
+    }
+    if (code === 'RESOURCE_NOT_EXISTS') {
+      return { ok: false, msg: msg || '原订单不存在', data: j }
+    }
+  }
+  return {
+    ok: false,
+    msg: (j && (j.message || j.code)) || '微信退款失败',
+    data: j,
+    status: wxRes.status
+  }
+}
+
+async function markOrderPaid(conn, o, transactionId) {
+  if (!o || !o.id) return o
+  const tid = transactionId || o.transaction_id || ''
+  await conn.query(
+    `UPDATE pay_orders
+        SET status='paid',
+            transaction_id=IF(?<>'', ?, IFNULL(transaction_id,'')),
+            paid_at=IFNULL(paid_at, NOW()),
+            updated_at=NOW()
+      WHERE id=? AND status IN ('pending','failed')`,
+    [tid, tid, o.id]
+  )
+  const [rows] = await conn.query('SELECT * FROM pay_orders WHERE id=? LIMIT 1', [o.id])
+  return rows[0] || o
+}
+
+async function cancelPendingPayBooking(conn, bookingId, payOrderId, remarkSuffix) {
+  if (bookingId) {
+    await conn.query(
+      `UPDATE bookings
+          SET status='cancelled',
+              remark=CONCAT(IFNULL(remark,''), ?),
+              updated_at=NOW()
+        WHERE id=? AND status='pending_pay'`,
+      [remarkSuffix || ' [支付超时取消]', bookingId]
+    )
+  }
+  if (payOrderId) {
+    await conn.query(
+      `UPDATE pay_orders SET status='failed', updated_at=NOW()
+        WHERE id=? AND status='pending'`,
+      [payOrderId]
+    )
+  }
+}
+
+/**
+ * For one stale pending booking+order: query WeChat first.
+ * Paid → fulfill. Closed/notpay/expired → cancel hold.
+ */
+async function resolveStalePendingRow(conn, row) {
+  const bookingId = row.booking_id || row.id
+  const payOrderId = row.pay_order_id
+  let o = null
+  if (payOrderId) {
+    const [pos] = await conn.query('SELECT * FROM pay_orders WHERE id=? LIMIT 1', [payOrderId])
+    o = pos[0] || null
+  }
+  if (!o && row.out_trade_no) {
+    const [pos] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [row.out_trade_no])
+    o = pos[0] || null
+  }
+  if (!o) {
+    await cancelPendingPayBooking(conn, bookingId, null, ' [支付超时取消·无订单]')
+    return { action: 'cancelled', reason: 'no_order' }
+  }
+  if (o.status === 'paid' || o.status === 'refunded') {
+    if (o.status === 'paid') {
+      let slotLock = null
+      try {
+        slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+      } catch (e) {}
+      try {
+        const r = await fulfillPaidOrder(conn, o, { from: 'sweep' })
+        return { action: 'fulfilled', result: r }
+      } finally {
+        await releaseSlotLock(conn, slotLock)
+      }
+    }
+    await cancelPendingPayBooking(conn, bookingId, null, ' [已退款清占坑]')
+    return { action: 'cancelled', reason: 'refunded' }
+  }
+
+  const mch = mchOf(o.venue_id)
+  if (!mch || !mch.keyPem) {
+    // Cannot query — do not free if still within safety; only cancel very old
+    await cancelPendingPayBooking(conn, bookingId, o.id, ' [支付超时取消·无法查单]')
+    return { action: 'cancelled', reason: 'no_mch' }
+  }
+  let q
+  try {
+    q = await queryWxOrder(mch, o.out_trade_no)
+  } catch (e) {
+    console.warn('queryWxOrder', e.message || e)
+    return { action: 'skip', reason: 'query_error' }
+  }
+  if (q.ok && q.data && q.data.trade_state === 'SUCCESS') {
+    const paid = await markOrderPaid(conn, o, q.data.transaction_id || '')
+    let slotLock = null
+    try {
+      slotLock = await acquireSlotLock(conn, paid.venue_id, paid.book_date, paid.book_time, paid.court)
+    } catch (e) {}
+    try {
+      const r = await fulfillPaidOrder(conn, paid, { from: 'sweep_query' })
+      return { action: 'fulfilled', result: r }
+    } finally {
+      await releaseSlotLock(conn, slotLock)
+    }
+  }
+  const state = (q.data && q.data.trade_state) || ''
+  // NOTPAY / USERPAYING — if past TTL, close local hold (user can rebook)
+  // CLOSED / REVOKED / PAYERROR — cancel
+  if (!q.ok && q.status === 404) {
+    await cancelPendingPayBooking(conn, bookingId, o.id, ' [支付超时取消·微信无单]')
+    return { action: 'cancelled', reason: 'not_found' }
+  }
+  if (
+    state === 'NOTPAY' ||
+    state === 'CLOSED' ||
+    state === 'REVOKED' ||
+    state === 'PAYERROR' ||
+    state === '' ||
+    !q.ok
+  ) {
+    // Try close order on WeChat if still NOTPAY (best-effort)
+    await cancelPendingPayBooking(
+      conn,
+      bookingId,
+      o.id,
+      ' [支付超时取消' + (state ? '·' + state : '') + ']'
+    )
+    return { action: 'cancelled', reason: state || 'unpaid' }
+  }
+  if (state === 'USERPAYING') {
+    return { action: 'skip', reason: 'user_paying' }
+  }
+  return { action: 'skip', reason: state || 'unknown' }
+}
+
+async function expireStalePending(conn, venueId, dateYmd, time, courtNorm) {
+  try {
+    const [rows] = await conn.query(
+      `SELECT b.id AS booking_id, b.pay_order_id, p.out_trade_no, p.status AS pay_status
+         FROM bookings b
+         LEFT JOIN pay_orders p ON p.id = b.pay_order_id
+        WHERE b.venue_id=? AND b.date=? AND b.time=?
+          AND (b.court=? OR b.court=CONCAT(?,'场'))
+          AND b.status='pending_pay'
+          AND b.created_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)`,
+      [venueId, dateYmd, time, courtNorm, courtNorm, PENDING_TTL_MIN]
+    )
+    for (const r of rows || []) {
+      try {
+        await resolveStalePendingRow(conn, r)
+      } catch (e) {
+        console.warn('expireStalePending row', e.message || e)
+      }
+    }
+  } catch (e) {
+    console.warn('expireStalePending', e.message || e)
+  }
+}
+
+async function sweepStalePendingGlobal(limit) {
+  const lim = Math.min(50, Math.max(1, Number(limit) || 20))
+  const conn = await pool.getConnection()
+  const summary = { scanned: 0, fulfilled: 0, cancelled: 0, skipped: 0 }
+  try {
+    const [rows] = await conn.query(
+      `SELECT b.id AS booking_id, b.pay_order_id, p.out_trade_no, p.status AS pay_status,
+              b.venue_id, b.date, b.time, b.court
+         FROM bookings b
+         LEFT JOIN pay_orders p ON p.id = b.pay_order_id
+        WHERE b.status='pending_pay'
+          AND b.created_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)
+        ORDER BY b.id ASC
+        LIMIT ?`,
+      [PENDING_TTL_MIN, lim]
+    )
+    for (const r of rows || []) {
+      summary.scanned += 1
+      try {
+        const out = await resolveStalePendingRow(conn, r)
+        if (out.action === 'fulfilled') summary.fulfilled += 1
+        else if (out.action === 'cancelled') summary.cancelled += 1
+        else summary.skipped += 1
+      } catch (e) {
+        summary.skipped += 1
+        console.warn('sweep row', e.message || e)
+      }
+    }
+  } finally {
+    conn.release()
+  }
+  return summary
+}
+
+async function ensureLedgerCourtRefund(conn, o, bookingId, outRefundNo) {
+  const [exist] = await conn.query(
+    `SELECT id FROM finance_ledger WHERE pay_order_id=? AND type='court_refund' LIMIT 1`,
+    [o.id]
+  )
+  if (exist && exist[0]) return
+  const amt = Math.round(Number(o.amount_fen) || 0) / 100
+  if (!(amt > 0)) return
+  await conn.query(
+    `INSERT INTO finance_ledger
+      (biz_date, type, amount, venue_id, venue_name, user_id, user_name,
+       operator_name, card_id, booking_id, pay_order_id, remark)
+     VALUES (?, 'court_refund', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+    [
+      o.book_date || new Date(),
+      -amt,
+      o.venue_id || '',
+      o.venue_name || '',
+      Number(o.user_id) > 0 ? Number(o.user_id) : null,
+      o.user_name || '',
+      '微信退款',
+      bookingId || o.booking_id || null,
+      o.id,
+      '退款 ' + (o.court || '') + ' ' + (o.book_time || '') + ' ' + (outRefundNo || o.out_trade_no || '')
+    ]
+  )
+}
+
+async function refundPaidOrder(conn, o, opts) {
+  opts = opts || {}
+  if (!o || !o.id) return { ok: false, msg: '订单不存在', fnVer: PAY_FN_VER }
+  if (o.status === 'refunded') {
+    return { ok: true, already: true, msg: '已退款', fnVer: PAY_FN_VER }
+  }
+  if (o.status !== 'paid') {
+    return { ok: false, msg: '订单未支付，无法退款', status: o.status, fnVer: PAY_FN_VER }
+  }
+  const mch = mchOf(o.venue_id)
+  if (!mch) return { ok: false, msg: '该场馆未配置商户号', fnVer: PAY_FN_VER }
+  const outRefundNo = 'RF' + String(o.out_trade_no || o.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 30)
+  const amountFen = Number(o.amount_fen) || 0
+  const wx = await refundWxOrder(mch, {
+    outTradeNo: o.out_trade_no,
+    transactionId: o.transaction_id || '',
+    amountFen,
+    refundFen: amountFen,
+    outRefundNo,
+    reason: opts.reason || '取消订场退款'
+  })
+  if (!wx.ok) {
+    return { ok: false, msg: wx.msg || '微信退款失败', wx: wx.data || null, fnVer: PAY_FN_VER }
+  }
+  await conn.query(
+    `UPDATE pay_orders
+        SET status='refunded',
+            description=CONCAT(IFNULL(description,''), ' [退款', ?, ']'),
+            updated_at=NOW()
+      WHERE id=? AND status IN ('paid','refunded')`,
+    [outRefundNo, o.id]
+  )
+  try {
+    await ensureLedgerCourtRefund(conn, o, o.booking_id || opts.bookingId || null, outRefundNo)
+  } catch (e) {
+    console.warn('court_refund ledger', e.message || e)
+  }
+  return {
+    ok: true,
+    already: !!wx.already,
+    outRefundNo,
+    refundId: wx.refundId || '',
+    fnVer: PAY_FN_VER
+  }
+}
+
+
+async function ensureLedgerCourtPay(conn, o, bookingId, outTradeNo) {
+  const [exist] = await conn.query(
+    `SELECT id FROM finance_ledger WHERE pay_order_id=? AND type='court_pay' LIMIT 1`,
+    [o.id]
+  )
+  if (exist && exist[0]) return
+  const amt = Math.round(Number(o.amount_fen) || 0) / 100
+  await conn.query(
+    `INSERT INTO finance_ledger
+      (biz_date, type, amount, venue_id, venue_name, user_id, user_name,
+       operator_name, card_id, booking_id, pay_order_id, remark)
+     VALUES (?, 'court_pay', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+    [
+      o.book_date || new Date(),
+      amt,
+      o.venue_id || '',
+      o.venue_name || '',
+      Number(o.user_id) > 0 ? Number(o.user_id) : null,
+      o.user_name || '',
+      '微信支付',
+      bookingId || null,
+      o.id,
+      (o.court || '') + ' ' + (o.book_time || '') + ' ' + (outTradeNo || o.out_trade_no || '')
+    ]
+  )
+}
+
+async function writeBookingLog(conn, o, bookingId) {
+  try {
+    const amt = Math.round(Number(o.amount_fen) || 0) / 100
+    await conn.query(
+      `INSERT INTO activity_logs
+        (type, user_name, operator_name, phone, detail, venue_id, venue_name, amount, card_name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        'booking_add',
+        o.user_name || '',
+        o.user_name || '用户',
+        o.phone || '',
+        `预约 ${o.court || ''} ${o.book_date || ''} ${o.book_time || ''} · 微信支付`,
+        o.venue_id || '',
+        o.venue_name || '',
+        amt,
+        ''
+      ]
+    )
+  } catch (e) {
+    console.warn('activity_logs', e.message || e)
+  }
+}
+
+/**
+ * After pay_orders is paid: promote pending_pay → booked, or insert booked.
+ * Idempotent. Caller should hold slot GET_LOCK when possible.
+ */
+async function fulfillPaidOrder(conn, o, opts) {
+  opts = opts || {}
+  if (!o || !o.id) return { ok: false, msg: '无订单' }
+  const amt = Math.round(Number(o.amount_fen) || 0) / 100
+  const courtNorm = normCourt(o.court)
+  const courtName = (await resolveCourtName(conn, o.venue_id, o.court)) || o.court
+  let bookingId = o.booking_id ? Number(o.booking_id) : null
+  let created = false
+
+  if (bookingId) {
+    const [bk] = await conn.query('SELECT * FROM bookings WHERE id=? LIMIT 1', [bookingId])
+    const b = bk && bk[0]
+    if (b) {
+      if (b.status === 'pending_pay' || b.status === 'booked') {
+        if (b.status === 'pending_pay') {
+          await conn.query(
+            `UPDATE bookings
+                SET status='booked', amount=?, pay_order_id=?,
+                    remark=REPLACE(REPLACE(IFNULL(remark,''),'[待支付]','[微信支付]'),'(待支付)','(微信支付)'),
+                    updated_at=NOW()
+              WHERE id=? AND status='pending_pay'`,
+            [amt, o.id, bookingId]
+          )
+          created = true
+        } else {
+          await conn.query(
+            `UPDATE bookings
+                SET pay_order_id=?, amount=?,
+                    remark=REPLACE(REPLACE(IFNULL(remark,''),'[待支付]','[微信支付]'),'(待支付)','(微信支付)')
+              WHERE id=?`,
+            [o.id, amt, bookingId]
+          )
+        }
+        await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
+        await ensureLedgerCourtPay(conn, o, bookingId, o.out_trade_no)
+        if (created) await writeBookingLog(conn, o, bookingId)
+        return { ok: true, bookingId, created, fnVer: PAY_FN_VER }
+      }
+      if (b.status === 'cancelled') {
+        bookingId = null
+      }
+    } else {
+      bookingId = null
+    }
+  }
+
+  // Find pending_pay by pay_order_id
+  if (!bookingId) {
+    const [pend] = await conn.query(
+      `SELECT id FROM bookings WHERE pay_order_id=? AND status='pending_pay' ORDER BY id DESC LIMIT 1`,
+      [o.id]
+    )
+    if (pend[0] && pend[0].id) {
+      bookingId = Number(pend[0].id)
+      await conn.query(
+        `UPDATE bookings
+            SET status='booked', amount=?, pay_order_id=?,
+                remark=REPLACE(REPLACE(IFNULL(remark,''),'[待支付]','[微信支付]'),'(待支付)','(微信支付)'),
+                updated_at=NOW()
+          WHERE id=? AND status='pending_pay'`,
+        [amt, o.id, bookingId]
+      )
+      await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
+      await ensureLedgerCourtPay(conn, o, bookingId, o.out_trade_no)
+      await writeBookingLog(conn, o, bookingId)
+      return { ok: true, bookingId, created: true, fnVer: PAY_FN_VER }
+    }
+  }
+
+  // Conflict check before insert
+  if (o.venue_id && o.book_date && o.book_time && courtNorm) {
+    const [busy] = await conn.query(
+      `SELECT id, status FROM bookings
+        WHERE venue_id=? AND date=? AND time=?
+          AND (court=? OR court=CONCAT(?,'场'))
+          AND status IN ${BUSY_SQL}
+        LIMIT 1`,
+      [o.venue_id, o.book_date, o.book_time, courtNorm, courtNorm]
+    )
+    if (busy.length) {
+      await ensureLedgerCourtPay(conn, o, null, o.out_trade_no)
+      console.error('fulfill conflict paid_no_slot', o.out_trade_no, busy[0])
+      return {
+        ok: false,
+        paidNoSlot: true,
+        msg: '已支付但时段已被占用，需人工退款/改约',
+        conflictId: busy[0].id,
+        fnVer: PAY_FN_VER
+      }
+    }
+  }
+
+  const userIdVal = Number(o.user_id) > 0 ? Number(o.user_id) : null
+  const remarkBase = String(o.description || '').indexOf('匹克') >= 0 ? '匹克球 ' : ''
+  const [res] = await conn.query(
+    `INSERT INTO bookings (
+      venue_id, venue_name, court, date, time,
+      user_id, openid, user_name, phone, status,
+      card_id, card_name, card_type,
+      coach_id, coach_name, source, remark, amount, pay_order_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', NULL, '', '', NULL, '', 'user', ?, ?, ?)`,
+    [
+      o.venue_id || '',
+      o.venue_name || '',
+      courtName,
+      o.book_date,
+      o.book_time,
+      userIdVal,
+      o.openid || '',
+      o.user_name || '',
+      o.phone || '',
+      remarkBase + '[微信支付]',
+      amt,
+      o.id
+    ]
+  )
+  bookingId = Number(res.insertId)
+  await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, o.id])
+  await ensureLedgerCourtPay(conn, o, bookingId, o.out_trade_no)
+  await writeBookingLog(conn, o, bookingId)
+  return { ok: true, bookingId, created: true, fnVer: PAY_FN_VER }
+}
+
 const APPID = process.env.WX_APPID || 'wxe2f073ca2e08c355'
 const WX_SECRET = process.env.WX_SECRET || ''
 const NOTIFY_URL =
@@ -234,6 +824,80 @@ function decryptResource(apiV3Key, resource) {
   return decipher.update(data, undefined, 'utf8') + decipher.final('utf8')
 }
 
+async function handleNotify(rawEvent) {
+  let body = rawEvent
+  if (rawEvent.body) {
+    body = typeof rawEvent.body === 'string' ? JSON.parse(rawEvent.body) : rawEvent.body
+  }
+  if (!body || !body.resource) {
+    return { code: 'FAIL', message: 'empty' }
+  }
+  let plain = null
+  const keys = Object.keys(VENUE_MCH).map((k) => VENUE_MCH[k].apiV3Key).filter(Boolean)
+  let lastErr = ''
+  for (let i = 0; i < keys.length; i++) {
+    try {
+      plain = JSON.parse(decryptResource(keys[i], body.resource))
+      break
+    } catch (e) {
+      lastErr = e.message
+    }
+  }
+  if (!plain) {
+    console.error('notify decrypt fail', lastErr)
+    return { code: 'FAIL', message: 'decrypt' }
+  }
+  const tradeNo = plain.out_trade_no
+  const tradeState = plain.trade_state
+  const transactionId = plain.transaction_id || ''
+  if (tradeState === 'SUCCESS' && tradeNo) {
+    const conn = await pool.getConnection()
+    let slotLock = null
+    try {
+      const [upd] = await conn.query(
+        `UPDATE pay_orders
+           SET status='paid', transaction_id=?, paid_at=NOW(), updated_at=NOW()
+         WHERE out_trade_no=? AND status IN ('pending','failed')`,
+        [transactionId, tradeNo]
+      )
+      const [rows] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [tradeNo])
+      const o = rows[0]
+      if (o) {
+        try {
+          slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+        } catch (e) {
+          console.warn('notify lock', e.message || e)
+        }
+        // Re-read after lock
+        const [rows2] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [tradeNo])
+        const o2 = rows2[0] || o
+        if (o2.status === 'refunded') {
+          // already refunded — ignore late notify
+        } else {
+          if (transactionId && !o2.transaction_id) {
+            await conn.query(
+              `UPDATE pay_orders SET transaction_id=?, status='paid', paid_at=IFNULL(paid_at,NOW()), updated_at=NOW()
+                WHERE id=? AND status IN ('pending','failed','paid')`,
+              [transactionId, o2.id]
+            )
+            o2.transaction_id = transactionId
+            if (o2.status !== 'paid') o2.status = 'paid'
+          }
+          if (o2.status === 'paid' || (upd && upd.affectedRows)) {
+            await fulfillPaidOrder(conn, o2, { from: 'notify' })
+          }
+        }
+      }
+    } catch (e) {
+      console.error('notify fulfill', e.message || e)
+    } finally {
+      await releaseSlotLock(conn, slotLock)
+      conn.release()
+    }
+  }
+  return { code: 'SUCCESS', message: '成功' }
+}
+
 exports.main = async (rawEvent) => {
   try {
     const path = String((rawEvent && (rawEvent.path || rawEvent.requestContext && rawEvent.requestContext.path)) || '')
@@ -243,87 +907,182 @@ exports.main = async (rawEvent) => {
       (rawEvent && rawEvent.resource && rawEvent.resource.ciphertext)
 
     if (isNotify) {
-      let body = rawEvent
-      if (rawEvent.body) {
-        body = typeof rawEvent.body === 'string' ? JSON.parse(rawEvent.body) : rawEvent.body
-      }
-      if (!body || !body.resource) {
-        return { code: 'FAIL', message: 'empty' }
-      }
-      let plain = null
-      const keys = Object.keys(VENUE_MCH).map((k) => VENUE_MCH[k].apiV3Key).filter(Boolean)
-      let lastErr = ''
-      for (let i = 0; i < keys.length; i++) {
-        try {
-          plain = JSON.parse(decryptResource(keys[i], body.resource))
-          break
-        } catch (e) {
-          lastErr = e.message
-        }
-      }
-      if (!plain) {
-        console.error('notify decrypt fail', lastErr)
-        return { code: 'FAIL', message: 'decrypt' }
-      }
-      const outTradeNo = plain.out_trade_no
-      const tradeState = plain.trade_state
-      const transactionId = plain.transaction_id || ''
-      if (tradeState === 'SUCCESS' && outTradeNo) {
-        const [upd] = await pool.query(
-          `UPDATE pay_orders
-             SET status='paid', transaction_id=?, paid_at=NOW(), updated_at=NOW()
-           WHERE out_trade_no=? AND status<>'paid'`,
-          [transactionId, outTradeNo]
-        )
-        if (upd && upd.affectedRows) {
-          try {
-            const [rows] = await pool.query(
-              'SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1',
-              [outTradeNo]
-            )
-            const o = rows[0]
-            if (o) {
-              const amt = Math.round((Number(o.amount_fen) || 0)) / 100
-              await pool.query(
-                `INSERT INTO finance_ledger
-                  (biz_date, type, amount, venue_id, venue_name, user_id, user_name,
-                   operator_name, card_id, booking_id, pay_order_id, remark)
-                 VALUES (?, 'court_pay', ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-                [
-                  o.book_date || new Date(),
-                  amt,
-                  o.venue_id || '',
-                  o.venue_name || '',
-                  Number(o.user_id) > 0 ? Number(o.user_id) : null,
-                  o.user_name || '',
-                  '微信支付',
-                  o.booking_id || null,
-                  o.id,
-                  (o.court || '') + ' ' + (o.book_time || '') + ' ' + outTradeNo
-                ]
-              )
-            }
-          } catch (e) {
-            console.error('ledger court_pay', e.message || e)
-          }
-        }
-      }
-      return { code: 'SUCCESS', message: '成功' }
+      return await handleNotify(rawEvent)
     }
 
     const event = parseEvent(rawEvent)
     const action = event.action || 'createCourtPay'
+
+    if (action === 'ver') {
+      return { ok: true, fnVer: PAY_FN_VER }
+    }
+
+    if (action === 'confirmCourtPay') {
+      const tradeNo = event.outTradeNo || event.out_trade_no || ''
+      if (!tradeNo) return { ok: false, msg: '缺少订单号', fnVer: PAY_FN_VER }
+      // Opportunistic global sweep (non-blocking best-effort)
+      try {
+        sweepStalePendingGlobal(10).catch(function (e) {
+          console.warn('sweep background', e && e.message)
+        })
+      } catch (e) {}
+      const conn = await pool.getConnection()
+      let slotLock = null
+      try {
+        const [rows] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [tradeNo])
+        let o = rows[0]
+        if (!o) return { ok: false, msg: '订单不存在', fnVer: PAY_FN_VER }
+        if (o.status === 'refunded') {
+          return { ok: false, msg: '订单已退款', status: 'refunded', fnVer: PAY_FN_VER }
+        }
+        if (o.status !== 'paid') {
+          const mch = mchOf(o.venue_id)
+          if (!mch || !mch.keyPem) {
+            return { ok: false, waiting: true, msg: '支付确认中', status: o.status, fnVer: PAY_FN_VER }
+          }
+          let q
+          try {
+            q = await queryWxOrder(mch, tradeNo)
+          } catch (e) {
+            return { ok: false, waiting: true, msg: '支付确认中', status: o.status, fnVer: PAY_FN_VER }
+          }
+          if (q.ok && q.data && q.data.trade_state === 'SUCCESS') {
+            o = await markOrderPaid(conn, o, q.data.transaction_id || '')
+          } else {
+            const st = (q.data && q.data.trade_state) || o.status
+            if (st === 'CLOSED' || st === 'REVOKED' || st === 'PAYERROR') {
+              await cancelPendingPayBooking(conn, o.booking_id, o.id, ' [支付关闭]')
+              return { ok: false, msg: '支付已关闭', status: st, fnVer: PAY_FN_VER }
+            }
+            return {
+              ok: false,
+              waiting: true,
+              msg: '支付确认中',
+              status: st,
+              fnVer: PAY_FN_VER
+            }
+          }
+        }
+        try {
+          slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+        } catch (e) {
+          return { ok: false, msg: e.message || '系统繁忙', fnVer: PAY_FN_VER }
+        }
+        const [rows2] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [tradeNo])
+        const result = await fulfillPaidOrder(conn, rows2[0] || o, { from: 'confirm' })
+        return Object.assign({ fnVer: PAY_FN_VER }, result)
+      } finally {
+        await releaseSlotLock(conn, slotLock)
+        conn.release()
+      }
+    }
+
+    if (action === 'sweepStalePending') {
+      try {
+        const summary = await sweepStalePendingGlobal(event.limit || 30)
+        return { ok: true, fnVer: PAY_FN_VER, ttlMin: PENDING_TTL_MIN, summary }
+      } catch (e) {
+        return { ok: false, msg: e.message || '清理失败', fnVer: PAY_FN_VER }
+      }
+    }
+
+    if (action === 'refundCourtPay') {
+      const tradeNo = event.outTradeNo || event.out_trade_no || ''
+      const payOrderId = event.payOrderId || event.pay_order_id || ''
+      const conn = await pool.getConnection()
+      try {
+        let o = null
+        if (payOrderId) {
+          const [rows] = await conn.query('SELECT * FROM pay_orders WHERE id=? LIMIT 1', [payOrderId])
+          o = rows[0]
+        } else if (tradeNo) {
+          const [rows] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [tradeNo])
+          o = rows[0]
+        } else if (event.bookingId) {
+          const [rows] = await conn.query(
+            `SELECT p.* FROM pay_orders p
+              INNER JOIN bookings b ON b.pay_order_id=p.id
+             WHERE b.id=? LIMIT 1`,
+            [event.bookingId]
+          )
+          o = rows[0]
+          if (!o) {
+            const [rows2] = await conn.query(
+              'SELECT * FROM pay_orders WHERE booking_id=? ORDER BY id DESC LIMIT 1',
+              [event.bookingId]
+            )
+            o = rows2[0]
+          }
+        }
+        if (!o) return { ok: false, msg: '支付订单不存在', fnVer: PAY_FN_VER }
+        const result = await refundPaidOrder(conn, o, {
+          reason: event.reason || '取消订场退款',
+          bookingId: event.bookingId || o.booking_id
+        })
+        return result
+      } catch (e) {
+        console.error('refundCourtPay', e)
+        return { ok: false, msg: e.message || '退款异常', fnVer: PAY_FN_VER }
+      } finally {
+        conn.release()
+      }
+    }
+
+    if (action === 'cancelCourtPay') {
+      const tradeNo = event.outTradeNo || event.out_trade_no || ''
+      if (!tradeNo) return { ok: false, msg: '缺少订单号', fnVer: PAY_FN_VER }
+      const conn = await pool.getConnection()
+      let slotLock = null
+      try {
+        const [rows] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [tradeNo])
+        const o = rows[0]
+        if (!o) return { ok: true, msg: '无订单', fnVer: PAY_FN_VER }
+        if (o.status === 'paid') {
+          return { ok: false, msg: '已支付不能取消', fnVer: PAY_FN_VER }
+        }
+        try {
+          slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+        } catch (e) {}
+        if (o.booking_id) {
+          await conn.query(
+            `UPDATE bookings
+                SET status='cancelled',
+                    remark=CONCAT(IFNULL(remark,''), ' [取消支付]'),
+                    updated_at=NOW()
+              WHERE id=? AND status='pending_pay'`,
+            [o.booking_id]
+          )
+        }
+        await conn.query(
+          `UPDATE bookings
+              SET status='cancelled',
+                  remark=CONCAT(IFNULL(remark,''), ' [取消支付]'),
+                  updated_at=NOW()
+            WHERE pay_order_id=? AND status='pending_pay'`,
+          [o.id]
+        )
+        await conn.query(
+          `UPDATE pay_orders SET status='failed', updated_at=NOW() WHERE id=? AND status='pending'`,
+          [o.id]
+        )
+        return { ok: true, fnVer: PAY_FN_VER }
+      } finally {
+        await releaseSlotLock(conn, slotLock)
+        conn.release()
+      }
+    }
+
     if (action !== 'createCourtPay') {
-      return { ok: false, msg: '未知 action' }
+      return { ok: false, msg: '未知 action', fnVer: PAY_FN_VER }
     }
 
     const venueId = event.venueId || ''
     const mch = mchOf(venueId)
     if (!mch) {
-      return { ok: false, msg: '该场馆暂未开通线上支付，请用会员卡或到店支付' }
+      return { ok: false, msg: '该场馆暂未开通线上支付，请用会员卡或到店支付', fnVer: PAY_FN_VER }
     }
     if (!mch.keyPem || !mch.apiV3Key) {
-      return { ok: false, msg: '支付证书未配置，请联系管理员' }
+      return { ok: false, msg: '支付证书未配置，请联系管理员', fnVer: PAY_FN_VER }
     }
 
     let openid = ''
@@ -337,65 +1096,143 @@ exports.main = async (rawEvent) => {
       openid = await code2openid(event.code)
     }
     if (!openid) openid = event.openid || ''
-    if (!openid) return { ok: false, msg: '请先登录' }
-
-    const amountYuan = Number(event.amount || 0)
-    const amountFen = Math.round(amountYuan * 100)
-    if (!amountFen || amountFen < 1) return { ok: false, msg: '金额无效' }
+    if (!openid) return { ok: false, msg: '请先登录', fnVer: PAY_FN_VER }
 
     const courtRaw = event.court || ''
     const courtNorm = normCourt(courtRaw)
-    const date = event.date || ''
+    const date = String(event.date || '').slice(0, 10)
     const time = event.time || ''
-    if (!courtNorm || !date || !time) return { ok: false, msg: '请选择场地和时段' }
+    if (!courtNorm || !date || !time) return { ok: false, msg: '请选择场地和时段', fnVer: PAY_FN_VER }
 
     const conn = await pool.getConnection()
     let slotLock = null
     let no
     let desc
     let court
+    let amountFen
+    let bookingId = null
+    let payOrderDbId = null
     try {
       court = await resolveCourtName(conn, venueId, courtRaw)
+      if (!(await isCourtCustomerVisible(conn, venueId, court || courtRaw))) {
+        return { ok: false, msg: '该场地不对客人开放', fnVer: PAY_FN_VER }
+      }
       try {
         slotLock = await acquireSlotLock(conn, venueId, date, time, courtNorm)
       } catch (e) {
-        return { ok: false, msg: e.message || '系统繁忙，请稍后重试' }
+        return { ok: false, msg: e.message || '系统繁忙，请稍后重试', fnVer: PAY_FN_VER }
       }
-      const [busy] = await conn.query(
-        `SELECT id FROM bookings WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') LIMIT 1`,
+
+      await expireStalePending(conn, venueId, date, time, courtNorm)
+      try {
+        sweepStalePendingGlobal(5).catch(function () {})
+      } catch (e) {}
+
+      const [gc] = await conn.query(
+        `SELECT id FROM group_classes
+          WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status='open' LIMIT 1`,
         [venueId, date, time, courtNorm, courtNorm]
       )
-      if (busy.length) return { ok: false, msg: '该时段已被预约或锁场' }
+      if (gc.length) {
+        return { ok: false, msg: '该时段为团课，无法普通预约', fnVer: PAY_FN_VER }
+      }
+
+      const [busy] = await conn.query(
+        `SELECT id, status FROM bookings
+          WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场'))
+            AND status IN ${BUSY_SQL} LIMIT 1`,
+        [venueId, date, time, courtNorm, courtNorm]
+      )
+      if (busy.length) {
+        const locked = busy[0].status === 'locked'
+        return {
+          ok: false,
+          msg: locked ? '该时段已锁场' : busy[0].status === 'pending_pay' ? '该时段正在支付中' : '该时段已被预约',
+          fnVer: PAY_FN_VER
+        }
+      }
+
+      const serverPrice = await getSlotPrice(conn, venueId, court, date, time)
+      const amountYuan = Number(event.amount || 0)
+      let useYuan = amountYuan
+      if (serverPrice > 0) {
+        // Prefer server price; allow 1 fen tolerance
+        if (Math.abs(money(amountYuan) - serverPrice) > 0.011 && amountYuan > 0) {
+          console.warn('amount mismatch client', amountYuan, 'server', serverPrice)
+        }
+        useYuan = serverPrice
+      }
+      amountFen = Math.round(money(useYuan) * 100)
+      if (!amountFen || amountFen < 1) return { ok: false, msg: '金额无效', fnVer: PAY_FN_VER }
 
       no = outTradeNo()
       desc = '订场 ' + (event.venueName || '') + ' ' + court + ' ' + date + ' ' + time
-      await conn.query(
-        `INSERT INTO pay_orders (
-          out_trade_no, venue_id, venue_name, court, book_date, book_time,
-          user_id, openid, user_name, phone, mchid, amount_fen, status, description
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-        [
-          no,
-          venueId,
-          event.venueName || '',
-          court,
-          date,
-          time,
-          event.userId || '',
-          openid,
-          event.userName || '',
-          event.phone || '',
-          mch.mchid,
-          amountFen,
-          desc
-        ]
-      )
+      if (event.sport === 'pickleball') desc = '匹克球 ' + desc
+
+      await conn.beginTransaction()
+      try {
+        const [insPay] = await conn.query(
+          `INSERT INTO pay_orders (
+            out_trade_no, venue_id, venue_name, court, book_date, book_time,
+            user_id, openid, user_name, phone, mchid, amount_fen, status, description
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          [
+            no,
+            venueId,
+            event.venueName || '',
+            court,
+            date,
+            time,
+            event.userId || '',
+            openid,
+            event.userName || '',
+            event.phone || '',
+            mch.mchid,
+            amountFen,
+            desc
+          ]
+        )
+        payOrderDbId = Number(insPay.insertId)
+
+        const remark = (event.sport === 'pickleball' ? '匹克球 ' : '') + '[待支付]'
+        const userIdVal =
+          event.userId != null && /^\d+$/.test(String(event.userId).trim())
+            ? Number(String(event.userId).trim())
+            : null
+        const [insBk] = await conn.query(
+          `INSERT INTO bookings (
+            venue_id, venue_name, court, date, time,
+            user_id, openid, user_name, phone, status,
+            card_id, card_name, card_type,
+            coach_id, coach_name, source, remark, amount, pay_order_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_pay', NULL, '', '', NULL, '', 'user', ?, 0, ?)`,
+          [
+            venueId,
+            event.venueName || '',
+            court,
+            date,
+            time,
+            userIdVal,
+            openid,
+            event.userName || '',
+            event.phone || '',
+            remark,
+            payOrderDbId
+          ]
+        )
+        bookingId = Number(insBk.insertId)
+        await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [bookingId, payOrderDbId])
+        await conn.commit()
+      } catch (e) {
+        try { await conn.rollback() } catch (e2) {}
+        throw e
+      }
     } finally {
       await releaseSlotLock(conn, slotLock)
       conn.release()
     }
-    const privateKey = normalizePem(mch.keyPem)
 
+    const privateKey = normalizePem(mch.keyPem)
     const wxBodyObj = {
       appid: APPID,
       mchid: mch.mchid,
@@ -423,8 +1260,17 @@ exports.main = async (rawEvent) => {
     if (!wxRes.json || !wxRes.json.prepay_id) {
       const msg = (wxRes.json && (wxRes.json.message || wxRes.json.detail && wxRes.json.detail.message)) || '微信下单失败'
       console.error('jsapi fail', wxRes.status, wxRes.raw)
-      await pool.query(`UPDATE pay_orders SET status='failed', updated_at=NOW() WHERE out_trade_no=?`, [no])
-      return { ok: false, msg: msg }
+      try {
+        await pool.query(`UPDATE pay_orders SET status='failed', updated_at=NOW() WHERE out_trade_no=?`, [no])
+        if (bookingId) {
+          await pool.query(
+            `UPDATE bookings SET status='cancelled', remark=CONCAT(IFNULL(remark,''),' [微信下单失败]'), updated_at=NOW()
+              WHERE id=? AND status='pending_pay'`,
+            [bookingId]
+          )
+        }
+      } catch (e) {}
+      return { ok: false, msg: msg, fnVer: PAY_FN_VER }
     }
 
     const prepayId = wxRes.json.prepay_id
@@ -438,6 +1284,8 @@ exports.main = async (rawEvent) => {
     return {
       ok: true,
       outTradeNo: no,
+      bookingId: bookingId ? String(bookingId) : '',
+      fnVer: PAY_FN_VER,
       payParams: {
         timeStamp,
         nonceStr,
@@ -448,6 +1296,6 @@ exports.main = async (rawEvent) => {
     }
   } catch (e) {
     console.error(e)
-    return { ok: false, msg: e.message || '支付异常' }
+    return { ok: false, msg: e.message || '支付异常', fnVer: PAY_FN_VER }
   }
 }

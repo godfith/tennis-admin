@@ -1,0 +1,66 @@
+import { createRouter, createWebHashHistory } from 'vue-router'
+import { canAccess, homePath } from '../utils/auth'
+
+const routes = [
+  { path: '/login', name: 'Login', component: () => import('../views/Login.vue') },
+  {
+    path: '/',
+    component: () => import('../views/Layout.vue'),
+    redirect: '/dashboard',
+    children: [
+      { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
+      { path: 'activity', name: 'Activity', component: () => import('../views/Activity.vue') },
+      { path: 'finance', name: 'Finance', component: () => import('../views/Finance.vue') },
+      { path: 'occupancy', name: 'Occupancy', component: () => import('../views/Occupancy.vue') },
+      { path: 'bookings', name: 'Bookings', component: () => import('../views/Bookings.vue') },
+      { path: 'batch-lock', name: 'BatchLock', component: () => import('../views/BatchLock.vue') },
+      { path: 'coach-schedule', name: 'CoachSchedule', component: () => import('../views/CoachSchedule.vue') },
+      { path: 'group-classes', name: 'GroupClasses', component: () => import('../views/GroupClasses.vue') },
+      { path: 'courts', name: 'Courts', component: () => import('../views/Courts.vue') },
+      { path: 'hours', name: 'Hours', component: () => import('../views/Hours.vue') },
+      { path: 'prices', name: 'Prices', component: () => import('../views/Prices.vue') },
+      { path: 'coaches', name: 'Coaches', component: () => import('../views/Coaches.vue') },
+      { path: 'coach-attendance', name: 'CoachAttendance', component: () => import('../views/CoachAttendance.vue') },
+      { path: 'staff', name: 'Staff', component: () => import('../views/Staff.vue') },
+      { path: 'users', name: 'Users', component: () => import('../views/Users.vue') },
+      { path: 'cards', name: 'CardTemplates', component: () => import('../views/CardTemplates.vue') },
+      { path: 'evaluations', name: 'Evaluations', component: () => import('../views/Evaluations.vue') },
+      { path: 'activities', name: 'Activities', component: () => import('../views/Activities.vue') },
+      { path: 'banners', name: 'Banners', component: () => import('../views/Banners.vue') },
+      { path: 'notices', name: 'Notices', component: () => import('../views/Notices.vue') },
+      { path: 'notify-scripts', name: 'NotifyScripts', component: () => import('../views/NotifyScripts.vue') },
+      { path: 'gift', name: 'Gift', component: () => import('../views/Gift.vue') }
+    ]
+  }
+]
+
+const router = createRouter({
+  history: createWebHashHistory(),
+  routes
+})
+
+router.beforeEach((to, from, next) => {
+  if (to.path === '/login') {
+    next()
+    return
+  }
+  const token = localStorage.getItem('admin_token')
+  if (!token) {
+    next('/login')
+    return
+  }
+  if (to.path === '/' || to.path === '/dashboard') {
+    const home = homePath()
+    if (to.path !== home) {
+      next(home)
+      return
+    }
+  }
+  if (!canAccess(to.path)) {
+    next(homePath())
+    return
+  }
+  next()
+})
+
+export default router

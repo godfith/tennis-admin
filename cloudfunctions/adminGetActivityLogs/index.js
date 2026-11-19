@@ -18,7 +18,7 @@ function isImportedIssuer(name) {
   return s.indexOf('数据迁入') >= 0 || s.indexOf('系统迁入') >= 0 || s === '迁入'
 }
 
-const FN_VER = 'activity-20261029b'
+const FN_VER = 'activity-20261108a'
 
 const LABELS = {
   register: '用户注册',
@@ -53,6 +53,22 @@ function money(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 0
   return Math.round(n * 100) / 100
+}
+
+function resolvePayChannel(opts) {
+  const remark = String((opts && (opts.remark || opts.detail)) || '')
+  const op = String((opts && opts.operatorName) || '')
+  const type = String((opts && opts.type) || '')
+  const payOrderId = opts && opts.payOrderId
+  const hasPay = payOrderId != null && payOrderId !== '' && Number(payOrderId) !== 0
+  if (hasPay) return { code: 'wechat', label: '微信支付' }
+  if (type === 'pay') return { code: 'wechat', label: '微信支付' }
+  if (/微信/.test(remark) || /微信/.test(op)) return { code: 'wechat', label: '微信支付' }
+  if (/美团/.test(remark)) return { code: 'meituan', label: '美团' }
+  if (/抖音/.test(remark)) return { code: 'douyin', label: '抖音' }
+  if (/线下/.test(remark)) return { code: 'offline', label: '线下支付' }
+  if (opts && opts.assumeOffline) return { code: 'offline', label: '线下支付' }
+  return { code: '', label: '' }
 }
 
 function parseAmount(detail) {
@@ -183,16 +199,27 @@ exports.main = async (event) => {
       'l.venue_name',
       "DATE_FORMAT(l.created_at, '%Y-%m-%d %H:%i:%s') AS created_at"
     ]
-    if (has('amount')) selectBits.push('l.amount')
-    if (has('card_name')) selectBits.push('l.card_name')
+    // amount/card_name: log → finance_ledger → booking
     if (has('user_id')) selectBits.push('l.user_id')
 
     let sql = `SELECT ${selectBits.join(', ')},
-                        l.amount AS amount,
-                        IFNULL(l.card_name, b.card_name) AS card_name
+                        COALESCE(NULLIF(l.amount, 0), fl.amount, NULLIF(b.amount, 0), 0) AS amount,
+                        IFNULL(NULLIF(l.card_name, ''), b.card_name) AS card_name,
+                        b.pay_order_id AS booking_pay_order_id,
+                        b.amount AS booking_amount,
+                        b.source AS booking_source
                  FROM activity_logs l
                  LEFT JOIN users u ON ${has('user_id') ? 'u.id = l.user_id' : '1=0'}
-                 LEFT JOIN bookings b ON (l.type = 'booking_add' OR l.type = '订场') AND l.phone = b.phone AND l.venue_id = b.venue_id AND DATE(l.created_at) = b.date
+                 LEFT JOIN bookings b ON (l.type = 'booking_add' OR l.type = '订场')
+                   AND l.phone = b.phone AND l.venue_id = b.venue_id
+                   AND ABS(TIMESTAMPDIFF(SECOND, l.created_at, b.created_at)) <= 5
+                 LEFT JOIN (
+                   SELECT booking_id, MAX(amount) AS amount
+                     FROM finance_ledger
+                    WHERE type IN ('card_use','court_pay','court_book','wallet_pay')
+                      AND amount > 0
+                    GROUP BY booking_id
+                 ) fl ON fl.booking_id = b.id
                  LEFT JOIN member_cards mc ON b.card_id = mc.id
                 WHERE 1=1`
     const params = []
@@ -309,8 +336,30 @@ exports.main = async (event) => {
         const fromCard = realAmount(r)
         if (fromCard != null) parsedAmt = fromCard
       }
+      if ((parsedAmt == null || parsedAmt === 0) && (r.type === 'booking_add' || r.type === '订场')) {
+        if (Number(r.booking_amount) > 0) parsedAmt = money(r.booking_amount)
+      }
       if (parsedAmt == null) {
         parsedAmt = parseAmount(detail)
+      }
+      const assumeOffline = (r.type === 'issue_card' || r.type === 'booking_add' || r.type === '订场') && parsedAmt != null && Number(parsedAmt) > 0
+      const ch = resolvePayChannel({
+        detail,
+        remark: detail,
+        operatorName: r.operator_name || '',
+        type: r.type,
+        payOrderId: r.booking_pay_order_id,
+        assumeOffline: assumeOffline && !(r.booking_pay_order_id && Number(r.booking_pay_order_id) !== 0)
+      })
+      // 订场有实收但无微信单 → 线下支付；有 pay_order → 微信支付
+      let payChannel = ch.code
+      let payChannelLabel = ch.label
+      if ((r.type === 'booking_add' || r.type === '订场') && r.booking_pay_order_id && Number(r.booking_pay_order_id) !== 0) {
+        payChannel = 'wechat'
+        payChannelLabel = '微信支付'
+      } else if ((r.type === 'booking_add' || r.type === '订场') && Number(r.booking_amount) > 0 && !payChannel) {
+        payChannel = 'offline'
+        payChannelLabel = '线下支付'
       }
       list.push({
         id: String(r.id),
@@ -325,7 +374,10 @@ exports.main = async (event) => {
         detail,
         venueId: r.venue_id || '',
         venueName: r.venue_name || '',
-        timeText: r.created_at || ''
+        timeText: r.created_at || '',
+        payChannel,
+        payChannelLabel,
+        source: payChannelLabel
       })
     })
     if (cardName) {

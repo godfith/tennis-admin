@@ -10,6 +10,7 @@
           <template #title><el-icon><DataAnalysis /></el-icon><span>概览</span></template>
           <el-menu-item v-if="ok('/dashboard')" index="/dashboard">数据看板</el-menu-item>
           <el-menu-item v-if="ok('/activity')" index="/activity">业务动态</el-menu-item>
+          <el-menu-item v-if="ok('/op-logs')" index="/op-logs">操作日志</el-menu-item>
           <el-menu-item v-if="ok('/finance')" index="/finance">财务报表</el-menu-item>
           <el-menu-item v-if="ok('/occupancy')" index="/occupancy">订场率</el-menu-item>
           <el-menu-item v-if="ok('/coach-attendance')" index="/coach-attendance">教练出勤</el-menu-item>
@@ -17,7 +18,7 @@
         <el-sub-menu v-if="showBooking" index="grp-booking">
           <template #title><el-icon><Calendar /></el-icon><span>预约与课程</span></template>
           <el-menu-item v-if="ok('/bookings')" index="/bookings">预约管理</el-menu-item>
-          <el-menu-item v-if="ok('/batch-lock')" index="/batch-lock">批量锁场</el-menu-item>
+          <el-menu-item v-if="ok('/batch-lock')" index="/batch-lock">锁场规则</el-menu-item>
           <el-menu-item v-if="ok('/coach-schedule')" index="/coach-schedule">教练排课</el-menu-item>
           <el-menu-item v-if="ok('/group-classes')" index="/group-classes">团课排期</el-menu-item>
         </el-sub-menu>
@@ -53,9 +54,10 @@
       <el-menu :default-active="activeMenu" background-color="#1a5c3a" text-color="#c8e6d0" active-text-color="#ffffff" router class="side-menu" @select="drawer = false">
         <el-menu-item v-if="ok('/dashboard')" index="/dashboard">数据看板</el-menu-item>
         <el-menu-item v-if="ok('/activity')" index="/activity">业务动态</el-menu-item>
+        <el-menu-item v-if="ok('/op-logs')" index="/op-logs">操作日志</el-menu-item>
         <el-menu-item v-if="ok('/finance')" index="/finance">财务报表</el-menu-item>
         <el-menu-item v-if="ok('/bookings')" index="/bookings">预约管理</el-menu-item>
-        <el-menu-item v-if="ok('/batch-lock')" index="/batch-lock">批量锁场</el-menu-item>
+        <el-menu-item v-if="ok('/batch-lock')" index="/batch-lock">锁场规则</el-menu-item>
         <el-menu-item v-if="ok('/users')" index="/users">用户管理</el-menu-item>
         <el-menu-item v-if="ok('/cards')" index="/cards">卡模板</el-menu-item>
         <el-menu-item v-if="ok('/coaches')" index="/coaches">教练管理</el-menu-item>
@@ -90,16 +92,17 @@
   </el-container>
 </template>
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { DataAnalysis, Calendar, Grid, User, ArrowDown, Ticket, Menu } from '@element-plus/icons-vue'
-import { canAccess, can, roleLabel } from '../utils/auth'
+import { canAccess, can, roleLabel, roleKind, allowedVenueIds } from '../utils/auth'
 const route = useRoute()
 const router = useRouter()
 const adminName = localStorage.getItem('admin_name') || '管理员'
 const roleText = roleLabel()
-const canSwitchVenue = can('switchVenue')
+const isSuperVenue = roleKind() === 'admin'
+const canSwitchVenue = isSuperVenue || allowedVenueIds().length > 1
 const canGift = can('gift')
 const isMobile = ref(window.innerWidth < 768)
 const drawer = ref(false)
@@ -112,7 +115,7 @@ const currentVenueId = ref(localStorage.getItem('venue_id') || '')
 const currentVenueName = ref(localStorage.getItem('venue_name') || '选择场馆')
 const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 function ok(path) { return canAccess(path) }
-const showOverview = computed(() => ['/dashboard', '/activity', '/finance', '/occupancy', '/coach-attendance'].some(ok))
+const showOverview = computed(() => ['/dashboard', '/activity', '/op-logs', '/finance', '/occupancy', '/coach-attendance'].some(ok))
 const showBooking = computed(() => ['/bookings', '/batch-lock', '/coach-schedule', '/group-classes'].some(ok))
 const showVenue = computed(() => ['/courts', '/hours', '/prices'].some(ok))
 const showPeople = computed(() => ['/coaches', '/staff', '/users'].some(ok))
@@ -123,19 +126,15 @@ async function loadVenues() {
     const data = await res.json()
     const result = data.body ? (typeof data.body === 'string' ? JSON.parse(data.body) : data.body) : data
     let list = result.list || []
-    const lockedId = localStorage.getItem('admin_venue_id') || ''
-    if (!canSwitchVenue && lockedId) {
-      list = list.filter((v) => (v.venueId || v._id) === lockedId)
+    if (!isSuperVenue) {
+      const allow = allowedVenueIds()
+      if (allow.length) list = list.filter((v) => allow.includes(String(v.venueId || v._id)))
       venueList.value = list
-      if (list[0]) selectVenue(list[0], true)
+      const found = list.find((v) => String(v.venueId || v._id) === String(currentVenueId.value)) || list[0]
+      if (found) selectVenue(found, true)
       return
     }
     venueList.value = list
-    if (!canSwitchVenue && list.length) {
-      const found = list.find((v) => (v.venueId || v._id) === currentVenueId.value) || list[0]
-      selectVenue(found, true)
-      return
-    }
     if (!currentVenueId.value && venueList.value.length) selectVenue(venueList.value[0], true)
     else if (currentVenueId.value) {
       const found = venueList.value.find((v) => (v.venueId || v._id) === currentVenueId.value)
@@ -156,11 +155,34 @@ function selectVenue(v, silent) {
   window.dispatchEvent(new Event('venue-changed'))
 }
 function onVenueCommand(v) { selectVenue(v) }
+function onSetAdminVenue(e) {
+  const d = (e && e.detail) || {}
+  const vid = String(d.venueId || d.venue_id || '')
+  if (!vid) return
+  if (!isSuperVenue) {
+    const allow = allowedVenueIds()
+    if (allow.length && !allow.map(String).includes(String(vid))) {
+      ElMessage.warning('当前账号不能查看该场馆')
+      return
+    }
+  }
+  const found = venueList.value.find((v) => String(v.venueId || v._id) === String(vid))
+  if (found) selectVenue(found, true)
+  else selectVenue({ venueId: vid, _id: vid, name: d.venueName || d.venue_name || vid }, true)
+}
 function logout() {
-  ;['admin_token', 'admin_name', 'admin_role', 'admin_venue_id', 'admin_venue_name', 'venue_id', 'venue_name'].forEach((k) => localStorage.removeItem(k))
+  ;['admin_token', 'admin_name', 'admin_role', 'admin_perms', 'admin_venue_id', 'admin_venue_name', 'admin_venue_ids', 'venue_id', 'venue_name'].forEach((k) => localStorage.removeItem(k))
   router.push('/login')
 }
-onMounted(() => { loadVenues(); window.addEventListener('resize', onResize) })
+onMounted(() => {
+  loadVenues()
+  window.addEventListener('resize', onResize)
+  window.addEventListener('set-admin-venue', onSetAdminVenue)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
+  window.removeEventListener('set-admin-venue', onSetAdminVenue)
+})
 </script>
 <style scoped>
 .layout { height: 100vh; }

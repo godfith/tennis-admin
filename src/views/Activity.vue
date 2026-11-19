@@ -19,6 +19,7 @@
         <el-button size="small" @click="setRange('today')">今天</el-button>
         <el-button size="small" @click="setRange('yesterday')">昨天</el-button>
         <el-button size="small" @click="setRange('week')">本周</el-button>
+        <el-button size="small" @click="setRange('lastWeek')">上周</el-button>
         <el-button size="small" @click="setRange('month')">本月</el-button>
       </el-button-group>
       <el-select v-model="filterType" clearable placeholder="全部类型" style="width: 150px">
@@ -45,10 +46,11 @@
       <el-select v-model="col.amount" filterable allow-create default-first-option clearable size="small" placeholder="金额" style="width: 120px">
         <el-option v-for="v in opts.amount" :key="'a'+v" :label="v" :value="v" />
       </el-select>
-      <el-select v-model="col.source" clearable size="small" placeholder="资金来源" style="width: 120px">
+      <el-select v-model="col.source" clearable size="small" placeholder="资金来源" style="width: 130px">
+        <el-option label="微信支付" value="微信支付" />
+        <el-option label="线下支付" value="线下支付" />
         <el-option label="美团" value="美团" />
         <el-option label="抖音" value="抖音" />
-        <el-option label="线下" value="线下" />
       </el-select>
       <el-select v-model="col.detail" filterable allow-create default-first-option clearable size="small" placeholder="详情" style="width: 200px">
         <el-option v-for="v in opts.detail" :key="'d'+v" :label="v" :value="v" />
@@ -91,7 +93,7 @@
           <span v-else class="muted">-</span>
         </template>
       </el-table-column>
-      <el-table-column prop="source" label="来源" width="80" />
+      <el-table-column prop="source" label="资金来源" width="100" />
       <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip />
       <el-table-column prop="venueName" label="场馆" width="160" show-overflow-tooltip />
     </el-table>
@@ -280,11 +282,16 @@ async function fetchAll() {
       const key = r.id ? 'id:' + r.id : [r.timeText, r.type, r.phone, r.userName, r.detail, r.amount].join('|')
       if (seen.has(key)) return false
       seen.add(key)
-      const d = String(r.detail || '')
-      if (d.indexOf('美团') >= 0) r.source = '美团'
-      else if (d.indexOf('抖音') >= 0) r.source = '抖音'
-      else if (d.indexOf('线下') >= 0) r.source = '线下'
-      else r.source = ''
+      if (r.payChannelLabel) r.source = r.payChannelLabel
+      else if (r.source) { /* backend */ }
+      else {
+        const d = String(r.detail || '')
+        if (d.indexOf('微信') >= 0) r.source = '微信支付'
+        else if (d.indexOf('美团') >= 0) r.source = '美团'
+        else if (d.indexOf('抖音') >= 0) r.source = '抖音'
+        else if (d.indexOf('线下') >= 0) r.source = '线下支付'
+        else r.source = ''
+      }
       return true
     })
     cardIssueTotal.value = Number(result.cardIssueTotal) || 0
@@ -310,6 +317,12 @@ function ymd(d) {
   const p = (n) => (n < 10 ? '0' + n : '' + n)
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
 }
+function startOfWeek(d) {
+  const x = new Date(d)
+  const day = x.getDay()
+  x.setDate(x.getDate() - (day === 0 ? 6 : day - 1))
+  return x
+}
 function setRange(type) {
   const now = new Date()
   if (type === 'today') {
@@ -321,13 +334,18 @@ function setRange(type) {
     startDate.value = ymd(y)
     endDate.value = ymd(y)
   } else if (type === 'week') {
-    const x = new Date(now)
-    const day = x.getDay()
-    x.setDate(x.getDate() - (day === 0 ? 6 : day - 1))
-    const end = new Date(x)
-    end.setDate(x.getDate() + 6)
-    startDate.value = ymd(x)
-    endDate.value = ymd(end)
+    const s = startOfWeek(now)
+    const e = new Date(s)
+    e.setDate(s.getDate() + 6)
+    startDate.value = ymd(s)
+    endDate.value = ymd(e)
+  } else if (type === 'lastWeek') {
+    const s = startOfWeek(now)
+    s.setDate(s.getDate() - 7)
+    const e = new Date(s)
+    e.setDate(s.getDate() + 6)
+    startDate.value = ymd(s)
+    endDate.value = ymd(e)
   } else {
     startDate.value = ymd(new Date(now.getFullYear(), now.getMonth(), 1))
     endDate.value = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0))

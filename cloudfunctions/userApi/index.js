@@ -1,4 +1,10 @@
 const mysql = require('mysql2/promise')
+const { autoCancelDueGroupClasses, isPastClass } = require('./groupClassAutoCancel')
+const { expireDueCards } = require('./expireDueCards')
+const courtTypeRule = require('./courtTypeRule')
+const cardActivateHelper = require('./cardActivateHelper')
+const settingsLib = require('./groupClassSettings')
+const venueBookingRule = require('./venueBookingRule')
 let cloud = null
 try {
   cloud = require('wx-server-sdk')
@@ -16,7 +22,7 @@ const pool = mysql.createPool({
 })
 async function deductStoredCards(conn, userId, amount) {
   let left = Number(amount) || 0
-  if (!userId || left <= 0) return
+  if (!userId || left <= 0) return 0
   const [rows] = await conn.query(
     `SELECT id, IFNULL(price,0) AS price, IFNULL(remaining_times,0) AS remaining_times
        FROM member_cards
@@ -25,6 +31,7 @@ async function deductStoredCards(conn, userId, amount) {
       ORDER BY id`,
     [userId]
   )
+  let used = 0
   for (const c of rows || []) {
     if (left <= 0) break
     const have = Number(c.price) || Number(c.remaining_times) || 0
@@ -36,9 +43,41 @@ async function deductStoredCards(conn, userId, amount) {
       [next, Math.round(next), next <= 0 ? 'used_up' : 'active', c.id]
     )
     left = +(left - use).toFixed(2)
+    used = +(used + use).toFixed(2)
   }
+  return used
 }
 
+async function storedCardBalance(conn, userId) {
+  if (!userId) return 0
+  const [rows] = await conn.query(
+    `SELECT IFNULL(price,0) AS price, IFNULL(remaining_times,0) AS remaining_times
+       FROM member_cards
+      WHERE user_id=? AND IFNULL(status,'')='active'
+        AND (type='stored' OR card_name LIKE '%储值%')`,
+    [userId]
+  )
+  let sum = 0
+  for (const c of rows || []) {
+    sum += Number(c.price) || Number(c.remaining_times) || 0
+  }
+  return money(sum)
+}
+
+function todayYmd() {
+  // Asia/Shanghai YYYY-MM-DD
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date())
+  } catch (e) {
+    const d = new Date(Date.now() + 8 * 3600 * 1000)
+    return d.toISOString().slice(0, 10)
+  }
+}
 function fmtDate(v) {
   if (!v) return null
   if (typeof v === 'string') return v.slice(0, 10)
@@ -50,6 +89,29 @@ function fmtDate(v) {
   }
   return String(v).slice(0, 10)
 }
+
+async function maybeRevertFirstUseActivation(conn, card) {
+  if (!card) return false
+  const t = String(card.type || '')
+  if (t !== 'time' && t !== 'times' && t !== 'coach' && t !== 'group') return false
+  const st = String(card.status || '')
+  if (st === 'deleted' || st === 'refunded') return false
+  const rule = cardActivateHelper.parseRule(card.time_rule)
+  const from = fmtDate(card.valid_from)
+  if (rule.activateMode !== 'first_use' || !from) return false
+  const [cntRows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM bookings WHERE card_id=? AND status='booked'`,
+    [card.id]
+  )
+  const bookedCount = Number(cntRows[0] && cntRows[0].cnt) || 0
+  if (!cardActivateHelper.shouldRevertActivation({ activateMode: rule.activateMode, validFrom: from, bookedCount })) return false
+  await conn.query(
+    `UPDATE member_cards SET valid_from=NULL, valid_to=NULL, updated_at=NOW() WHERE id=?`,
+    [card.id]
+  )
+  return true
+}
+
 function fmtDateCn(v) {
   if (!v) return ''
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) {
@@ -69,6 +131,61 @@ function parseTimeRule(v) {
     return null
   }
 }
+
+function groupTimeRuleRejectMsg(card, dateYmd, timeSlot) {
+  if (!card || !dateYmd) return ''
+  const from = String(card.valid_from || '').slice(0, 10)
+  const to = String(card.valid_to || '').slice(0, 10)
+  if (from && dateYmd < from) return '这张卡还没到生效日期'
+  if (to && dateYmd > to) return '所选日期超出这张卡的有效期'
+  const timeRule = parseTimeRule(card.time_rule)
+  if (!timeRule) return ''
+  const mode = timeRule.mode || ''
+  const ranges = Array.isArray(timeRule.dateRanges) ? timeRule.dateRanges : []
+  const isDates = mode === 'dates' || (!mode && ranges.length)
+  if (isDates && ranges.length) {
+    const okDate = ranges.some((rg) => {
+      const s = (rg && (rg.start || (rg.range && rg.range[0]))) || ''
+      const e = (rg && (rg.end || (rg.range && rg.range[1]))) || ''
+      return s && e && dateYmd >= s && dateYmd <= e
+    })
+    if (!okDate) return '当天不在这张卡的可用日期内'
+  }
+  if (mode === 'rules' && Array.isArray(timeRule.rules) && timeRule.rules.length) {
+    const d = new Date(String(dateYmd).replace(/-/g, '/'))
+    if (Number.isNaN(d.getTime())) return ''
+    let weekday = d.getDay()
+    if (weekday === 0) weekday = 7
+    const slotStart = String(timeSlot || '').split('-')[0]
+    let matched = false
+    for (const r of timeRule.rules) {
+      const days = (r.weekdays || []).map((n) => Number(n))
+      if (days.indexOf(weekday) < 0) continue
+      const slots = r.timeSlots || []
+      if (!slots.length || r.unlimited) {
+        matched = true
+        break
+      }
+      for (const s of slots) {
+        if (s && s.start && s.end && slotStart && slotStart >= s.start && slotStart < s.end) {
+          matched = true
+          break
+        }
+      }
+      if (matched) break
+    }
+    if (!matched) return '当前日期/时段不在这张卡的可用范围内'
+  }
+  return ''
+}
+function parseSeats(body) {
+  if (!body) return { ok: true, seats: 1 }
+  if (body.seats == null && body.qty == null && body.count == null) return { ok: true, seats: 1 }
+  const raw = body.seats != null ? body.seats : (body.qty != null ? body.qty : body.count)
+  const n = Math.floor(Number(raw))
+  if (!Number.isFinite(n) || n < 1) return { ok: false, msg: '报名人数至少为1' }
+  return { ok: true, seats: n }
+}
 function parseEvent(event) {
   if (event && event.body) {
     try {
@@ -84,8 +201,8 @@ async function writeLog(connOrPool, row) {
   try {
     await connOrPool.query(
       `INSERT INTO activity_logs
-        (type, user_name, operator_name, phone, detail, venue_id, venue_name, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+        (type, user_name, operator_name, phone, detail, venue_id, venue_name, amount, card_name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         row.type || '',
         row.userName || '',
@@ -93,7 +210,9 @@ async function writeLog(connOrPool, row) {
         row.phone || '',
         row.detail || '',
         row.venueId || '',
-        row.venueName || ''
+        row.venueName || '',
+        row.amount != null ? money(row.amount) : 0,
+        row.cardName || ''
       ]
     )
   } catch (e) {
@@ -148,7 +267,39 @@ async function resolveUserId(conn, userIdVal, openidVal, phoneVal) {
   } catch (e) {}
   return null
 }
-async function getSlotPrice(conn, venueId, court, dateStr, timeStr) {
+
+function expandHourSlots(timeStr) {
+  const s = String(timeStr || '').trim()
+  const m = s.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/)
+  if (!m) return s ? [s] : []
+  const pad2 = (n) => (n < 10 ? '0' : '') + n
+  const h1 = Number(m[1]), n1 = Number(m[2]), h2 = Number(m[3]), n2 = Number(m[4])
+  if (![h1, n1, h2, n2].every((x) => Number.isFinite(x)) || n1 > 59 || n2 > 59 || h1 > 23 || h2 > 24) {
+    return [s]
+  }
+  const start = h1 * 60 + n1
+  const end = h2 * 60 + n2
+  if (end <= start) return [s]
+  if ((end - start) % 60 !== 0) return [s]
+  const slots = []
+  for (let t = start; t < end; t += 60) {
+    const a = t
+    const b = t + 60
+    slots.push(pad2(Math.floor(a / 60)) + ':' + pad2(a % 60) + '-' + pad2(Math.floor(b / 60)) + ':' + pad2(b % 60))
+  }
+  return slots.length ? slots : [s]
+}
+
+function timesOverlap(a, b) {
+  const sa = new Set(expandHourSlots(a))
+  return expandHourSlots(b).some((t) => sa.has(t))
+}
+
+function pickOverlapping(rows, timeStr) {
+  return (rows || []).filter((r) => timesOverlap(r.time, timeStr))
+}
+
+async function getHourPrice(conn, venueId, court, dateStr, timeStr) {
   const wd = weekdayMon1(dateStr)
   if (!venueId || !court || !wd || !timeStr) return 0
   try {
@@ -166,6 +317,117 @@ async function getSlotPrice(conn, venueId, court, dateStr, timeStr) {
     return 0
   }
 }
+
+async function getSlotPrice(conn, venueId, court, dateStr, timeStr) {
+  const slots = expandHourSlots(timeStr)
+  const hours = slots.length ? slots : [String(timeStr || '').trim()]
+  if (!hours[0]) return 0
+  let total = 0
+  for (const t of hours) {
+    const p = await getHourPrice(conn, venueId, court, dateStr, t)
+    if (!(p > 0)) return 0
+    total += p
+  }
+  return money(total)
+}
+
+
+function nowHmShanghai() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Shanghai',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(new Date())
+    const get = (t) => {
+      const p = parts.find((x) => x.type === t)
+      return p ? p.value : ''
+    }
+    const h = Number(get('hour'))
+    const m = Number(get('minute'))
+    if (!Number.isFinite(h) || !Number.isFinite(m)) throw new Error('bad time')
+    const pad2 = (n) => (n < 10 ? '0' : '') + n
+    return pad2(h) + ':' + pad2(m)
+  } catch (e) {
+    const d = new Date(Date.now() + 8 * 3600 * 1000)
+    const pad2 = (n) => (n < 10 ? '0' : '') + n
+    return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes())
+  }
+}
+
+function slotEndHm(timeStr) {
+  const hours = expandHourSlots(timeStr)
+  const last = hours.length ? hours[hours.length - 1] : String(timeStr || '').trim()
+  const end = String(last).split('-')[1] || ''
+  const m = String(end).trim().match(/^(\d{1,2}):(\d{2})$/)
+  if (!m) return ''
+  const h = Number(m[1])
+  const n = Number(m[2])
+  if (!Number.isFinite(h) || !Number.isFinite(n) || n > 59) return ''
+  const pad2 = (x) => (x < 10 ? '0' : '') + x
+  return pad2(h) + ':' + pad2(n)
+}
+
+async function hoursOpenInVenue(conn, venueId, dateStr, timeStr) {
+  const wd = weekdayMon1(dateStr)
+  const slots = expandHourSlots(timeStr)
+  const hours = slots.length ? slots : [String(timeStr || '').trim()]
+  if (!venueId || !wd || !hours[0]) return false
+  try {
+    const [cntRows] = await conn.query(
+      'SELECT COUNT(*) AS cnt FROM venue_hours WHERE venue_id=?',
+      [venueId]
+    )
+    if (!cntRows[0] || Number(cntRows[0].cnt) <= 0) return false
+    const [rows] = await conn.query(
+      'SELECT time_slot FROM venue_hours WHERE venue_id=? AND weekday=?',
+      [venueId, wd]
+    )
+    const open = new Set((rows || []).map((r) => String(r.time_slot || '').trim()))
+    return hours.every((t) => open.has(String(t).trim()))
+  } catch (e) {
+    return false
+  }
+}
+
+async function rejectInvalidBookingSlot(conn, opts) {
+  const dateYmd = opts.dateYmd
+  const timeStr = opts.timeStr
+  if (!opts.skipPast) {
+    const today = todayYmd()
+    if (dateYmd < today) return { ok: false, msg: '不能预约过去的日期' }
+    if (dateYmd === today) {
+      const endHm = slotEndHm(timeStr)
+      const nowHm = nowHmShanghai()
+      if (endHm && nowHm && nowHm >= endHm) return { ok: false, msg: '该时段已过' }
+    }
+  }
+  const open = await hoursOpenInVenue(conn, opts.venueId, dateYmd, timeStr)
+  if (!open) return { ok: false, msg: '该时段不在营业时间内' }
+  if (opts.requirePrice) {
+    const slotPrice = await getSlotPrice(conn, opts.venueId, opts.court, dateYmd, timeStr)
+    if (!(slotPrice > 0)) return { ok: false, msg: '该时段暂未标价，无法预约' }
+  }
+  return { ok: true }
+}
+
+function memberCardRejectMsg(card) {
+  if (!card) return '会员卡不可用'
+  const today = todayYmd()
+  const to = fmtDate(card.valid_to)
+  if (card.status === 'expired' || (card.status !== 'active' && to && today > to)) {
+    return '这张卡已过期'
+  }
+  const usesTimes = card.type === 'times' || card.type === 'coach' || card.type === 'group'
+  if (card.status === 'used_up' || (usesTimes && Number(card.remaining_times) <= 0)) {
+    return '会员卡次数已用完'
+  }
+  if (card.status !== 'active') return '会员卡不可用'
+  return ''
+}
+
+
 async function writeLedger(conn, row) {
   try {
     await conn.query(
@@ -193,8 +455,12 @@ async function writeLedger(conn, row) {
   }
 }
 
+function isOutdoorSharedCourt(courtName) {
+  return String(courtName || '').trim() === '外场'
+}
+
 function normCourt(c) {
-  return String(c || '').trim().replace(/场$/u, '')
+  return String(c || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
 }
 
 async function resolveCourtName(conn, venueId, court) {
@@ -214,6 +480,62 @@ async function resolveCourtName(conn, venueId, court) {
   return raw
 }
 
+async function loadCourtInfo(conn, venueId, court) {
+  const raw = String(court || '').trim()
+  if (!raw) return { name: '', type: '', pureTennis: 0 }
+  const n = normCourt(raw)
+  const params = [venueId, raw, n + '场', n, raw, n + '场']
+  const where = `venue_id=? AND (name=? OR name=? OR TRIM(TRAILING '场' FROM name)=?)
+        ORDER BY (name=?) DESC, (name=?) DESC, id ASC LIMIT 1`
+  try {
+    const [rows] = await conn.query(
+      `SELECT name, type, IFNULL(pure_tennis, 0) AS pure_tennis FROM courts
+        WHERE ${where}`,
+      params
+    )
+    if (rows && rows[0]) {
+      return {
+        name: String(rows[0].name || raw),
+        type: String(rows[0].type || ''),
+        pureTennis: Number(rows[0].pure_tennis) ? 1 : 0
+      }
+    }
+  } catch (e) {
+    try {
+      const [rows] = await conn.query(
+        `SELECT name, type FROM courts WHERE ${where}`,
+        params
+      )
+      if (rows && rows[0]) {
+        return { name: String(rows[0].name || raw), type: String(rows[0].type || ''), pureTennis: 0 }
+      }
+    } catch (e2) {}
+  }
+  return { name: raw, type: '', pureTennis: 0 }
+}
+
+
+
+async function isCourtCustomerVisible(conn, venueId, court) {
+  const raw = String(court || '').trim()
+  if (isOutdoorSharedCourt(raw)) return false
+  if (!venueId || !raw) return true
+  try {
+    const n = normCourt(raw)
+    const [rows] = await conn.query(
+      `SELECT name, IFNULL(customer_visible, 1) AS v FROM courts
+        WHERE venue_id=? AND (name=? OR name=? OR TRIM(TRAILING '场' FROM name)=?)
+        ORDER BY (name=?) DESC, id ASC
+        LIMIT 1`,
+      [venueId, raw, n + '场', n, raw]
+    )
+    if (!rows || !rows[0]) return true
+    if (isOutdoorSharedCourt(rows[0].name)) return false
+    return Number(rows[0].v) !== 0
+  } catch (e) {
+    return !isOutdoorSharedCourt(raw)
+  }
+}
 
 function slotLockName(venueId, dateYmd, time, court) {
   const raw = 'book:' + String(venueId || '') + ':' + String(dateYmd || '') + ':' + String(time || '') + ':' + normCourt(court)
@@ -223,28 +545,207 @@ function slotLockName(venueId, dateYmd, time, court) {
 }
 
 async function acquireSlotLock(conn, venueId, dateYmd, time, court) {
-  const name = slotLockName(venueId, dateYmd, time, court)
-  const [rows] = await conn.query('SELECT GET_LOCK(?, 10) AS ok', [name])
-  if (!rows[0] || Number(rows[0].ok) !== 1) {
-    const err = new Error('系统繁忙，请稍后重试')
-    err.code = 'SLOT_LOCK'
-    throw err
+  const slots = expandHourSlots(time)
+  const times = slots.length ? slots : [time]
+  const names = []
+  try {
+    for (const t of times) {
+      const name = slotLockName(venueId, dateYmd, t, court)
+      const [rows] = await conn.query('SELECT GET_LOCK(?, 10) AS ok', [name])
+      if (!rows[0] || Number(rows[0].ok) !== 1) {
+        const err = new Error('系统繁忙，请稍后重试')
+        err.code = 'SLOT_LOCK'
+        throw err
+      }
+      names.push(name)
+    }
+  } catch (e) {
+    for (const n of names) {
+      try { await conn.query('SELECT RELEASE_LOCK(?)', [n]) } catch (_) {}
+    }
+    throw e
   }
-  return name
+  return names
 }
 
 async function releaseSlotLock(conn, name) {
-  if (!name) return
-  try {
-    await conn.query('SELECT RELEASE_LOCK(?)', [name])
-  } catch (e) {}
+  const list = Array.isArray(name) ? name : (name ? [name] : [])
+  for (const n of list) {
+    try {
+      await conn.query('SELECT RELEASE_LOCK(?)', [n])
+    } catch (e) {}
+  }
 }
 
-const FN_VER = 'userApi-20261105a'
+
+async function ensureLockIntentsTable(conn) {
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS lock_intents (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      venue_id VARCHAR(64) NOT NULL,
+      venue_name VARCHAR(128) NOT NULL DEFAULT '',
+      court VARCHAR(64) NOT NULL,
+      date DATE NOT NULL,
+      time VARCHAR(32) NOT NULL,
+      operator_name VARCHAR(64) NOT NULL DEFAULT '',
+      remark VARCHAR(255) NOT NULL DEFAULT '',
+      booking_id BIGINT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_lock_intent_slot (venue_id, date, time, court)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `)
+}
+
+function isLockRow(b) {
+  if (!b) return false
+  if (b.status === 'locked') return true
+  if (b.source === 'lock' || b.source === 'court_lock') return true
+  const name = String(b.user_name || '')
+  const remark = String(b.remark || '')
+  return name === '锁场' || remark.startsWith('[锁场]')
+}
+
+async function findLockIntent(conn, venueId, dateYmd, time, court) {
+  await ensureLockIntentsTable(conn)
+  const courtNorm = normCourt(court)
+  const [rows] = await conn.query(
+    `SELECT * FROM lock_intents
+      WHERE venue_id=? AND date=? AND time=?
+        AND (court=? OR court=? OR court=CONCAT(?,'场') OR TRIM(TRAILING '场' FROM court)=?)
+      LIMIT 1`,
+    [venueId, dateYmd, time, court || '', courtNorm, courtNorm, courtNorm]
+  )
+  return rows && rows[0] ? rows[0] : null
+}
+
+async function applyLockIntentAfterCancel(conn, b, operatorName) {
+  if (!b || isLockRow(b)) return { relocked: false }
+  const dateYmd = fmtDate(b.date) || b.date
+  const time = b.time || ''
+  const venueId = b.venue_id || ''
+  if (!venueId || !dateYmd || !time) return { relocked: false }
+  const intent = await findLockIntent(conn, venueId, dateYmd, time, b.court)
+  if (!intent) return { relocked: false }
+  const courtNorm = normCourt(b.court || intent.court)
+  const courtName = await resolveCourtName(conn, venueId, b.court || intent.court)
+  const [busy] = await conn.query(
+    `SELECT id, status FROM bookings
+      WHERE venue_id=? AND date=? AND time=?
+        AND (court=? OR court=CONCAT(?,'场'))
+        AND status IN ('booked','locked','pending_pay')
+      LIMIT 1`,
+    [venueId, dateYmd, time, courtNorm, courtNorm]
+  )
+  if (busy && busy.length) {
+    await conn.query('DELETE FROM lock_intents WHERE id=?', [intent.id])
+    return { relocked: false, busy: true }
+  }
+  const remark = intent.remark || '[锁场] 批量锁场·取消后自动锁'
+  await conn.query(
+    `INSERT INTO bookings (
+      venue_id, venue_name, court, date, time,
+      user_id, openid, user_name, phone, status,
+      source, operator_name, remark, amount
+    ) VALUES (?, ?, ?, ?, ?, NULL, '', '锁场', '', 'locked', 'lock', ?, ?, 0)`,
+    [
+      venueId,
+      intent.venue_name || b.venue_name || '',
+      courtName,
+      dateYmd,
+      time,
+      operatorName || intent.operator_name || '用户',
+      remark
+    ]
+  )
+  await conn.query('DELETE FROM lock_intents WHERE id=?', [intent.id])
+  return { relocked: true }
+}
+
+async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
+  const bizDate = fmtDate(b.date) || fmtDate(new Date())
+  const op = operatorName || '用户'
+  const remark = '取消 ' + (b.court || '') + ' ' + (b.time || '')
+  const cashAmt = money(b.amount)
+  let cardUseAmt = 0
+  let cardUseCardId = refundCardId || b.card_id || null
+  let issueAmt = 0
+  let issueCardId = null
+  try {
+    const [cu] = await conn.query(
+      `SELECT amount, card_id FROM finance_ledger
+        WHERE booking_id=? AND type='card_use' AND amount>0
+        ORDER BY id DESC LIMIT 1`,
+      [b.id]
+    )
+    if (cu[0]) {
+      cardUseAmt = money(cu[0].amount)
+      if (cu[0].card_id) cardUseCardId = cu[0].card_id
+    }
+  } catch (e) {}
+  try {
+    const [iss] = await conn.query(
+      `SELECT amount, card_id FROM finance_ledger
+        WHERE booking_id=? AND type='issue_card' AND amount>0
+        ORDER BY id DESC LIMIT 1`,
+      [b.id]
+    )
+    if (iss[0]) {
+      issueAmt = money(iss[0].amount)
+      issueCardId = iss[0].card_id || null
+    }
+  } catch (e) {}
+
+  const base = {
+    bizDate,
+    venueId: b.venue_id || '',
+    venueName: b.venue_name || '',
+    userId: b.user_id || null,
+    userName: b.user_name || '',
+    operatorName: op,
+    bookingId: b.id,
+    remark
+  }
+
+  if (cardUseAmt > 0) {
+    await writeLedger(conn, Object.assign({}, base, {
+      type: 'card_use_cancel',
+      amount: -cardUseAmt,
+      cardId: cardUseCardId || null
+    }))
+  }
+  if (issueAmt > 0) {
+    await writeLedger(conn, Object.assign({}, base, {
+      type: 'court_refund',
+      amount: -issueAmt,
+      cardId: issueCardId || cardUseCardId || null,
+      remark: '取消退发卡款 ' + issueAmt + ' · ' + remark
+    }))
+  }
+  // 若微信支付已写 court_refund，则不再重复冲现金
+  let skipCash = false
+  try {
+    if (b.pay_order_id) {
+      const [rf] = await conn.query(
+        `SELECT id FROM finance_ledger WHERE pay_order_id=? AND type='court_refund' LIMIT 1`,
+        [b.pay_order_id]
+      )
+      if (rf[0]) skipCash = true
+    }
+  } catch (e) {}
+  if (cashAmt > 0 && !skipCash) {
+    await writeLedger(conn, Object.assign({}, base, {
+      type: 'court_cancel',
+      amount: -cashAmt,
+      cardId: null
+    }))
+  }
+}
+
+const FN_VER = 'userApi-20261119d'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
-  '18:00-19:00', '19:00-20:00', '20:00-21:00'
+  '18:00-19:00', '19:00-20:00', '20:00-21:00', '21:00-22:00'
 ]
 
 exports.main = async (rawEvent) => {
@@ -266,15 +767,115 @@ exports.main = async (rawEvent) => {
       try {
         const start = event.startDate || ''
         const end = event.endDate || ''
-        let sql = "SELECT title, type, DATE_FORMAT(date, '%Y-%m-%d') AS date, time, venue_name AS venue FROM activities WHERE status='active'"
+        const actSettings = await settingsLib.loadSettings(pool)
+        const actNow = new Date()
+        let sql = "SELECT id, title, type, DATE_FORMAT(date, '%Y-%m-%d') AS date, time, venue_id, venue_name AS venue, status FROM activities WHERE status='active'"
         const params = []
         if (start) { sql += ' AND date >= ?'; params.push(start) }
         if (end) { sql += ' AND date <= ?'; params.push(end) }
         sql += ' ORDER BY date, id'
-        const [rows] = await pool.query(sql, params)
-        return { ok: true, list: rows }
+        let rows = []
+        try {
+          const [r] = await pool.query(sql, params)
+          rows = r || []
+        } catch (e) {
+          rows = []
+        }
+
+        let classes = []
+        try {
+          let gsql = `SELECT g.*, v.name AS venue_name
+                        FROM group_classes g
+                        LEFT JOIN venues v ON CAST(v.id AS CHAR) = CAST(g.venue_id AS CHAR)
+                       WHERE 1=1`
+          const gp = []
+          if (start) { gsql += ' AND g.date >= ?'; gp.push(start) }
+          if (end) { gsql += ' AND g.date <= ?'; gp.push(end) }
+          gsql += ' ORDER BY g.date, g.time, g.id'
+          const [gr] = await pool.query(gsql, gp)
+          classes = gr || []
+        } catch (e) {
+          classes = []
+        }
+
+        const used = {}
+        function matchClass(a) {
+          const ad = fmtDate(a.date)
+          const at = String(a.time || '').trim()
+          const aVenueId = String(a.venue_id || a.venueId || '').trim()
+          const aVenue = String(a.venue || a.venue_name || '').trim()
+          for (const g of classes) {
+            if (fmtDate(g.date) !== ad) continue
+            if (String(g.time || '').trim() !== at) continue
+            const gVenueId = String(g.venue_id || '').trim()
+            const gVenue = String(g.venue_name || '').trim()
+            const idOk = aVenueId && gVenueId && aVenueId === gVenueId
+            const nameOk = aVenue && gVenue && aVenue === gVenue
+            if (idOk || nameOk || (!aVenueId && !aVenue)) {
+              return g
+            }
+          }
+          return null
+        }
+
+        const list = []
+        for (const a of rows) {
+          const item = {
+            id: a.id != null ? String(a.id) : '',
+            title: a.title,
+            type: a.type,
+            date: fmtDate(a.date),
+            time: a.time,
+            venue: a.venue || '',
+            venueId: a.venue_id || '',
+            status: a.status || 'active',
+            groupClassId: ''
+          }
+          if (String(a.type || '') === '团课') {
+            const g = matchClass(a)
+            if (g) {
+              item.groupClassId = String(g.id)
+              item.status = g.status || item.status
+              item.venue = item.venue || g.venue_name || ''
+              item.venueId = item.venueId || g.venue_id || ''
+              const extraA = settingsLib.mapClassExtra(g, actSettings, actNow)
+              item.classType = extraA.classType
+              item.classTypeLabel = extraA.classTypeLabel
+              item.theme = extraA.theme
+              item.enrollOpen = extraA.enrollOpen
+              item.enrollClosedReason = extraA.enrollClosedReason
+              used[String(g.id)] = true
+            }
+          }
+          list.push(item)
+        }
+        for (const g of classes) {
+          if (used[String(g.id)]) continue
+          const extraG = settingsLib.mapClassExtra(g, actSettings, actNow)
+          list.push({
+            id: 'gc-' + g.id,
+            title: g.name,
+            type: '团课',
+            date: fmtDate(g.date),
+            time: g.time,
+            venue: g.venue_name || '',
+            venueId: g.venue_id || '',
+            status: g.status || 'open',
+            groupClassId: String(g.id),
+            classType: extraG.classType,
+            classTypeLabel: extraG.classTypeLabel,
+            theme: extraG.theme,
+            enrollOpen: extraG.enrollOpen,
+            enrollClosedReason: extraG.enrollClosedReason
+          })
+        }
+        list.sort(function (a, b) {
+          if (a.date !== b.date) return String(a.date).localeCompare(String(b.date))
+          return String(a.time || '').localeCompare(String(b.time || ''))
+        })
+        return { ok: true, list, fnVer: FN_VER }
       } catch (e) {
-        return { ok: true, list: [] }
+        return { ok: true, list: [], fnVer: FN_VER }
       }
     }
     if (action === 'getBanners') {
@@ -290,14 +891,23 @@ exports.main = async (rawEvent) => {
         const [rows] = await pool.query(
           `SELECT * FROM venues WHERE status='active' ORDER BY sort ASC, id ASC`
         )
-        const list = (rows || []).map((r) => ({
-          _id: r.id,
-          venueId: r.id,
-          name: r.name,
-          address: r.address || '',
-          status: r.status,
-          sort: r.sort || 0
-        }))
+        const includeShell = venueBookingRule.includeShellRequested(event)
+        let list = (rows || []).map((r) => {
+          const flags = venueBookingRule.mapVenueFlags(r)
+          return {
+            _id: r.id,
+            venueId: r.id,
+            name: r.name,
+            address: r.address || '',
+            status: r.status,
+            sort: r.sort || 0,
+            bookingEnabled: flags.bookingEnabled,
+            isShell: flags.isShell
+          }
+        })
+        if (!includeShell) {
+          list = list.filter((v) => v.bookingEnabled !== 0 && v.isShell !== 1)
+        }
         return { ok: true, list, fnVer: FN_VER }
       } catch (e) {
         console.error('getVenues', e)
@@ -307,22 +917,38 @@ exports.main = async (rawEvent) => {
     if (action === 'getCourts') {
       const venueId = event.venueId || ''
       if (!venueId) return { ok: false, msg: '缺少场馆' }
-      const [rows] = await pool.query(
-        `SELECT * FROM courts WHERE venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用') ORDER BY sort ASC, id ASC`,
-        [venueId]
-      )
-      const list = (rows || []).map((r) => ({
+      const bookableCourts = await venueBookingRule.rejectIfNotCustomerBookable(pool, venueId)
+      if (!bookableCourts.ok) return { ok: false, msg: bookableCourts.msg, list: [], fnVer: FN_VER }
+      const baseWhere = `venue_id=? AND IFNULL(status,'open') NOT IN ('disabled','closed','停用')`
+      let rows
+      try {
+        const [r] = await pool.query(
+          `SELECT * FROM courts WHERE ${baseWhere} AND name <> '外场' AND IFNULL(customer_visible, 1) <> 0 ORDER BY sort ASC, id ASC`,
+          [venueId]
+        )
+        rows = r
+      } catch (e) {
+        const [r] = await pool.query(
+          `SELECT * FROM courts WHERE ${baseWhere} AND name <> '外场' ORDER BY sort ASC, id ASC`,
+          [venueId]
+        )
+        rows = r
+      }
+      const list = (rows || []).filter((r) => !isOutdoorSharedCourt(r.name)).map((r) => ({
         _id: String(r.id),
         venueId: r.venue_id,
         name: r.name,
         type: r.type || '',
-        status: r.status
+        status: r.status,
+        pureTennis: r.pure_tennis === 1 || r.pure_tennis === '1' || r.pureTennis === 1 || r.pureTennis === true ? 1 : 0
       }))
-      return { ok: true, list }
+      return { ok: true, list, fnVer: FN_VER }
     }
     if (action === 'getSchedule') {
       const { venueId, date } = event
       if (!venueId || !date) return { ok: false, msg: '参数不完整' }
+      const bookableSched = await venueBookingRule.rejectIfNotCustomerBookable(pool, venueId)
+      if (!bookableSched.ok) return { ok: false, msg: bookableSched.msg, bookings: [], groupClasses: [], fnVer: FN_VER }
       const [books] = await pool.query(
         `SELECT * FROM bookings WHERE venue_id=? AND date=?`,
         [venueId, date]
@@ -331,7 +957,7 @@ exports.main = async (rawEvent) => {
         `SELECT * FROM group_classes WHERE venue_id=? AND date=?`,
         [venueId, date]
       )
-      const bookings = (books || []).map((r) => ({
+      const bookings = (books || []).filter((r) => !isOutdoorSharedCourt(r.court)).map((r) => ({
         _id: String(r.id),
         court: r.court,
         time: r.time,
@@ -340,7 +966,7 @@ exports.main = async (rawEvent) => {
         coachId: r.coach_id ? String(r.coach_id) : '',
         groupClassId: r.group_class_id ? String(r.group_class_id) : ''
       }))
-      const groupClasses = (groups || []).map((r) => ({
+      const groupClasses = (groups || []).filter((r) => !isOutdoorSharedCourt(r.court)).map((r) => ({
         _id: String(r.id),
         court: r.court,
         time: r.time,
@@ -357,11 +983,24 @@ exports.main = async (rawEvent) => {
       if (!data.venueId || !data.court || !data.date || !data.time) {
         return { ok: false, msg: '参数不完整' }
       }
+      const bookableBook = await venueBookingRule.rejectIfNotCustomerBookable(pool, data.venueId)
+      if (!bookableBook.ok) return { ok: false, msg: bookableBook.msg, fnVer: FN_VER }
       const conn = await pool.getConnection()
       try {
         const dateYmd = fmtDate(data.date) || data.date
         const courtNorm = normCourt(data.court)
         const courtName = await resolveCourtName(conn, data.venueId, data.court)
+        if (!(await isCourtCustomerVisible(conn, data.venueId, courtName || data.court))) {
+          return { ok: false, msg: '该场地不对客人开放', fnVer: FN_VER }
+        }
+        const slotGuard = await rejectInvalidBookingSlot(conn, {
+          venueId: data.venueId,
+          court: courtName,
+          dateYmd,
+          timeStr: data.time,
+          requirePrice: true,
+        })
+        if (!slotGuard.ok) return { ok: false, msg: slotGuard.msg, fnVer: FN_VER }
         let slotLock = null
         try {
         await conn.beginTransaction()
@@ -381,40 +1020,69 @@ exports.main = async (rawEvent) => {
         if (data.coachId != null && /^\d+$/.test(String(data.coachId))) {
           coachIdVal = Number(data.coachId)
         }
-        const [gc] = await conn.query(
-          `SELECT id FROM group_classes
-           WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status='open' LIMIT 1`,
-          [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
+        const [gcAll] = await conn.query(
+          `SELECT id, time FROM group_classes
+           WHERE venue_id=? AND date=? AND (court=? OR court=CONCAT(?,'场')) AND status='open'`,
+          [data.venueId, dateYmd, courtNorm, courtNorm]
         )
+        const gc = pickOverlapping(gcAll, data.time)
         if (gc.length) {
           await conn.rollback()
           return { ok: false, msg: '该时段为团课，无法普通预约' }
         }
-        const [busy] = await conn.query(
-          `SELECT id, status FROM bookings
-           WHERE venue_id=? AND date=? AND time=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked') LIMIT 1`,
-          [data.venueId, dateYmd, data.time, courtNorm, courtNorm]
+        const tradeNoEarly = data.outTradeNo || data.payOrderNo || ''
+        const [busyAll] = await conn.query(
+          `SELECT id, status, pay_order_id, time FROM bookings
+           WHERE venue_id=? AND date=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked','pending_pay')`,
+          [data.venueId, dateYmd, courtNorm, courtNorm]
         )
+        const busy = pickOverlapping(busyAll, data.time)
         if (busy.length) {
+          if (busy[0].status === 'pending_pay' && tradeNoEarly) {
+            try {
+              const [poOwn] = await conn.query(
+                'SELECT id, status, booking_id FROM pay_orders WHERE out_trade_no=? LIMIT 1',
+                [tradeNoEarly]
+              )
+              if (poOwn[0] && (Number(poOwn[0].booking_id) === Number(busy[0].id) || Number(poOwn[0].id) === Number(busy[0].pay_order_id))) {
+                if (poOwn[0].status === 'paid') {
+                  const [poFull] = await conn.query('SELECT amount_fen FROM pay_orders WHERE id=? LIMIT 1', [poOwn[0].id])
+                  const amt = Math.round(Number(poFull[0] && poFull[0].amount_fen) || 0) / 100
+                  await conn.query(
+                    `UPDATE bookings SET status='booked', amount=?, pay_order_id=?, updated_at=NOW() WHERE id=? AND status='pending_pay'`,
+                    [amt, poOwn[0].id, busy[0].id]
+                  )
+                  await conn.query('UPDATE pay_orders SET booking_id=? WHERE id=?', [busy[0].id, poOwn[0].id])
+                  await conn.commit()
+                  return { ok: true, id: String(busy[0].id), fnVer: FN_VER, fulfilled: true }
+                }
+                await conn.commit()
+                return { ok: true, id: String(busy[0].id), pendingPay: true, fnVer: FN_VER }
+              }
+            } catch (e) {}
+          }
           await conn.rollback()
           const locked = busy[0].status === 'locked'
-          return { ok: false, msg: locked ? '该时段已锁场' : '该时段已被预约', fnVer: FN_VER }
+          const paying = busy[0].status === 'pending_pay'
+          return { ok: false, msg: locked ? '该时段已锁场' : paying ? '该时段正在支付中' : '该时段已被预约', fnVer: FN_VER }
         }
         if (coachIdVal) {
-          const [coachBusy] = await conn.query(
-            `SELECT id FROM bookings
-             WHERE venue_id=? AND date=? AND time=? AND coach_id=? AND status IN ('booked','locked') LIMIT 1`,
-            [data.venueId, dateYmd, data.time, coachIdVal]
+          const [coachBusyAll] = await conn.query(
+            `SELECT id, time FROM bookings
+             WHERE venue_id=? AND date=? AND coach_id=? AND status IN ('booked','locked','pending_pay')`,
+            [data.venueId, dateYmd, coachIdVal]
           )
+          const coachBusy = pickOverlapping(coachBusyAll, data.time)
           if (coachBusy.length) {
             await conn.rollback()
             return { ok: false, msg: '该教练此时段已被预约' }
           }
-          const [coachGroup] = await conn.query(
-            `SELECT id FROM group_classes
-             WHERE venue_id=? AND date=? AND time=? AND coach_id=? AND status='open' LIMIT 1`,
-            [data.venueId, dateYmd, data.time, coachIdVal]
+          const [coachGroupAll] = await conn.query(
+            `SELECT id, time FROM group_classes
+             WHERE venue_id=? AND date=? AND coach_id=? AND status='open'`,
+            [data.venueId, dateYmd, coachIdVal]
           )
+          const coachGroup = pickOverlapping(coachGroupAll, data.time)
           if (coachGroup.length) {
             await conn.rollback()
             return { ok: false, msg: '该教练此时段有团课' }
@@ -430,9 +1098,16 @@ exports.main = async (rawEvent) => {
             [data.cardId]
           )
           const card = cards[0]
-          if (!card || card.status !== 'active') {
+          if (!card) {
             await conn.rollback()
             return { ok: false, msg: '会员卡不可用' }
+          }
+          {
+            const cardMsg = memberCardRejectMsg(card)
+            if (cardMsg) {
+              await conn.rollback()
+              return { ok: false, msg: cardMsg, fnVer: FN_VER }
+            }
           }
           if (card.type === 'group') {
             await conn.rollback()
@@ -457,9 +1132,13 @@ exports.main = async (rawEvent) => {
             return { ok: false, msg: '这张卡还没到生效日期' }
           }
           if (validTo && dateYmd > validTo) {
-            await conn.query(`UPDATE member_cards SET status='expired', updated_at=NOW() WHERE id=?`, [card.id])
+            // 仅拒绝本次订场日；只有「今天」已过 valid_to 才整卡标 expired
+            const today = todayYmd()
+            if (today > validTo) {
+              await conn.query(`UPDATE member_cards SET status='expired', updated_at=NOW() WHERE id=?`, [card.id])
+            }
             await conn.rollback()
-            return { ok: false, msg: '这张卡已过期' }
+            return { ok: false, msg: today > validTo ? '这张卡已过期' : '所选日期超出这张卡的有效期' }
           }
           const timeRule = parseTimeRule(card.time_rule)
           const dayCap = Number(timeRule && timeRule.maxHoursPerDay) || 0
@@ -541,11 +1220,19 @@ exports.main = async (rawEvent) => {
               }
             }
           }
+          {
+            const courtInfo = await loadCourtInfo(conn, data.venueId, courtName || data.court)
+            const sportHint = { sport: data.sport || event.sport || '', remark: data.remark || '' }
+            if (!courtTypeRule.cardAllowsCourt(card, courtInfo, sportHint)) {
+              await conn.rollback()
+              return { ok: false, msg: courtTypeRule.courtTypeRejectMsg(card, courtInfo) || '这张卡不能用于当前场地', fnVer: FN_VER }
+            }
+          }
           if (card.type === 'times' || card.type === 'coach') {
             const [dec] = await conn.query(
               `UPDATE member_cards
                   SET remaining_times = remaining_times - 1,
-                      status = IF(remaining_times - 1 <= 0, 'used_up', status),
+                      status = IF(remaining_times <= 0, 'used_up', 'active'),
                       updated_at = NOW()
                 WHERE id=? AND IFNULL(remaining_times,0) > 0 AND status='active'`,
               [card.id]
@@ -598,15 +1285,21 @@ exports.main = async (rawEvent) => {
             [userIdVal]
           )
           const bal = money(uw[0] && uw[0].balance)
-          if (bal + 1e-9 < need) {
+          const storedBal = await storedCardBalance(conn, userIdVal)
+          const spendable = money(bal + storedBal)
+          if (spendable + 1e-9 < need) {
             await conn.rollback()
-            return { ok: false, msg: '余额不足（当前 ¥' + bal.toFixed(2) + '）', fnVer: FN_VER }
+            return { ok: false, msg: '余额不足（当前 ¥' + spendable.toFixed(2) + '）', fnVer: FN_VER }
           }
-          await conn.query('UPDATE users SET balance=?, updated_at=NOW() WHERE id=?', [
-            money(bal - need),
-            userIdVal
-          ])
-          await deductStoredCards(conn, userIdVal, need)
+          const fromWallet = money(Math.min(bal, need))
+          const fromStored = money(need - fromWallet)
+          if (fromWallet > 0) {
+            await conn.query('UPDATE users SET balance=?, updated_at=NOW() WHERE id=?', [
+              money(bal - fromWallet),
+              userIdVal
+            ])
+          }
+          if (fromStored > 0) await deductStoredCards(conn, userIdVal, fromStored)
           ledgerType = 'wallet_pay'
           ledgerAmt = need
           bookAmount = need
@@ -629,6 +1322,14 @@ exports.main = async (rawEvent) => {
           } catch (e) {}
         } else if (data.payOrderId && Number(data.payOrderId) > 0) {
           payOrderId = Number(data.payOrderId)
+        }
+        if (!cardIdVal && !payOrderId && payWay !== 'balance') {
+          await conn.rollback()
+          return {
+            ok: false,
+            msg: slotPrice > 0 ? '请先完成支付或选择会员卡' : '该时段暂未标价，无法预约',
+            fnVer: FN_VER
+          }
         }
         const [res] = await conn.query(
           `INSERT INTO bookings (
@@ -690,7 +1391,9 @@ exports.main = async (rawEvent) => {
           phone: data.phone || '',
           detail,
           venueId: data.venueId,
-          venueName
+          venueName,
+          amount: money(ledgerAmt),
+          cardName: cardName || ''
         })
         await conn.commit()
         return { ok: true, id: String(res.insertId), cardRemaining: remainingAfter, fnVer: FN_VER }
@@ -709,8 +1412,9 @@ exports.main = async (rawEvent) => {
     if (action === 'getMyBookings') {
       const rawUserId = event.userId || ''
       const page = Math.max(1, Number(event.page) || 1)
-      const pageSize = Math.min(20, Number(event.pageSize) || 10)
+      const pageSize = Math.min(50, Number(event.pageSize) || 10)
       const offset = (page - 1) * pageSize
+      const upcomingOnly = !!(event.upcomingOnly)
       let where = ''
       const params = []
       const uid =
@@ -729,12 +1433,39 @@ exports.main = async (rawEvent) => {
       } else {
         return { ok: false, msg: '缺少用户标识' }
       }
+      // 本人 pending_pay 可见（待支付确认）；锁场不展示
+      where += ` AND IFNULL(status,'') <> 'locked'`
+      if (upcomingOnly) {
+        where += ` AND IFNULL(status,'') NOT IN ('cancelled','locked')
+          AND date IS NOT NULL
+          AND date <= DATE_ADD(CURDATE(), INTERVAL 3 DAY)
+          AND (
+            date > CURDATE()
+            OR (
+              date = CURDATE()
+              AND STR_TO_DATE(SUBSTRING_INDEX(IFNULL(time,''), '-', 1), '%H:%i')
+                >= STR_TO_DATE(DATE_FORMAT(NOW(), '%H:%i'), '%H:%i')
+            )
+          )`
+      }
+      const whereB = where
+        .replace(/\bstatus\b/g, 'b.status')
+        .replace(/\buser_id\b/g, 'b.user_id')
+        .replace(/\bopenid\b/g, 'b.openid')
+        .replace(/\bdate\b/g, 'b.date')
+        .replace(/\btime\b/g, 'b.time')
       const [[{ c }]] = await pool.query(
-        `SELECT COUNT(*) AS c FROM bookings WHERE ${where}`,
+        `SELECT COUNT(*) AS c FROM bookings b WHERE ${whereB}`,
         params
       )
+      const orderSql = upcomingOnly
+        ? 'ORDER BY b.date ASC, b.time ASC, b.id ASC'
+        : 'ORDER BY b.id DESC'
       const [rows] = await pool.query(
-        `SELECT * FROM bookings WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+        `SELECT b.*, p.out_trade_no AS pay_out_trade_no, p.status AS pay_status
+           FROM bookings b
+           LEFT JOIN pay_orders p ON p.id = b.pay_order_id
+          WHERE ${whereB} ${orderSql} LIMIT ? OFFSET ?`,
         [...params, pageSize, offset]
       )
       const list = (rows || []).map((r) => ({
@@ -743,11 +1474,24 @@ exports.main = async (rawEvent) => {
         date: fmtDate(r.date),
         time: r.time,
         status: r.status,
+        statusLabel:
+          r.status === 'pending_pay'
+            ? '待支付确认'
+            : r.status === 'booked'
+              ? '已预约'
+              : r.status === 'cancelled'
+                ? '已取消'
+                : r.status || '',
         venueId: r.venue_id,
         venueName: r.venue_name || '',
-        coachName: r.coach_name || ''
+        coachName: r.coach_name || '',
+        cardName: r.card_name || '',
+        amount: Number(r.amount) || 0,
+        payOrderId: r.pay_order_id ? String(r.pay_order_id) : '',
+        outTradeNo: r.pay_out_trade_no || '',
+        payStatus: r.pay_status || ''
       }))
-      return { ok: true, list, total: c || 0 }
+      return { ok: true, list, total: c || 0, fnVer: FN_VER }
     }
     if (action === 'cancelBooking') {
       const id = event.id
@@ -768,9 +1512,56 @@ exports.main = async (rawEvent) => {
           await conn.rollback()
           return { ok: false, msg: '已取消' }
         }
+        if (b.status === 'pending_pay') {
+          await conn.rollback()
+          return {
+            ok: false,
+            msg: '订单仍在支付确认中，请稍后再试或取消支付',
+            pendingPay: true,
+            fnVer: FN_VER
+          }
+        }
         if (openid && b.openid && b.openid !== openid) {
           await conn.rollback()
           return { ok: false, msg: '无权取消' }
+        }
+        // 微信支付订场：先退款（幂等），失败则整单不取消
+        let payOrder = null
+        if (b.pay_order_id) {
+          const [pos] = await conn.query('SELECT * FROM pay_orders WHERE id=? LIMIT 1', [b.pay_order_id])
+          payOrder = pos[0] || null
+        }
+        if (payOrder && (payOrder.status === 'paid' || payOrder.status === 'refunded')) {
+          if (payOrder.status === 'paid') {
+            await conn.commit()
+            const refundRes = await refundCourtPayViaPay({
+              payOrderId: payOrder.id,
+              outTradeNo: payOrder.out_trade_no,
+              bookingId: b.id,
+              reason: '用户取消订场退款'
+            })
+            if (!refundRes || !refundRes.ok) {
+              return {
+                ok: false,
+                msg: (refundRes && refundRes.msg) || '微信退款失败，预约未取消，请稍后重试或联系门店',
+                needRefund: true,
+                fnVer: FN_VER
+              }
+            }
+            await conn.beginTransaction()
+            const [rows2] = await conn.query('SELECT * FROM bookings WHERE id=? FOR UPDATE', [id])
+            const b2 = rows2[0]
+            if (!b2) {
+              await conn.rollback()
+              return { ok: false, msg: '预约不存在', fnVer: FN_VER }
+            }
+            if (b2.status === 'cancelled') {
+              await conn.commit()
+              return { ok: true, already: true, refunded: true, fnVer: FN_VER }
+            }
+            // continue with b2
+            Object.assign(b, b2)
+          }
         }
         await conn.query(
           `UPDATE bookings SET status='cancelled', updated_at=NOW() WHERE id=?`,
@@ -792,6 +1583,7 @@ exports.main = async (rawEvent) => {
               [left, card.id]
             )
           }
+          if (card) await maybeRevertFirstUseActivation(conn, card)
         }
         if (b.group_class_id) {
           await conn.query(
@@ -799,22 +1591,12 @@ exports.main = async (rawEvent) => {
             [b.group_class_id]
           )
         }
-        const cancelAmt = money(b.amount)
-        if (cancelAmt) {
-          await writeLedger(conn, {
-            bizDate: fmtDate(b.date) || fmtDate(new Date()),
-            type: b.card_id ? 'card_use_cancel' : 'court_cancel',
-            amount: -cancelAmt,
-            venueId: b.venue_id || '',
-            venueName: b.venue_name || '',
-            userId: b.user_id || null,
-            userName: b.user_name || '',
-            operatorName: b.user_name || '用户',
-            cardId: b.card_id || null,
-            bookingId: b.id,
-            remark: '取消 ' + (b.court || '') + ' ' + (b.time || '')
-          })
-        }
+        await writeCancelFinanceLedgers(
+          conn,
+          b,
+          b.card_id || null,
+          b.user_name || '用户'
+        )
         const detail = `取消预约 ${b.court || ''} ${fmtDateCn(b.date)} ${b.time || ''}`
         await writeLog(conn, {
           type: 'booking_cancel',
@@ -825,8 +1607,15 @@ exports.main = async (rawEvent) => {
           venueId: b.venue_id || '',
           venueName: b.venue_name || ''
         })
+        let relocked = false
+        try {
+          const rr = await applyLockIntentAfterCancel(conn, b, b.user_name || '用户')
+          relocked = !!(rr && rr.relocked)
+        } catch (e) {
+          console.warn('relock after cancel fail', e && e.message)
+        }
         await conn.commit()
-        return { ok: true, fnVer: FN_VER }
+        return { ok: true, relocked, fnVer: FN_VER }
       } catch (e) {
         try {
           await conn.rollback()
@@ -905,13 +1694,17 @@ exports.main = async (rawEvent) => {
         row = rs[0] || null
       }
       if (!row) return { ok: false, msg: '未找到用户', balance: 0, points: 0, fnVer: FN_VER }
+      const storedBal = await storedCardBalance(pool, row.id)
+      const walletBal = money(row.balance)
       return {
         ok: true,
         fnVer: FN_VER,
         userId: String(row.id),
         nickName: row.nick_name || '',
         phone: row.phone || '',
-        balance: money(row.balance),
+        balance: money(walletBal + storedBal),
+        walletBalance: walletBal,
+        storedBalance: storedBal,
         points: Number(row.points) || 0
       }
     }
@@ -919,39 +1712,63 @@ exports.main = async (rawEvent) => {
       const userId = event.userId || ''
       const phone = String(event.phone || '').replace(/\D/g, '')
       let rows = []
-      const uid =
-        userId && /^\d+$/.test(String(userId).trim())
-          ? Number(String(userId).trim())
-          : null
+      const ownerIds = []
+      const seenOwner = {}
+      const addOwner = (id) => {
+        const n = Number(id)
+        if (!Number.isFinite(n) || n <= 0 || seenOwner[n]) return
+        seenOwner[n] = true
+        ownerIds.push(n)
+      }
       if (phone) {
         const [users] = await pool.query(
           'SELECT id FROM users WHERE phone=? LIMIT 1',
           [phone.slice(-11)]
         )
-        const u = users[0]
-        if (u) {
-          const [r3] = await pool.query(
-            `SELECT * FROM member_cards WHERE user_id=? AND IFNULL(status,'')<>'deleted' ORDER BY id DESC LIMIT 50`,
-            [u.id]
-          )
-          rows = r3 || []
-        }
+        if (users[0]) addOwner(users[0].id)
       }
-      if (rows.length === 0 && uid != null) {
+      const rawUid = String(userId || '').trim()
+      if (rawUid && /^\d+$/.test(rawUid)) addOwner(rawUid)
+      if (rawUid) {
+        const [byCode] = await pool.query(
+          'SELECT id FROM users WHERE user_id=? LIMIT 1',
+          [rawUid]
+        )
+        if (byCode[0]) addOwner(byCode[0].id)
+      }
+      if (openid) {
+        const [byOpenid] = await pool.query(
+          'SELECT id FROM users WHERE openid=? LIMIT 1',
+          [openid]
+        )
+        if (byOpenid[0]) addOwner(byOpenid[0].id)
+      }
+      if (ownerIds.length) {
+        for (const oid of ownerIds) {
+          try { await expireDueCards(pool, { userId: oid }) } catch (e) {}
+        }
+        const placeholders = ownerIds.map(() => '?').join(',')
         const [r] = await pool.query(
-          `SELECT * FROM member_cards WHERE user_id=? AND IFNULL(status,'')<>'deleted' ORDER BY id DESC LIMIT 50`,
-          [uid]
+          `SELECT * FROM member_cards WHERE user_id IN (${placeholders}) AND IFNULL(status,'')<>'deleted' ORDER BY id DESC LIMIT 50`,
+          ownerIds
         )
         rows = r || []
       }
       if (rows.length === 0 && openid) {
+        try { await expireDueCards(pool, { openid }) } catch (e) {}
         const [r2] = await pool.query(
           `SELECT * FROM member_cards WHERE openid=? AND IFNULL(status,'')<>'deleted' ORDER BY id DESC LIMIT 50`,
           [openid]
         )
         rows = r2 || []
       }
-      const list = rows.map((r) => ({
+      const list = rows.map((r) => {
+        let timeRule = r.time_rule
+        if (typeof timeRule === 'string') {
+          try { timeRule = JSON.parse(timeRule) } catch (e) { timeRule = null }
+        }
+        if (!timeRule || typeof timeRule !== 'object') timeRule = null
+        return {
         _id: String(r.id),
         cardName: r.card_name || '',
         type: r.type,
@@ -960,35 +1777,91 @@ exports.main = async (rawEvent) => {
         validFrom: fmtDate(r.valid_from),
         validTo: fmtDate(r.valid_to),
         status: r.status || 'active',
-      }))
-      return { ok: true, list }
+        venueId: r.venue_id || '',
+        venueName: r.venue_name || '',
+        timeRule: timeRule || {},
+        courtTypes: timeRule && Array.isArray(timeRule.courtTypes) ? timeRule.courtTypes : undefined
+      }
+      }).filter((c) => {
+        // 小程序持卡页不展示停用/已退卡；过期、已用完仍返回。后台看全部卡走 admin 接口，不受影响。
+        const s = String(c.status || '').toLowerCase()
+        return s !== 'disabled' && s !== 'refunded'
+      })
+      return { ok: true, list, fnVer: FN_VER }
     }
     if (action === 'getGroupClasses') {
-      const { venueId, date } = event
-      if (!venueId) return { ok: false, msg: '缺少场馆' }
-      let sql = 'SELECT * FROM group_classes WHERE venue_id=?'
-      const params = [venueId]
+      const venueId = event.venueId || ''
+      const date = event.date || ''
+      const classId = event.classId || event.groupClassId || ''
+      const hidePast = event.hidePast !== false && event.includePast !== true
+      try {
+        await autoCancelDueGroupClasses(pool, { operatorName: '系统' })
+      } catch (e) {
+        console.warn('lazy auto-cancel skip:', e && e.message)
+      }
+      let sql = `SELECT g.*, v.name AS venue_name, c.avatar AS coach_avatar
+                   FROM group_classes g
+                   LEFT JOIN venues v ON CAST(v.id AS CHAR) = CAST(g.venue_id AS CHAR)
+                   LEFT JOIN coaches c ON c.id = g.coach_id
+                  WHERE 1=1`
+      const params = []
+      if (venueId) {
+        sql += ' AND g.venue_id=?'
+        params.push(venueId)
+      }
       if (date) {
-        sql += ' AND date=?'
+        sql += ' AND g.date=?'
         params.push(date)
       }
-      sql += ' ORDER BY date ASC, time ASC, id ASC'
+      sql += ' ORDER BY g.date ASC, g.time ASC, g.id ASC'
       const [rows] = await pool.query(sql, params)
-      const list = (rows || []).map((r) => ({
-        _id: String(r.id),
-        venueId: r.venue_id,
-        name: r.name,
-        date: fmtDate(r.date),
-        time: r.time,
-        court: r.court,
-        coachId: r.coach_id ? String(r.coach_id) : '',
-        coachName: r.coach_name || '',
-        capacity: r.capacity || 6,
-        enrolled: r.enrolled || 0,
-        status: r.status || 'open',
-        remark: r.remark || ''
-      }))
-      return { ok: true, list }
+      const nowMs = Date.now()
+      const gcSettings = await settingsLib.loadSettings(pool)
+      const gcNow = new Date()
+      function mapG(r, past) {
+        const extra = settingsLib.mapClassExtra(r, gcSettings, gcNow)
+        return Object.assign({
+          _id: String(r.id),
+          venueId: r.venue_id,
+          venueName: r.venue_name || '',
+          name: r.name,
+          date: fmtDate(r.date),
+          time: r.time,
+          court: r.court,
+          coachId: r.coach_id ? String(r.coach_id) : '',
+          coachName: r.coach_name || '',
+          coachAvatar: r.coach_avatar || '',
+          capacity: r.capacity || 6,
+          enrolled: r.enrolled || 0,
+          status: r.status || 'open',
+          remark: r.remark || '',
+          minEnrollment: r.min_enrollment != null ? Number(r.min_enrollment) : 0,
+          cancelBeforeHours: r.cancel_before_hours != null ? Number(r.cancel_before_hours) : 2,
+          past: !!past
+        }, extra)
+      }
+      let list = (rows || []).map((r) => mapG(r, isPastClass(r, nowMs)))
+      if (hidePast) {
+        list = list.filter((g) => !g.past)
+      }
+      if (classId) {
+        const has = list.some((g) => String(g._id) === String(classId))
+        if (!has) {
+          const [one] = await pool.query(
+            `SELECT g.*, v.name AS venue_name, c.avatar AS coach_avatar
+               FROM group_classes g
+               LEFT JOIN venues v ON CAST(v.id AS CHAR) = CAST(g.venue_id AS CHAR)
+               LEFT JOIN coaches c ON c.id = g.coach_id
+              WHERE g.id=? LIMIT 1`,
+            [classId]
+          )
+          if (one && one[0]) {
+            const past = isPastClass(one[0], nowMs)
+            list.unshift(mapG(one[0], past))
+          }
+        }
+      }
+      return { ok: true, list, settings: gcSettings, fnVer: FN_VER }
     }
     if (action === 'updateCoachProfile') {
       const id = event.id
@@ -1082,8 +1955,16 @@ exports.main = async (rawEvent) => {
     }
     if (action === 'enrollGroupClass') {
       const { groupClassId, userId, userName, phone, cardId } = event
+      const seatParsed = parseSeats(event)
+      if (!seatParsed.ok) return { ok: false, msg: seatParsed.msg, fnVer: FN_VER }
+      const seats = seatParsed.seats
       if (!groupClassId || !cardId) {
         return { ok: false, msg: '参数不完整' }
+      }
+      try {
+        await autoCancelDueGroupClasses(pool, { operatorName: '系统' })
+      } catch (e) {
+        console.warn('lazy auto-cancel skip:', e && e.message)
       }
       const conn = await pool.getConnection()
       try {
@@ -1097,78 +1978,75 @@ exports.main = async (rawEvent) => {
           await conn.rollback()
           return { ok: false, msg: '团课不存在' }
         }
+        if (gc.status === 'cancelled') {
+          await conn.rollback()
+          return { ok: false, msg: '团课已取消', fnVer: FN_VER }
+        }
         if (gc.status !== 'open') {
           await conn.rollback()
-          return { ok: false, msg: '团课未开放' }
+          return { ok: false, msg: '团课未开放', fnVer: FN_VER }
         }
-        if (gc.enrolled >= gc.capacity) {
+        const cap = Number(gc.capacity) || 0
+        const enrolledNow = Number(gc.enrolled) || 0
+        const capLeft = cap > 0 ? cap - enrolledNow : 0
+        if (cap > 0 && capLeft <= 0) {
           await conn.rollback()
-          return { ok: false, msg: '名额已满' }
+          return { ok: false, msg: '名额已满', fnVer: FN_VER }
         }
-        const [dup] = await conn.query(
-          `SELECT id FROM bookings
-           WHERE group_class_id=? AND status='booked'
-             AND (
-               (? IS NOT NULL AND ? <> '' AND user_id=?)
-               OR (? <> '' AND openid=?)
-             )
-           LIMIT 1`,
-          [
-            groupClassId,
-            userId || null,
-            userId || '',
-            userId || null,
-            openid || '',
-            openid || ''
-          ]
-        )
-        if (dup.length) {
+        if (cap > 0 && seats > capLeft) {
           await conn.rollback()
-          return { ok: false, msg: '您已报名该团课，请勿重复报名' }
+          return { ok: false, msg: '剩余名额不足，还可报' + capLeft + '人', fnVer: FN_VER }
+        }
+        const enrollSettings = await settingsLib.loadSettings(conn)
+        const enrollGate = settingsLib.userEnrollGate(gc, enrollSettings, new Date())
+        if (!enrollGate.enrollOpen) {
+          await conn.rollback()
+          return { ok: false, msg: enrollGate.reason || '当前不可报名', fnVer: FN_VER }
+        }
+        let enrollUserId = null
+        if (userId != null && /^\d+$/.test(String(userId).trim())) enrollUserId = Number(userId)
+        enrollUserId = await resolveUserId(conn, enrollUserId, openid)
+        let alreadySeats = 0
+        if (enrollUserId || openid) {
+          const [mine] = await conn.query(
+            `SELECT id FROM bookings
+             WHERE group_class_id=? AND status='booked'
+               AND (
+                 (? IS NOT NULL AND user_id=?)
+                 OR (? <> '' AND openid=?)
+               )`,
+            [groupClassId, enrollUserId, enrollUserId, openid || '', openid || '']
+          )
+          alreadySeats = (mine || []).length
         }
         const [cRows] = await conn.query(
           `SELECT * FROM member_cards WHERE id=? AND type='group' AND status='active' FOR UPDATE`,
           [cardId]
         )
         const card = cRows[0]
-        if (!card || (card.remaining_times || 0) <= 0) {
+        const remain = Number(card && card.remaining_times) || 0
+        if (!card || remain <= 0) {
           await conn.rollback()
           return { ok: false, msg: '团课卡不可用' }
         }
-        let enrollUserId = null
-        if (userId != null && /^\d+$/.test(String(userId).trim())) enrollUserId = Number(userId)
-        enrollUserId = await resolveUserId(conn, enrollUserId, openid)
+        if (remain < seats) {
+          await conn.rollback()
+          return { ok: false, msg: seats > 1 ? ('剩余次数不足，无法再扣' + seats + '节') : '卡次数不足', fnVer: FN_VER }
+        }
+        const dateYmd = fmtDate(gc.date)
+        const ruleMsg = groupTimeRuleRejectMsg(card, dateYmd, gc.time)
+        if (ruleMsg) {
+          await conn.rollback()
+          return { ok: false, msg: ruleMsg, fnVer: FN_VER }
+        }
         const enrollAmt = cardUnit(card)
-        const [enrollRes] = await conn.query(
-          `INSERT INTO bookings (
-            venue_id, court, date, time, user_id, openid, user_name, phone,
-            status, card_id, card_name, card_type, coach_id, coach_name,
-            group_class_id, source, amount
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, 'group', ?, ?, ?, 'user', ?)`,
-          [
-            gc.venue_id,
-            gc.court,
-            gc.date,
-            gc.time,
-            enrollUserId,
-            openid,
-            userName || '',
-            phone || '',
-            card.id,
-            card.card_name,
-            gc.coach_id,
-            gc.coach_name,
-            groupClassId,
-            Number(enrollAmt) || 0
-          ]
-        )
         const [dec] = await conn.query(
           `UPDATE member_cards
-              SET remaining_times = remaining_times - 1,
-                  status = IF(remaining_times - 1 <= 0, 'used_up', status),
+              SET remaining_times = remaining_times - ?,
+                  status = IF(remaining_times <= 0, 'used_up', 'active'),
                   updated_at = NOW()
-            WHERE id=? AND IFNULL(remaining_times,0) > 0 AND status='active'`,
-          [card.id]
+            WHERE id=? AND IFNULL(remaining_times,0) >= ? AND status='active'`,
+          [seats, card.id, seats]
         )
         if (!dec || Number(dec.affectedRows) !== 1) {
           await conn.rollback()
@@ -1179,34 +2057,77 @@ exports.main = async (rawEvent) => {
           [card.id]
         )
         const left = Number(afterRows[0] && afterRows[0].remaining_times) || 0
-        await conn.query(`UPDATE group_classes SET enrolled = enrolled + 1 WHERE id=?`, [
-          groupClassId
-        ])
-        await writeLedger(conn, {
-          bizDate: fmtDate(gc.date),
-          type: 'card_use',
-          amount: enrollAmt,
-          venueId: gc.venue_id || '',
-          venueName: '',
-          userId: enrollUserId,
-          userName: userName || '',
-          operatorName: userName || '用户',
-          cardId: card.id,
-          bookingId: enrollRes.insertId,
-          remark: '团课 ' + (gc.name || '') + ' ' + (gc.time || '')
-        })
-        const detail = `团课报名 ${gc.name || ''} ${fmtDateCn(gc.date)} ${gc.time || ''} · ${gc.court || ''}`
-        await writeLog(conn, {
-          type: 'group_enroll',
-          userName: userName || '',
-          operatorName: userName || '用户',
-          phone: phone || '',
-          detail,
-          venueId: gc.venue_id || '',
-          venueName: ''
-        })
+        const [capUpd] = await conn.query(
+          `UPDATE group_classes SET enrolled = enrolled + ?
+            WHERE id=? AND (? = 0 OR enrolled + ? <= capacity)`,
+          [seats, groupClassId, cap, seats]
+        )
+        if (!capUpd || Number(capUpd.affectedRows) !== 1) {
+          await conn.rollback()
+          return { ok: false, msg: '名额已满', fnVer: FN_VER }
+        }
+        let lastId = null
+        for (let i = 0; i < seats; i++) {
+          const [enrollRes] = await conn.query(
+            `INSERT INTO bookings (
+              venue_id, court, date, time, user_id, openid, user_name, phone,
+              status, card_id, card_name, card_type, coach_id, coach_name,
+              group_class_id, source, amount
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, 'group', ?, ?, ?, 'user', ?)`,
+            [
+              gc.venue_id,
+              gc.court,
+              gc.date,
+              gc.time,
+              enrollUserId,
+              openid,
+              userName || '',
+              phone || '',
+              card.id,
+              card.card_name,
+              gc.coach_id,
+              gc.coach_name,
+              groupClassId,
+              Number(enrollAmt) || 0
+            ]
+          )
+          lastId = enrollRes.insertId
+          await writeLedger(conn, {
+            bizDate: dateYmd,
+            type: 'card_use',
+            amount: enrollAmt,
+            venueId: gc.venue_id || '',
+            venueName: '',
+            userId: enrollUserId,
+            userName: userName || '',
+            operatorName: userName || '用户',
+            cardId: card.id,
+            bookingId: enrollRes.insertId,
+            remark: '团课 ' + (gc.name || '') + ' ' + (gc.time || '') + (seats > 1 ? ' 第' + (i + 1) + '/' + seats + '名额' : '')
+          })
+          const detail = `团课报名 ${gc.name || ''} ${fmtDateCn(gc.date)} ${gc.time || ''} · ${gc.court || ''}` + (seats > 1 ? ` · 第${i + 1}/${seats}名额` : '')
+          await writeLog(conn, {
+            type: 'group_enroll',
+            userName: userName || '',
+            operatorName: userName || '用户',
+            phone: phone || '',
+            detail,
+            venueId: gc.venue_id || '',
+            venueName: '',
+            amount: money(enrollAmt),
+            cardName: (card && card.card_name) || ''
+          })
+        }
         await conn.commit()
-        return { ok: true, fnVer: FN_VER }
+        return {
+          ok: true,
+          seats,
+          deducted: seats,
+          mySeats: alreadySeats + seats,
+          cardRemaining: left,
+          id: lastId != null ? String(lastId) : '',
+          fnVer: FN_VER
+        }
       } catch (e) {
         try {
           await conn.rollback()
@@ -1220,6 +2141,8 @@ exports.main = async (rawEvent) => {
       const venueId = event.venueId || ''
       const weekday = Number(event.weekday) || 0
       if (!venueId) return { ok: false, msg: '缺少场馆', slots: HOUR_FALLBACK.slice(), fnVer: FN_VER }
+      const bookableHours = await venueBookingRule.rejectIfNotCustomerBookable(pool, venueId)
+      if (!bookableHours.ok) return { ok: false, msg: bookableHours.msg, slots: [], fnVer: FN_VER }
       try {
         let sql = 'SELECT weekday, time_slot AS timeSlot FROM venue_hours WHERE venue_id=?'
         const params = [venueId]
@@ -1251,6 +2174,8 @@ exports.main = async (rawEvent) => {
       const venueId = event.venueId || ''
       const weekday = Number(event.weekday) || 0
       if (!venueId) return { ok: false, msg: '缺少场馆' }
+      const bookablePrices = await venueBookingRule.rejectIfNotCustomerBookable(pool, venueId)
+      if (!bookablePrices.ok) return { ok: false, msg: bookablePrices.msg, fnVer: FN_VER }
       let sql = 'SELECT * FROM court_prices WHERE venue_id=?'
       const params = [venueId]
       if (weekday >= 1 && weekday <= 7) {
@@ -1258,13 +2183,22 @@ exports.main = async (rawEvent) => {
         params.push(weekday)
       }
       const [rows] = await pool.query(sql, params)
-      const list = (rows || []).map((r) => ({
+      let hidden = new Set()
+      try {
+        const [hc] = await pool.query(
+          `SELECT name FROM courts WHERE venue_id=? AND IFNULL(customer_visible, 1) = 0`,
+          [venueId]
+        )
+        hidden = new Set((hc || []).map((r) => String(r.name || '').trim()).filter(Boolean))
+      } catch (e) {}
+      hidden.add('外场')
+      const list = (rows || []).filter((r) => !isOutdoorSharedCourt(r.court) && !hidden.has(String(r.court || '').trim())).map((r) => ({
         court: r.court,
         timeSlot: r.time_slot,
         weekday: r.weekday,
         price: Number(r.price) || 0
       }))
-      return { ok: true, list }
+      return { ok: true, list, fnVer: FN_VER }
     }
     if (action === 'getMyEvaluations') {
       const userId = event.userId || ''

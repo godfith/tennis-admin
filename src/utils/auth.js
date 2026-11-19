@@ -9,6 +9,7 @@ export function getAdminName() {
 export function roleKind() {
   const r = getRole()
   const n = getAdminName()
+  if (['partner', '联营', '联营人'].includes(r) || n.includes('联营')) return 'partner'
   if (['manager', '店长'].includes(r) || n.includes('店长')) return 'manager'
   if (['service', '客服'].includes(r) || n.includes('客服')) return 'service'
   if (['front', 'staff', '前台', '店员'].includes(r) || n.includes('店员') || n.includes('前台')) return 'front'
@@ -23,14 +24,15 @@ export function roleKind() {
 }
 
 export function roleLabel() {
-  return { admin: '超级管理员', manager: '店长', front: '店员', service: '客服' }[roleKind()] || '管理员'
+  return { admin: '超级管理员', manager: '店长', front: '店员', service: '客服', partner: '联营人' }[roleKind()] || '管理员'
 }
 
 export const HOME = {
   admin: '/dashboard',
   manager: '/dashboard',
   front: '/bookings',
-  service: '/bookings'
+  service: '/bookings',
+  partner: '/finance'
 }
 
 export const ALLOWED = {
@@ -38,6 +40,7 @@ export const ALLOWED = {
   manager: [
     '/dashboard',
     '/activity',
+    '/op-logs',
     '/finance',
     '/occupancy',
     '/coach-attendance',
@@ -52,41 +55,116 @@ export const ALLOWED = {
     '/users'
   ],
   front: ['/bookings', '/coach-schedule', '/users'],
-  service: ['/bookings', '/users']
+  service: ['/bookings', '/users'],
+  partner: ['/finance', '/op-logs']
 }
 
-export const PERM_OPTIONS = [
-  { key: '/dashboard', label: '数据看板' },
-  { key: '/activity', label: '业务动态' },
-  { key: '/finance', label: '财务报表' },
-  { key: '/occupancy', label: '订场率' },
-  { key: '/coach-attendance', label: '教练出勤' },
-  { key: '/bookings', label: '预约管理' },
-  { key: '/coach-schedule', label: '教练排课' },
-  { key: '/group-classes', label: '团课排期' },
-  { key: '/courts', label: '场地管理' },
-  { key: '/hours', label: '场地时间' },
-  { key: '/prices', label: '场地价格' },
-  { key: '/coaches', label: '教练管理' },
-  { key: '/staff', label: '员工管理' },
-  { key: '/users', label: '用户管理' },
-  { key: '/cards', label: '卡模板管理' },
-  { key: '/gift', label: '体验发放' },
-  { key: 'issueCard', label: '发卡' },
-  { key: 'refundCard', label: '退卡/删除卡' },
-  { key: 'extendCard', label: '延期' },
-  { key: 'cancelBook', label: '取消预约' },
-  { key: 'editTemplate', label: '改卡模板' },
-  { key: 'editStaff', label: '改员工权限' }
+export const ROLE_DEFAULT_ACTIONS = {
+  manager: ['book', 'cancelBook', 'enrollGroup', 'issueCard', 'refundCard', 'extendCard'],
+  front: ['book', 'cancelBook', 'enrollGroup', 'issueCard'],
+  service: [],
+  partner: []
+}
+
+export const PERM_GROUPS = [
+  {
+    id: 'overview',
+    title: '概览',
+    items: [
+      { key: '/dashboard', label: '数据看板' },
+      { key: '/activity', label: '业务动态' },
+      { key: '/op-logs', label: '操作日志' },
+      { key: '/finance', label: '财务报表' },
+      { key: '/occupancy', label: '订场率' },
+      { key: '/coach-attendance', label: '教练出勤' }
+    ]
+  },
+  {
+    id: 'booking',
+    title: '预约与课程',
+    items: [
+      { key: '/bookings', label: '预约管理' },
+      { key: '/batch-lock', label: '锁场规则' },
+      { key: '/coach-schedule', label: '教练排课' },
+      { key: '/group-classes', label: '团课排期' }
+    ]
+  },
+  {
+    id: 'venue',
+    title: '场地',
+    items: [
+      { key: '/courts', label: '场地管理' },
+      { key: '/hours', label: '场地时间' },
+      { key: '/prices', label: '场地价格' }
+    ]
+  },
+  {
+    id: 'people',
+    title: '人员',
+    items: [
+      { key: '/coaches', label: '教练管理' },
+      { key: '/staff', label: '员工管理' },
+      { key: '/users', label: '用户管理' }
+    ]
+  },
+  {
+    id: 'card',
+    title: '会员卡与运营',
+    items: [
+      { key: '/cards', label: '卡模板管理' },
+      { key: '/gift', label: '体验发放' },
+      { key: '/evaluations', label: '学员评测' },
+      { key: '/activities', label: '活动管理' },
+      { key: '/banners', label: '轮播图' },
+      { key: '/notices', label: '注意事项' },
+      { key: '/notify-scripts', label: '通知话术' }
+    ]
+  },
+  {
+    id: 'actions',
+    title: '操作权限',
+    items: [
+      { key: 'book', label: '代客订场' },
+      { key: 'cancelBook', label: '取消预约' },
+      { key: 'enrollGroup', label: '团课报名' },
+      { key: 'issueCard', label: '发卡' },
+      { key: 'refundCard', label: '退卡/删除卡' },
+      { key: 'extendCard', label: '延期' },
+      { key: 'editTemplate', label: '改卡模板' },
+      { key: 'editStaff', label: '改员工权限' }
+    ]
+  }
 ]
+
+export const PERM_OPTIONS = PERM_GROUPS.flatMap((g) => g.items)
+
+export function defaultPermsForRole(role) {
+  const pages = (ALLOWED[role] || []).filter((k) => k !== '*')
+  const actions = ROLE_DEFAULT_ACTIONS[role] || []
+  return pages.concat(actions)
+}
 
 export function getPerms() {
   try {
     const raw = JSON.parse(localStorage.getItem('admin_perms') || '[]')
-    return Array.isArray(raw) ? raw : []
+    return Array.isArray(raw) ? raw.filter((k) => k && !String(k).startsWith('venue:')) : []
   } catch (e) {
     return []
   }
+}
+
+export function allowedVenueIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('admin_venue_ids') || '[]')
+    if (Array.isArray(raw) && raw.length) return raw.map(String)
+  } catch (e) {}
+  const one = localStorage.getItem('admin_venue_id') || ''
+  return one ? [one] : []
+}
+
+export function canSwitchVenue() {
+  if (roleKind() === 'admin') return true
+  return allowedVenueIds().length > 1
 }
 
 export function canAccess(path) {
@@ -102,6 +180,9 @@ export function can(action) {
   const custom = getPerms()
   if (custom.length) {
     if (action === 'issueCard' && (custom.includes('issueCard') || custom.includes('/users'))) return true
+    if (action === 'gift' && (custom.includes('gift') || custom.includes('/gift'))) return true
+    if (action === 'finance' && (custom.includes('finance') || custom.includes('/finance'))) return true
+    if (action === 'switchVenue') return custom.includes('switchVenue') || allowedVenueIds().length > 1
     return custom.includes(action)
   }
   const k = roleKind()
@@ -127,7 +208,7 @@ export function can(action) {
 export function homePath() {
   const custom = getPerms()
   if (custom.length) {
-    const pages = ['/dashboard', '/activity', '/finance', '/occupancy', '/bookings', '/users', '/cards']
+    const pages = ['/dashboard', '/activity', '/op-logs', '/finance', '/occupancy', '/bookings', '/users', '/cards']
     for (const p of pages) if (custom.includes(p)) return p
     return custom[0].startsWith('/') ? custom[0] : '/dashboard'
   }

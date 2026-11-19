@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'getFinance-20261101a'
+const FN_VER = 'getFinance-20261119a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -31,6 +31,25 @@ function money(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 0
   return Math.round(n * 100) / 100
+}
+
+
+/** 资金来源：微信支付(小程序) vs 线下支付；美团/抖音单独标出 */
+function resolvePayChannel(opts) {
+  const remark = String((opts && (opts.remark || opts.detail)) || '')
+  const op = String((opts && opts.operatorName) || '')
+  const type = String((opts && opts.type) || '')
+  const payOrderId = opts && opts.payOrderId
+  const hasPay = payOrderId != null && payOrderId !== '' && Number(payOrderId) !== 0
+  if (hasPay) return { code: 'wechat', label: '微信支付' }
+  if (type === 'pay') return { code: 'wechat', label: '微信支付' }
+  if (/微信/.test(remark) || /微信/.test(op)) return { code: 'wechat', label: '微信支付' }
+  if (/美团/.test(remark)) return { code: 'meituan', label: '美团' }
+  if (/抖音/.test(remark)) return { code: 'douyin', label: '抖音' }
+  if (/线下/.test(remark)) return { code: 'offline', label: '线下支付' }
+  if (opts && opts.assumeOffline) return { code: 'offline', label: '线下支付' }
+  if (opts && opts.assumeUnmarked) return { code: 'unmarked', label: '未标' }
+  return { code: '', label: '' }
 }
 
 function pad(n) {
@@ -221,6 +240,11 @@ exports.main = async (raw) => {
         turnoverCard += amt
         realIssueCount += 1
       }
+      const ch = resolvePayChannel({
+        remark: c.remark || '',
+        operatorName: c.issuer_name || '',
+        assumeUnmarked: !imported && amt > 0
+      })
       cardIssueList.push({
         date: fmtDate(c.created_at),
         dateRaw: fmtDate(c.created_at),
@@ -233,12 +257,16 @@ exports.main = async (raw) => {
         userName: c.user_name || '',
         userAccount: c.user_name || '',
         phone: c.user_phone || '',
+        venueId: c.venue_id || '',
         venueName: c.venue_name || '',
         issuerName: c.issuer_name || '',
         operatorName: c.issuer_name || '',
         imported,
         amount: amt,
-        remark: c.remark || ''
+        remark: c.remark || '',
+        payChannel: ch.code,
+        payChannelLabel: ch.label,
+        source: ch.label
       })
     })
 
@@ -258,6 +286,7 @@ exports.main = async (raw) => {
         userName: c.user_name || '',
         userAccount: c.user_name || '',
         phone: c.user_phone || '',
+        venueId: c.venue_id || '',
         venueName: c.venue_name || '',
         issuerName: c.issuer_name || '',
         operatorName: c.issuer_name || '',
@@ -282,9 +311,14 @@ exports.main = async (raw) => {
         userName: p.user_name || '',
         userAccount: p.user_name || '',
         phone: '',
+        venueId: p.venue_id || '',
         venueName: p.venue_name || '',
-        operatorName: '',
-        amount: amt
+        operatorName: '微信支付',
+        amount: amt,
+        payChannel: 'wechat',
+        payChannelLabel: '微信支付',
+        source: '微信支付',
+        payOrderId: p.out_trade_no || ''
       })
     })
 
@@ -355,16 +389,27 @@ exports.main = async (raw) => {
           userName: b.user_name || '',
           userAccount: b.user_name || '',
           phone,
+          venueId: b.venue_id || '',
           venueName: b.venue_name || (card && card.venue_name) || '',
           operatorName: b.operator_name || '',
           court: b.court,
           time: b.time,
           imported: importedCard,
-          amount: unit
+          amount: unit,
+          payChannel: '',
+          payChannelLabel: '',
+          source: '',
+          payOrderId: b.pay_order_id || null
         })
       } else {
         incomeCourt += slotPrice
         turnoverCourtBook += slotPrice
+        const payCh = resolvePayChannel({
+          payOrderId: b.pay_order_id,
+          remark: '',
+          operatorName: b.operator_name || '',
+          assumeOffline: slotPrice > 0
+        })
         consumeList.push({
           date: day,
           dateRaw: day,
@@ -377,12 +422,17 @@ exports.main = async (raw) => {
           userName: b.user_name || '',
           userAccount: b.user_name || '',
           phone,
+          venueId: b.venue_id || '',
           venueName: b.venue_name || '',
           operatorName: b.operator_name || '',
           court: b.court,
           time: b.time,
           imported: false,
-          amount: slotPrice
+          amount: slotPrice,
+          payOrderId: b.pay_order_id || null,
+          payChannel: payCh.code,
+          payChannelLabel: payCh.label,
+          source: payCh.label
         })
       }
     })
@@ -392,6 +442,13 @@ exports.main = async (raw) => {
       ledPay.forEach((row) => {
         const amt = money(row.amount)
         wxCourt += amt
+        const ledCh = resolvePayChannel({
+          payOrderId: row.pay_order_id,
+          remark: row.remark || '',
+          operatorName: row.operator_name || '',
+          type: 'court_pay',
+          assumeOffline: amt > 0
+        })
         courtPayList.push({
           date: fmtDate(row.biz_date),
           dateRaw: fmtDate(row.biz_date),
@@ -399,14 +456,18 @@ exports.main = async (raw) => {
           type: 'court_pay',
           typeLabel: '订场收款',
           payOrderId: row.pay_order_id,
-          name: row.remark || '微信支付',
+          name: row.remark || ledCh.label || '订场收款',
           cardName: '',
           userName: row.user_name || '',
           userAccount: row.user_name || '',
           phone: row.phone || '',
+          venueId: row.venue_id || '',
           venueName: row.venue_name || '',
           operatorName: row.operator_name || '',
-          amount: amt
+          amount: amt,
+          payChannel: ledCh.code,
+          payChannelLabel: ledCh.label,
+          source: ledCh.label
         })
       })
     }
@@ -477,6 +538,9 @@ exports.main = async (raw) => {
     })
     sources.wechat = wechatBook > 0 ? wechatBook : money(wxCourt)
     sources.cash = cashBook
+    // 线下支付 = 备注「线下」发卡 + 无微信单的订场实收（后台现金）
+    sources.offlinePay = money(sources.offline + sources.cash)
+    sources.wechatPay = money(sources.wechat)
 
     function remainValue(c) {
       if (isImportedIssuer(c.issuer_name)) return 0
@@ -593,7 +657,8 @@ exports.main = async (raw) => {
       if (String(c.remark || '').indexOf('金额异常') >= 0) {
         exceptions.push({
           date: fmtDate(c.created_at), type: '金额异常', name: c.card_name || '',
-          userName: c.user_name || '', amount: money(c.price), venueName: c.venue_name || '',
+          userName: c.user_name || '', amount: money(c.price),
+          venueId: c.venue_id || '', venueName: c.venue_name || '',
           detail: c.remark || ''
         })
       }
@@ -601,7 +666,8 @@ exports.main = async (raw) => {
     ;(refundRows || []).forEach((c) => {
       exceptions.push({
         date: fmtDate(c.refunded_at || c.updated_at), type: '退卡', name: c.card_name || '',
-        userName: c.user_name || '', amount: money(-unusedRefund(c)), venueName: c.venue_name || '',
+        userName: c.user_name || '', amount: money(-unusedRefund(c)),
+        venueId: c.venue_id || '', venueName: c.venue_name || '',
         detail: '退未用 ' + unusedRefund(c)
       })
     })
@@ -610,21 +676,26 @@ exports.main = async (raw) => {
       if (b.card_id && money(b.amount) > 0) {
         exceptions.push({
           date: fmtDate(b.date), type: '用卡又收款', name: (b.court || '') + ' ' + (b.time || ''),
-          userName: b.user_name || '', amount: money(b.amount), venueName: b.venue_name || '',
+          userName: b.user_name || '', amount: money(b.amount),
+          venueId: b.venue_id || '', venueName: b.venue_name || '',
           detail: (b.card_name || '用卡') + ' 同时收款' + money(b.amount)
         })
       }
     })
     ;(ledRows || []).forEach((r) => {
-      if (r.type === 'court_adjust') {
+      if (r.type === 'court_adjust' || r.type === 'card_price_adjust') {
         exceptions.push({
-          date: fmtDate(r.biz_date), type: '改金额', name: r.remark || '',
-          userName: r.user_name || '', amount: money(r.amount), venueName: r.venue_name || '',
+          date: fmtDate(r.biz_date),
+          type: r.type === 'card_price_adjust' ? '改卡实收' : '改金额',
+          name: r.remark || '',
+          userName: r.user_name || '', amount: money(r.amount),
+          venueId: r.venue_id || '', venueName: r.venue_name || '',
           detail: r.remark || ''
         })
       }
     })
     exceptions.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+    const adjustList = exceptions.filter((r) => r.type === '改金额' || r.type === '改卡实收' || r.type === 'court_adjust' || r.type === 'card_price_adjust')
 
     const opMap = {}
     function opAdd(name, field, amt) {
@@ -679,6 +750,7 @@ exports.main = async (raw) => {
       },
       venueCompare,
       exceptions: exceptions.slice(0, 200),
+      adjustList,
       operatorSummary,
       daily,
       issueList: cardIssueList,

@@ -100,8 +100,8 @@ exports.main = async (event) => {
         ]
       )
     } catch (e2) {}
-    return { ok: true, fnVer: 'venueHours-20260914a', venueId, weekdays, slots }
+    return { ok: true, fnVer: 'venueHours-20261105c', venueId, weekdays, slots }
   } catch (err) {
-    return { ok: false, msg: err.message || '保存失败', fnVer: 'venueHours-20260911a' }
+    return { ok: false, msg: err.message || '保存失败', fnVer: 'venueHours-20261105c' }
   }
 }

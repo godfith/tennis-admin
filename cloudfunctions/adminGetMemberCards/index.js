@@ -1,4 +1,14 @@
 const mysql = require('mysql2/promise')
+function loadExpireDueCards() {
+  try {
+    var mod = require('./expireDueCards')
+    if (typeof mod === 'function') return mod
+    if (mod && typeof mod.expireDueCards === 'function') return mod.expireDueCards
+  } catch (e) {}
+  return async function () { return { ok: true, affected: 0, skipped: true } }
+}
+const expireDueCards = loadExpireDueCards()
+
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -12,7 +22,68 @@ const pool = mysql.createPool({
   dateStrings: true
 })
 
-const FN_VER = 'getMemberCards-20260928a'
+const FN_VER = 'getMemberCards-20261117b'
+
+function parseRuleObj(v) {
+  if (!v) return null
+  if (typeof v === 'object') return v
+  try { return JSON.parse(v) } catch (e) { return null }
+}
+function normYmd(v) {
+  if (!v) return ''
+  const m = String(v).match(/^(\d{4}-\d{2}-\d{2})/)
+  return m ? m[1] : ''
+}
+function addDaysYmd(ymd, days) {
+  const base = normYmd(ymd)
+  if (!base) return ''
+  const d = new Date(base.replace(/-/g, '/') + ' 00:00:00')
+  d.setDate(d.getDate() + Number(days || 0))
+  const p = (n) => (n < 10 ? '0' + n : '' + n)
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+function datesEditedFlag(card, tpl) {
+  const remark = String((card && card.remark) || '')
+  if (/\[已改有效期\]/.test(remark)) return true
+  if (!tpl) return false
+  const rule = parseRuleObj(tpl.time_rule || tpl.timeRule) || {}
+  const mode = rule.activateMode || 'now'
+  if (mode === 'first_use') return false
+  const days = Number(tpl.duration_days != null ? tpl.duration_days : (tpl.durationDays || rule.durationDays) || 0)
+  const from = normYmd(card.valid_from || card.validFrom)
+  const to = normYmd(card.valid_to || card.validTo)
+  if (rule.mode === 'dates' && Array.isArray(rule.dateRanges) && rule.dateRanges.length) {
+    const starts = rule.dateRanges.map((x) => x && x.start).filter(Boolean).sort()
+    const ends = rule.dateRanges.map((x) => x && x.end).filter(Boolean).sort()
+    return from !== (starts[0] || '') || to !== (ends[ends.length - 1] || '')
+  }
+  if (days > 0) {
+    if (!from) return true
+    return to !== addDaysYmd(from, days)
+  }
+  return !!to
+}
+async function loadTplMap(poolOrConn, cards) {
+  const ids = []
+  const seen = {}
+  ;(cards || []).forEach((c) => {
+    const id = c.template_id || c.templateId
+    if (id == null || id === '') return
+    const k = String(id)
+    if (seen[k]) return
+    seen[k] = true
+    ids.push(id)
+  })
+  const map = {}
+  if (!ids.length) return map
+  const ph = ids.map(() => '?').join(',')
+  try {
+    const [rows] = await poolOrConn.query(`SELECT * FROM card_templates WHERE id IN (${ph})`, ids)
+    ;(rows || []).forEach((r) => { map[String(r.id)] = r })
+  } catch (e) {}
+  return map
+}
+
 
 function parseEvent(event) {
   let body = event || {}
@@ -69,19 +140,26 @@ exports.main = async (event) => {
   try {
     let rows
     if (userId && /^\d+$/.test(String(userId))) {
+      try { await expireDueCards(pool, { userId }) } catch (e) {}
       const [r] = await pool.query(
         `SELECT * FROM member_cards WHERE user_id=? AND IFNULL(status,'')<>'deleted' ORDER BY id DESC LIMIT 80`,
         [userId]
       )
       rows = r
     } else {
+      try { await expireDueCards(pool, { openid: openid || userId }) } catch (e) {}
       const [r] = await pool.query(
         `SELECT * FROM member_cards WHERE openid=? AND IFNULL(status,'')<>'deleted' ORDER BY id DESC LIMIT 80`,
         [openid || userId]
       )
       rows = r
     }
-    return { ok: true, list: (rows || []).map(mapCard), fnVer: FN_VER }
+    const tplMap = await loadTplMap(pool, rows)
+    return { ok: true, list: (rows || []).map((c) => {
+      const mapped = mapCard(c)
+      mapped.datesEdited = datesEditedFlag(c, tplMap[String(c.template_id || '')])
+      return mapped
+    }), fnVer: FN_VER }
   } catch (e) {
     return { ok: false, msg: e.message || '查询失败', list: [], fnVer: FN_VER }
   }

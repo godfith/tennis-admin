@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise')
+const { expireDueCards } = require('./expireDueCards')
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -13,7 +14,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'gift-20260912b'
+const FN_VER = 'gift-20261113a'
 const TYPES = { times: '场地次', group: '团课次', coach: '私教次' }
 
 function parseEvent(event) {
@@ -94,6 +95,7 @@ exports.main = async (event) => {
     }
 
     if (action === 'list') {
+      await expireDueCards(pool)
       const [rows] = await pool.query(
         `SELECT * FROM member_cards
           WHERE source IN ('admin_gift','gift')
@@ -105,6 +107,7 @@ exports.main = async (event) => {
     if (action === 'userCards') {
       const userId = Number(body.userId)
       if (!userId) return { ok: false, msg: '缺少用户', fnVer: FN_VER }
+      await expireDueCards(pool, { userId })
       const [rows] = await pool.query(
         `SELECT * FROM member_cards WHERE user_id=? AND status='active' ORDER BY id DESC`,
         [userId]
@@ -131,6 +134,7 @@ exports.main = async (event) => {
           `UPDATE member_cards
               SET total_times = total_times + ?,
                   remaining_times = remaining_times + ?,
+                  status = IF(status = 'used_up', 'active', status),
                   remark = TRIM(CONCAT(IFNULL(remark,''), ?)),
                   updated_at = NOW()
             WHERE id=?`,

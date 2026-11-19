@@ -17,6 +17,7 @@
         <span class="date-label">{{ currentDate }} {{ weekLabel }}</span>
         <span class="venue-tip">{{ venueName || '未选场馆' }}</span>
       </div>
+      <el-button type="success" plain :loading="exporting" @click="openExportDialog">导出</el-button>
       <el-button :loading="loading" @click="loadAll">刷新</el-button>
     </div>
 
@@ -36,6 +37,7 @@
         <div class="cell head corner">时段</div>
         <div v-for="c in courts" :key="c._id" class="cell head">
           <div class="court-name">{{ c.name }}</div>
+          <div v-if="c.type === '共用' || c.type === '匹克球'" class="court-type">{{ c.type }}</div>
         </div>
 
         <template v-for="t in timeSlots" :key="t">
@@ -96,6 +98,13 @@
         <el-form-item label="场地"><el-input v-model="bookForm.court" disabled /></el-form-item>
         <el-form-item label="日期"><el-input v-model="bookForm.date" disabled /></el-form-item>
         <el-form-item label="时段"><el-input v-model="bookForm.time" disabled /></el-form-item>
+        <el-form-item v-if="bookCourtShared" label="项目">
+          <el-radio-group v-model="bookForm.sport" @change="onBookSportChange">
+            <el-radio-button value="tennis">网球</el-radio-button>
+            <el-radio-button value="pickleball">匹克球</el-radio-button>
+          </el-radio-group>
+          <div class="card-tip">这是网球和匹克球共用场地，两种球同一时段只能约一种。</div>
+        </el-form-item>
         <el-form-item label="客户" required>
           <div style="display:flex;gap:8px;width:100%">
             <el-select
@@ -129,7 +138,7 @@
           <div class="amt-title">② 同时卖卡并用来订这场 <span>选了卡会自动扣 1 次，本场不用再填钱</span></div>
           <el-form-item label="选择卡">
             <el-select v-model="bookForm.issueTpl" clearable filterable placeholder="不卖卡，只订场" style="width:100%" :loading="tplLoading" @change="onIssueTplChange">
-              <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+              <el-option v-for="t in issuableTemplates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
             </el-select>
           </el-form-item>
           <template v-if="bookForm.issueTpl">
@@ -329,8 +338,10 @@
           <span class="price-hint" style="margin-left:8px">客人迟到后补记</span>
         </el-form-item>
         <el-form-item v-if="current && !isLockBooking(current)" label="收款">
-          <span>{{ bookingMoneyText(current) }}</span>
-          <span class="price-hint" style="margin-left:8px">单次 / 整卡，钱记在卡上</span>
+          <div class="row-edit">
+            <el-input-number v-model="editForm.amount" :min="0" :precision="2" :step="1" />
+            <span class="price-hint">原显示 {{ bookingMoneyText(current) }} · 改这里会写改金额流水</span>
+          </div>
         </el-form-item>
         <el-form-item v-if="editNeedCoach && !isBookingDone(current)" label="教练">
           <el-select v-model="editForm.coachId" placeholder="请选择教练" style="width:100%" :loading="coachLoading">
@@ -349,7 +360,7 @@
         </el-form-item>
         <el-form-item v-if="current && !isLockBooking(current) && !isBookingDone(current)" label="同时发卡">
           <el-select v-model="editForm.issueTpl" clearable filterable placeholder="不另发卡" style="width:100%" :loading="tplLoading" @change="onEditIssueTplChange">
-            <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+            <el-option v-for="t in issuableTemplates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="editForm.issueTpl && !isBookingDone(current)" label="发卡来源">
@@ -370,7 +381,8 @@
         <el-button v-if="canRefundCardOnly" type="warning" plain :loading="saving" @click="refundCardKeepCash">只退卡</el-button>
         <el-button v-if="canCancelBook && current && !isLockBooking(current)" type="warning" @click="cancelBook">取消预约</el-button>
         <el-button v-if="current && !isLockBooking(current) && !isBookingDone(current)" type="primary" :loading="saving" @click="saveDetail">保存修改</el-button>
-        <span v-if="current && isBookingDone(current)" class="hint">已开始/已结束，不能改预约</span>
+        <el-button v-if="current && !isLockBooking(current) && isBookingDone(current)" type="primary" :loading="saving" @click="saveDetail">保存金额</el-button>
+        <span v-if="current && isBookingDone(current)" class="hint">已开始/已结束：场地时段不能改，可改收款金额</span>
         <el-button @click="detailVisible = false">关闭</el-button>
       </template>
     </el-dialog>
@@ -382,7 +394,7 @@
           <el-form-item label="原收款">¥{{ Number(current.amount || 0).toFixed(2) }}（将退回）</el-form-item>
           <el-form-item label="发放卡券" required>
             <el-select v-model="convertForm.issueTpl" filterable placeholder="选择要发的卡" style="width:100%" :loading="tplLoading" @change="onConvertTplChange">
-              <el-option v-for="t in templates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
+              <el-option v-for="t in issuableTemplates" :key="t._id" :label="tplLabel(t)" :value="t._id" />
             </el-select>
           </el-form-item>
           <el-form-item label="发卡来源">
@@ -415,15 +427,50 @@
         <el-button type="primary" :loading="saving" @click="submitConvert">确认</el-button>
       </template>
     </el-dialog>
-  </div>
+      <el-dialog v-model="exportVisible" title="导出预约" width="520px">
+      <el-form label-width="88px">
+        <el-form-item label="场馆">
+          <span>{{ venueName || '未选场馆' }}</span>
+        </el-form-item>
+        <el-form-item label="日期">
+          <el-date-picker
+            v-model="exportRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="开始"
+            end-placeholder="结束"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="exportStatuses" multiple collapse-tags placeholder="已预约 / 锁场" style="width: 100%">
+            <el-option label="已预约" value="booked" />
+            <el-option label="锁场" value="locked" />
+            <el-option label="已取消" value="cancelled" />
+            <el-option label="待支付" value="pending_pay" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="关键词">
+          <el-input v-model="exportKeyword" clearable placeholder="姓名 / 手机 / 场地 / 卡券 / 备注" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exporting" @click="doExportBookings">导出</el-button>
+      </template>
+    </el-dialog>
+</div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { can } from '../utils/auth'
+import { can, roleKind, allowedVenueIds } from '../utils/auth'
+import { cardAllowsCourt, courtSportKind } from '../utils/courtTypeRule.js'
+import { todayYmd, downloadExcelHtml } from '../utils/exportTable.js'
 const router = useRouter()
+const route = useRoute()
 const canBook = can('book')
 const canCancelBook = can('cancelBook')
 const canEnrollGroup = can('enrollGroup')
@@ -431,11 +478,16 @@ const canEnrollGroup = can('enrollGroup')
 const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
-  '18:00-19:00', '19:00-20:00', '20:00-21:00'
+  '18:00-19:00', '19:00-20:00', '20:00-21:00', '21:00-22:00'
 ]
 const timeSlots = ref(FALLBACK_SLOTS.slice())
 
 const loading = ref(false)
+const exporting = ref(false)
+const exportVisible = ref(false)
+const exportRange = ref([])
+const exportStatuses = ref(['booked', 'locked'])
+const exportKeyword = ref('')
 const saving = ref(false)
 const memberLoading = ref(false)
 const cardLoading = ref(false)
@@ -446,6 +498,7 @@ const bookings = ref([])
 const groupClasses = ref([])
 const memberOptions = ref([])
 const memberCards = ref([])
+const memberWallet = ref(0)
 const memberBalance = ref(0)
 const coachList = ref([])
 const currentDate = ref(formatDate(new Date()))
@@ -464,7 +517,7 @@ const detailPhone = ref('')
 const currentGroup = ref(null)
 
 const bookForm = ref({
-  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0, backfill: false, useBalance: false
+  court: '', date: '', time: '', memberKey: '', userName: '', userOpenid: '', cardId: '', coachId: '', remark: '', payAmount: 0, issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0, backfill: false, useBalance: false, sport: 'tennis'
 })
 const templates = ref([])
 const tplLoading = ref(false)
@@ -595,7 +648,7 @@ function tplLabel(t) {
 // 普通订场不用团课卡
 const usableCardsNormal = computed(() =>
   memberCards.value.filter(
-    (c) => c.type !== 'group' && isCardUsable(c, bookForm.value.date, bookForm.value.time)
+    (c) => c.type !== 'group' && !isStoredCard(c) && isCardUsable(c, bookForm.value.date, bookForm.value.time)
   )
 )
 // 团课报名只用团课卡
@@ -622,6 +675,53 @@ const availableCoaches = computed(() => {
 
 function venueId() {
   return localStorage.getItem('venue_id') || ''
+}
+const currentVenueId = ref(venueId())
+function bookingCourtObj(name) {
+  const n = String(name || bookForm.value.court || '')
+  return (courts.value || []).find((c) => String(c.name) === n) || { name: n, type: '' }
+}
+function defaultSportForCourt(court) {
+  const kind = courtSportKind(court)
+  if (kind === 'pickleball') return 'pickleball'
+  return 'tennis'
+}
+const bookCourtShared = computed(() => courtSportKind(bookingCourtObj(bookForm.value.court)) === 'both')
+function onBookSportChange() {
+  if (bookForm.value.cardId) {
+    const card = memberCards.value.find((c) => c._id === bookForm.value.cardId)
+    if (card && !isCardUsable(card, bookForm.value.date, bookForm.value.time)) bookForm.value.cardId = ''
+  }
+  if (bookForm.value.issueTpl) {
+    const tpl = templates.value.find((x) => String(x._id) === String(bookForm.value.issueTpl))
+    if (tpl && !templateAllowsBookSport(tpl)) bookForm.value.issueTpl = ''
+  }
+}
+function templateAllowsBookSport(tpl) {
+  const court = bookingCourtObj(bookForm.value.court)
+  return cardAllowsCourt(
+    { cardName: tpl.name, name: tpl.name, type: tpl.type, timeRule: tpl.timeRule || tpl.time_rule },
+    court,
+    { sport: bookForm.value.sport || '', remark: bookForm.value.remark || '' }
+  )
+}
+function templateAllowedAtVenue(tpl, vid) {
+  let rule = tpl && (tpl.timeRule || tpl.time_rule)
+  if (typeof rule === 'string') {
+    try { rule = JSON.parse(rule) } catch (e) { rule = {} }
+  }
+  const ids = (rule && Array.isArray(rule.venueIds) ? rule.venueIds : []).map((x) => String(x)).filter(Boolean)
+  if (!ids.length) return true
+  if (!vid) return false
+  return ids.indexOf(String(vid)) >= 0
+}
+const issuableTemplates = computed(() => templates.value.filter((t) => templateAllowedAtVenue(t, currentVenueId.value)))
+function syncIssueTplForVenue() {
+  currentVenueId.value = venueId()
+  const keep = (id) => !id || issuableTemplates.value.some((t) => String(t._id) === String(id))
+  if (!keep(bookForm.value.issueTpl)) bookForm.value.issueTpl = ''
+  if (!keep(editForm.value.issueTpl)) editForm.value.issueTpl = ''
+  if (!keep(convertForm.value.issueTpl)) convertForm.value.issueTpl = ''
 }
 function formatDate(d) {
   const y = d.getFullYear()
@@ -675,8 +775,25 @@ function formatCardStatus(b) {
   if (b.coachName) text += ` ·${b.coachName}`
   return text
 }
+function isStoredCard(c) {
+  if (!c) return false
+  const typ = String(c.type || '')
+  const name = String(c.cardName || c.card_name || '')
+  return typ === 'stored' || typ === '储值' || typ === 'wallet' || name.indexOf('储值') >= 0
+}
+function storedCardSum(list) {
+  return (list || []).reduce((n, c) => {
+    if (!isStoredCard(c) || (c.status && c.status !== 'active')) return n
+    const have = Number(c.price) || Number(c.remainingTimes) || Number(c.remaining_times) || 0
+    return n + (have > 0 ? have : 0)
+  }, 0)
+}
+function refreshMemberSpendable() {
+  memberBalance.value = Math.round((Number(memberWallet.value) + storedCardSum(memberCards.value)) * 100) / 100
+}
 function isCardUsable(card, dateStr, timeStr) {
   if (!card || card.status !== 'active') return false
+  if (isStoredCard(card)) return false
   if (card.validFrom && dateStr < card.validFrom) return false
   if (card.validTo && dateStr > card.validTo) return false
   if (card.type === 'times' || card.type === 'coach' || card.type === 'group') {
@@ -690,6 +807,11 @@ function isCardUsable(card, dateStr, timeStr) {
   if (ruleObj && Array.isArray(ruleObj.venueIds) && ruleObj.venueIds.length) {
     const vid = localStorage.getItem('venue_id') || ''
     if (vid && !ruleObj.venueIds.includes(vid)) return false
+  }
+  const courtName = bookForm.value.court
+  if (courtName) {
+    const court = (courts.value || []).find((c) => String(c.name) === String(courtName)) || { name: courtName, type: '' }
+    if (!cardAllowsCourt(card, court, { sport: bookForm.value.sport || '', remark: bookForm.value.remark || '' })) return false
   }
   if (ruleObj && (ruleObj.mode === 'dates' || (ruleObj.dateRanges && ruleObj.dateRanges.length))) {
     const hit = (ruleObj.dateRanges || []).some((rg) => rg.start && rg.end && dateStr >= rg.start && dateStr <= rg.end)
@@ -743,8 +865,11 @@ function shortDate(v) {
   const m = s.match(/^(\d{4}-\d{2}-\d{2})/)
   return m ? m[1] : s.slice(0, 10)
 }
+function isOutdoorSharedCourt(courtName) {
+  return String(courtName || '').trim() === '外场'
+}
 function normCourt(name) {
-  return String(name || '').trim().replace(/场$/u, '')
+  return String(name || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
 }
 function getBookings(courtName, time) {
   const n = normCourt(courtName)
@@ -756,8 +881,9 @@ function getBooking(courtName, time) {
   return getBookings(courtName, time)[0]
 }
 function getGroupClass(courtName, time) {
+  const n = normCourt(courtName)
   return groupClasses.value.find(
-    (g) => g.court === courtName && g.time === time && g.status === 'open'
+    (g) => normCourt(g.court) === n && g.time === time && g.status === 'open'
   )
 }
 function dateWeekday(dateStr) {
@@ -768,9 +894,20 @@ function dateWeekday(dateStr) {
   return w
 }
 function getPrice(courtName, time) {
-  const key = `${courtName}_${time}`
-  const v = priceMap.value[key]
-  return v != null ? Number(v) : 0
+  const t = String(time || '')
+  const raw = String(courtName || '').trim()
+  const n = normCourt(raw)
+  const candidates = [`${raw}_${t}`, `${n}_${t}`, `${n}场_${t}`]
+  for (const k of candidates) {
+    const v = priceMap.value[k]
+    if (v != null) return Number(v)
+  }
+  for (const k of Object.keys(priceMap.value || {})) {
+    if (!k.endsWith('_' + t)) continue
+    const courtKey = k.slice(0, k.length - t.length - 1)
+    if (normCourt(courtKey) === n) return Number(priceMap.value[k]) || 0
+  }
+  return 0
 }
 function kindLabel(k) {
   return { cash: '现金', times: '次卡', coach: '教练', time: '时间卡', group: '团课', pickle: '匹克' }[k] || '预约'
@@ -802,11 +939,19 @@ function isBackfill(b) {
   if (!b) return false
   return b.source === 'backfill' || String(b.remark || '').indexOf('[补录]') === 0
 }
-function slotPast(time) {
-  const day = currentDate.value
-  const start = String(time || '').split('-')[0] || '00:00'
-  const ts = new Date(day.replace(/-/g, '/') + ' ' + start).getTime()
-  return !Number.isNaN(ts) && ts <= Date.now()
+function shanghaiNow() {
+  const d = new Date(Date.now() + 8 * 3600 * 1000)
+  return { ymd: d.toISOString().slice(0, 10), hm: d.toISOString().slice(11, 16) }
+}
+function slotPast(time, dateYmd) {
+  const day = String(dateYmd || currentDate.value || '').slice(0, 10)
+  if (!day) return false
+  const raw = String(time || '')
+  const end = (raw.split('-')[1] || raw.split('-')[0] || '').trim()
+  const now = shanghaiNow()
+  if (day < now.ymd) return true
+  if (day > now.ymd) return false
+  return !!end && now.hm >= end
 }
 function cellClass(courtName, time) {
   if (getGroupClass(courtName, time)) return slotPast(time) ? 'group past' : 'group'
@@ -872,7 +1017,8 @@ function onCellClick(courtName, time) {
     remark: '',
     payAmount: getPrice(courtName, time) || 0,
     issueTpl: '',
-    backfill: slotPast(time)
+    backfill: slotPast(time),
+    sport: defaultSportForCourt(bookingCourtObj(courtName))
   }
   bookMode.value = 'book'
   memberOptions.value = []
@@ -901,6 +1047,7 @@ async function loadTemplates() {
   try {
     const result = await post('/adminGetCardTemplates', { venueId: venueId() })
     templates.value = (result.list || []).filter((t) => t.status !== 'disabled')
+    syncIssueTplForVenue()
   } catch (e) { templates.value = [] }
   finally { tplLoading.value = false }
 }
@@ -965,10 +1112,12 @@ async function onMemberChange(id) {
   if (m) {
     bookForm.value.userName = m.nickName || m.nickname || m.name || m.userId || ''
     bookForm.value.userOpenid = m._openid || ''
-    memberBalance.value = Number(m.balance) || 0
+    memberWallet.value = Number(m.balance) || 0
     bookForm.value.useBalance = false
+    refreshMemberSpendable()
     post('/adminGetUsers', { action: 'detail', userId: m._id }).then((d) => {
-      memberBalance.value = Number(d.user && d.user.balance) || memberBalance.value
+      memberWallet.value = Number(d.user && d.user.balance) || memberWallet.value
+      refreshMemberSpendable()
     }).catch(() => {})
     cardLoading.value = true
     try {
@@ -978,6 +1127,7 @@ async function onMemberChange(id) {
       memberCards.value = []
     } finally {
       cardLoading.value = false
+      refreshMemberSpendable()
     }
   } else {
     bookForm.value.userName = ''
@@ -1093,7 +1243,8 @@ function lockToBook() {
     remark: '',
     payAmount: 0,
     issueTpl: '',
-    convertLockId: b._id || b.id
+    convertLockId: b._id || b.id,
+    sport: defaultSportForCourt(bookingCourtObj(b.court))
   }
   bookMode.value = 'book'
   bookVisible.value = true
@@ -1364,6 +1515,8 @@ async function submitBook() {
         return
       }
     }
+    const isBackfill = !!bookForm.value.backfill || slotPast(bookForm.value.time, bookForm.value.date)
+    bookForm.value.backfill = isBackfill
     const result = await post('/adminSaveBooking', {
       action: 'add',
       data: {
@@ -1372,10 +1525,9 @@ async function submitBook() {
         date: bookForm.value.date,
         time: bookForm.value.time,
         userName: bookForm.value.userName,
-        remark: bookForm.value.backfill
-          ? ('[补录]' + (bookForm.value.remark ? ' ' + bookForm.value.remark : ''))
-          : (bookForm.value.remark || ''),
-        backfill: !!bookForm.value.backfill,
+        sport: bookForm.value.sport || defaultSportForCourt(bookingCourtObj(bookForm.value.court)),
+        remark: remarkWithSport(bookForm.value.remark, bookForm.value.sport, isBackfill),
+        backfill: isBackfill,
         status: 'booked',
         venueId: venueId(),
         venueName: venueName.value,
@@ -1508,6 +1660,94 @@ function onDatePick(val) {
   }
 }
 
+
+function remarkWithSport(remark, sport, isBackfill) {
+  let text = String(remark || '')
+  if ((sport === 'pickleball' || sport === '匹克球') && text.indexOf('匹克') < 0 && text.indexOf('丁克') < 0) {
+    text = text ? ('匹克球 ' + text) : '匹克球'
+  }
+  if (isBackfill) text = '[补录]' + (text ? ' ' + text : '')
+  return text
+}
+function openExportDialog() {
+  exportRange.value = [currentDate.value, currentDate.value]
+  exportStatuses.value = ['booked', 'locked']
+  exportKeyword.value = ''
+  exportVisible.value = true
+}
+function bookingPayMethod(b) {
+  if (b.payMethod) return b.payMethod
+  if (b.cardId || b.cardName) return '会员卡'
+  if (String(b.source || '') === 'user') return Number(b.amount) > 0 ? '小程序支付' : '小程序'
+  if (Number(b.amount) > 0) return '现金'
+  return '未收款'
+}
+function bookingStatusLabel(b) {
+  return b.statusLabel || ({ booked: '已预约', locked: '锁场', cancelled: '已取消', pending_pay: '待支付', done: '已完成', completed: '已完成' }[b.status] || b.status || '')
+}
+async function doExportBookings() {
+  const range = exportRange.value || []
+  const dateFrom = range[0] || currentDate.value
+  const dateTo = range[1] || currentDate.value
+  if (!dateFrom || !dateTo) {
+    ElMessage.warning('请选择日期')
+    return
+  }
+  if (!venueId()) {
+    ElMessage.warning('请先选择场馆')
+    return
+  }
+  exporting.value = true
+  try {
+    const result = await post('/adminGetBookings', {
+      action: 'export',
+      venueId: venueId(),
+      dateFrom,
+      dateTo,
+      statusList: (exportStatuses.value && exportStatuses.value.length) ? exportStatuses.value : ['booked', 'locked'],
+      keyword: (exportKeyword.value || '').trim(),
+      export: true,
+      pageSize: 20000
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '导出失败')
+      return
+    }
+    const rows = (result.list || []).filter((b) => !isOutdoorSharedCourt(b.court))
+    if (!rows.length) {
+      ElMessage.warning('当前筛选没有可导出的预约')
+      return
+    }
+    const header = ['场馆', '日期', '时段', '场地', '项目', '客户', '手机号', '状态', '金额', '支付方式', '卡券', '教练', '操作人', '来源', '补录', '备注']
+    const tableRows = rows.map((b) => [
+      b.venueName || venueName.value || '',
+      b.date || '',
+      b.time || '',
+      b.court || '',
+      b.sport || (String(b.remark || '').indexOf('匹克') >= 0 ? '匹克球' : '网球'),
+      b.userName || '',
+      b.phone || '',
+      bookingStatusLabel(b),
+      Number(b.amount) ? Number(b.amount).toFixed(2) : '0.00',
+      bookingPayMethod(b),
+      b.cardName || '',
+      b.coachName || '',
+      b.operatorName || '',
+      b.source === 'user' ? '小程序' : (b.source || '后台'),
+      (b.backfill || String(b.remark || '').indexOf('补录') >= 0) ? '是' : '',
+      b.remark || ''
+    ])
+    const fname = '预约导出-' + (dateFrom === dateTo ? dateFrom : dateFrom + '_' + dateTo) + '.xls'
+    downloadExcelHtml(fname, '预约', header, tableRows)
+    const more = result.truncated ? '（已达上限，仅导出前 ' + rows.length + ' 条）' : ''
+    ElMessage.success('已导出 ' + rows.length + ' 条' + more)
+    exportVisible.value = false
+  } catch (e) {
+    ElMessage.error(e.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
 async function loadAll() {
   venueName.value = localStorage.getItem('venue_name') || ''
   if (!venueId()) {
@@ -1529,12 +1769,12 @@ async function loadAll() {
       map[`${row.court}_${row.timeSlot}`] = Number(row.price) || 0
     })
     priceMap.value = map
-    let list = cRes.list || []
+    let list = (cRes.list || []).filter((c) => !isOutdoorSharedCourt(c.name))
     const openList = list.filter(
       (c) => c.status === 'open' || c.status === '开门' || c.status === 1 || c.status === true
     )
     courts.value = openList.length ? openList : list
-    bookings.value = (bRes.list || []).filter((b) => b.status === 'booked' || b.status === 'locked' || String(b.userName || '') === '锁场')
+    bookings.value = (bRes.list || []).filter((b) => !isOutdoorSharedCourt(b.court) && (b.status === 'booked' || b.status === 'locked' || String(b.userName || '') === '锁场'))
     groupClasses.value = (gRes.list || []).filter((g) => g.status === 'open')
     const savedSlots = (hRes && (hRes.byWeekday?.[wd] || hRes.slots)) || []
     const extra = []
@@ -1549,8 +1789,68 @@ async function loadAll() {
   }
 }
 
+function canUseVenue(vid) {
+  if (!vid) return true
+  if (roleKind() === 'admin') return true
+  const allow = allowedVenueIds()
+  if (!allow.length) return true
+  return allow.map(String).includes(String(vid))
+}
+function resolveSlotTime(court, time) {
+  const exact = String(time || '').trim()
+  if (!exact) return ''
+  if (getGroupClass(court, exact) || getBooking(court, exact) || timeSlots.value.includes(exact)) return exact
+  const m = exact.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/)
+  if (m) {
+    const start = String(m[1]).padStart(2, '0') + ':' + m[2]
+    const hit = timeSlots.value.find((slot) => slot === start + '-' + String(Number(m[1]) + 1).padStart(2, '0') + ':' + m[2] || String(slot).startsWith(start + '-'))
+    if (hit) return hit
+  }
+  return exact
+}
+async function applyIncomingSlot() {
+  const q = route.query || {}
+  const date = shortDate(q.date || '')
+  const court = String(q.court || '')
+  const time = String(q.time || '')
+  const vid = String(q.venueId || q.venue_id || '')
+  const vname = String(q.venueName || q.venue_name || '')
+  const bookingId = String(q.bookingId || q.booking_id || '')
+  if (!date && !court && !time && !vid) {
+    await loadAll()
+    return
+  }
+  if (vid && String(vid) !== String(venueId())) {
+    if (!canUseVenue(vid)) {
+      ElMessage.warning('当前账号不能查看该场馆的预约管理')
+      await loadAll()
+      return
+    }
+    window.dispatchEvent(new CustomEvent('set-admin-venue', { detail: { venueId: vid, venueName: vname } }))
+    currentVenueId.value = vid
+    if (vname) venueName.value = vname
+  }
+  if (date) {
+    currentDate.value = date
+    dateObj.value = date
+  }
+  await loadAll()
+  await nextTick()
+  if (!court || !time) return
+  const slot = resolveSlotTime(court, time)
+  if (getGroupClass(court, slot) || getBooking(court, slot)) {
+    onCellClick(court, slot)
+    return
+  }
+  const byId = bookingId ? (bookings.value || []).find((b) => String(b._id || b.id) === bookingId) : null
+  if (byId && byId.time) {
+    onCellClick(byId.court || court, byId.time)
+    return
+  }
+  ElMessage.info('已跳到当天日程，但这条预约现在不在格子里（可能已取消）')
+}
 onMounted(() => {
-  loadAll()
+  applyIncomingSlot()
   window.addEventListener('venue-changed', loadAll)
 })
 onUnmounted(() => {
@@ -1668,4 +1968,6 @@ h2 { margin: 0; font-size: 20px; }
 
 .bf-tag { display: inline-block; background: #8e24aa; color: #fff; font-size: 11px; border-radius: 4px; padding: 0 5px; margin-right: 4px; vertical-align: 1px; }
 .backfill-tip { background: #f3e5f5; color: #6a1b9a; border-radius: 6px; padding: 8px 10px; margin: 8px 0; font-size: 13px; }
+
+.court-type { color: #1a5c3a; font-size: 12px; font-weight: 400; margin-top: 2px; }
 </style>

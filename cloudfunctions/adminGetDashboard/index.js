@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'dashboard-20261029a'
+const FN_VER = 'dashboard-20261105c'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -162,23 +162,83 @@ exports.main = async (event) => {
     const todayRevenue = await revenue(date, date)
     const monthRevenue = await revenue(ms, date)
 
+    async function channelCourt(from, to) {
+      let wechat = 0
+      let offline = 0
+      try {
+        const books = await q(
+          `SELECT amount, pay_order_id FROM bookings
+            WHERE date>=? AND date<=? AND status NOT IN ('cancelled','locked')
+              AND IFNULL(amount,0) > 0
+              AND (card_id IS NULL OR card_id=0) ${venueSql}`,
+          [from, to].concat(vparams)
+        )
+        books.forEach((b) => {
+          const amt = money(b.amount)
+          if (b.pay_order_id && Number(b.pay_order_id) !== 0) wechat += amt
+          else offline += amt
+        })
+      } catch (e) {}
+      // 发卡无微信通道：全部计入线下（含美团/抖音备注）
+      let issueOffline = 0
+      try {
+        const cards = await q(
+          `SELECT price, issuer_name, remark FROM member_cards
+            WHERE created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY)
+              AND IFNULL(status,'') <> 'deleted' ${venueSql}`,
+          [from + ' 00:00:00', to].concat(vparams)
+        )
+        cards.forEach((c) => {
+          if (isImportedIssuer(c.issuer_name)) return
+          const rem = String(c.remark || '')
+          if (/微信/.test(rem)) return // 若将来有微信发卡
+          issueOffline += money(c.price)
+        })
+      } catch (e) {}
+      return { wechat: money(wechat), offline: money(offline + issueOffline) }
+    }
+    const todayChannel = await channelCourt(date, date)
+    const monthChannel = await channelCourt(ms, date)
+
     const todayList = (await q(
-      `SELECT id, time, court, user_name, phone, card_name, card_id, coach_name, remark, amount, group_class_id
+      `SELECT id, time, court, user_name, phone, card_name, card_id, coach_name, remark, amount, group_class_id, pay_order_id, source, operator_name
          FROM bookings WHERE status='booked' AND date=? ${venueSql}
          ORDER BY time ASC, id ASC LIMIT 80`,
       [date].concat(vparams)
-    )).map((b) => ({
-      _id: String(b.id),
-      time: b.time || '',
-      court: b.court || '',
-      userName: b.user_name || '',
-      phone: b.phone || '',
-      cardName: b.card_name || '',
-      coachName: b.coach_name || '',
-      remark: b.remark || '',
-      amount: money(b.amount),
-      isGroup: !!b.group_class_id
-    }))
+    )).map((b) => {
+      const amt = money(b.amount)
+      let payChannel = ''
+      let payChannelLabel = ''
+      if (b.card_id) {
+        payChannel = 'card'
+        payChannelLabel = '会员卡'
+      } else if (b.pay_order_id && Number(b.pay_order_id) !== 0) {
+        payChannel = 'wechat'
+        payChannelLabel = '微信支付'
+      } else if (amt > 0) {
+        payChannel = 'offline'
+        payChannelLabel = '线下支付'
+      } else if (b.group_class_id) {
+        payChannel = 'group'
+        payChannelLabel = '团课'
+      }
+      return {
+        _id: String(b.id),
+        time: b.time || '',
+        court: b.court || '',
+        userName: b.user_name || '',
+        phone: b.phone || '',
+        cardName: b.card_name || '',
+        coachName: b.coach_name || '',
+        remark: b.remark || '',
+        amount: amt,
+        isGroup: !!b.group_class_id,
+        payOrderId: b.pay_order_id || null,
+        payChannel,
+        payChannelLabel,
+        source: payChannelLabel
+      }
+    })
 
     let recentLogs = []
     try {
@@ -211,6 +271,10 @@ exports.main = async (event) => {
       activeCardCount: Number(activeCardCount) || 0,
       todayRevenue,
       monthRevenue,
+      todayWechatPay: todayChannel.wechat,
+      todayOfflinePay: todayChannel.offline,
+      monthWechatPay: monthChannel.wechat,
+      monthOfflinePay: monthChannel.offline,
       todayList,
       recentLogs
     }
