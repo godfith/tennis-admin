@@ -12,7 +12,7 @@ const pool = mysql.createPool({
   dateStrings: true
 })
 
-const FN_VER = 'outdoorSched-20261120b'
+const FN_VER = 'outdoorSched-20261120c'
 
 const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
@@ -230,7 +230,7 @@ exports.main = async (event) => {
     coaches.forEach((c) => c.ids.forEach((id) => allCoachIds.push(id)))
 
     const [bookRows] = await pool.query(
-      `SELECT b.id, b.order_no, b.venue_id, b.venue_name, b.court, b.date, b.time,
+      `SELECT b.id, b.venue_id, b.venue_name, b.court, b.date, b.time,
               b.user_id, b.openid, b.user_name, b.phone, b.status,
               IFNULL(NULLIF(u.phone,''), b.phone) AS user_phone,
               b.card_id, b.card_name, b.card_type, b.coach_id, b.coach_name,
