@@ -1,8 +1,10 @@
 const mysql = require('mysql2/promise')
 const settingsLib = require('./groupClassSettings')
+const coachPerm = require('./coachPerm')
+const coachBind = require('./coachBind')
 
 
-const FN_VER = 'saveGroupClass-20261120a'
+const FN_VER = 'saveGroupClass-20261120b'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -602,6 +604,32 @@ exports.main = async (event) => {
     const { action, id, data } = body || {}
     if (!action) return { ok: false, msg: '缺少 action', fnVer: FN_VER }
     if (action === 'ver' || action === '__ver__') return { ok: true, fnVer: FN_VER }
+
+    const ctx = await coachBind.resolveCoachOperator(pool, body, data || {})
+    const coachGuarded = ['add', 'update', 'toggle', 'restore', 'delete', 'saveSettings', 'generateRotation', 'previewRotation', 'addBatch', 'previewBatch']
+    if (ctx.isCoach && coachGuarded.includes(action)) {
+      let existingCoachId = ''
+      if (id && ['update', 'toggle', 'restore', 'delete'].includes(action)) {
+        try {
+          const [rows] = await pool.query('SELECT coach_id FROM group_classes WHERE id=? LIMIT 1', [id])
+          if (rows && rows[0]) existingCoachId = rows[0].coach_id || ''
+        } catch (e) {}
+      }
+      const requested = data && (data.coachId || data.coach_id)
+      const dec = coachPerm.decideCoachGroupClass({
+        operatorRole: ctx.role,
+        action,
+        bound: ctx.bound,
+        selfCoachId: ctx.selfCoachId,
+        requestedCoachId: requested,
+        existingCoachId
+      })
+      if (!dec.ok) return { ok: false, msg: dec.msg, fnVer: FN_VER }
+      if (data && dec.coachId) {
+        data.coachId = dec.coachId
+        data.coachName = ctx.selfCoachName || data.coachName || ''
+      }
+    }
 
     if (action === 'getSettings') {
       const settings = await loadSettings(pool)

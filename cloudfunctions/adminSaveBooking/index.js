@@ -1,6 +1,8 @@
 const mysql = require('mysql2/promise')
 const courtTypeRule = require('./courtTypeRule')
 const cardActivateHelper = require('./cardActivateHelper')
+const coachPerm = require('./coachPerm')
+const coachBind = require('./coachBind')
 let __cloud = null
 function getCloud() {
   if (__cloud) return __cloud
@@ -2429,7 +2431,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261119c'
+const FN_VER = 'saveBooking-20261120a'
 
 function parseRuleObj(v) {
   if (!v) return null
@@ -2594,6 +2596,44 @@ async function assertOwnVenue(conn, operatorName, venueId) {
   }
 }
 
+
+async function enforceCoachBookingPolicy(conn, body, action, data) {
+  const ctx = await coachBind.resolveCoachOperator(conn, body, data || {})
+  if (!ctx.isCoach) return { ok: true, ctx }
+  if (action === 'add' || action === 'update') {
+    const d = data || {}
+    const looksLock = d.userName === '锁场' || d.source === 'lock'
+    if (!looksLock) {
+      const dec = coachPerm.decideCoachAddBooking({ operatorRole: ctx.role })
+      if (!dec.ok) return { ok: false, msg: dec.msg, ctx }
+    }
+  }
+  if (action === 'batchLock' || action === 'batchUnlock' || action === 'saveLockRule' || action === 'deleteLockRule') {
+    const dec = coachPerm.decideCoachLock({ operatorRole: ctx.role, action, bound: ctx.bound, selfCoachId: ctx.selfCoachId, courtName: '外场' })
+    if (!dec.ok) return { ok: false, msg: dec.msg, ctx }
+  }
+  if (action === 'lock') {
+    const courtName = (data && (data.court || data.courtName)) || ''
+    const dec = coachPerm.decideCoachLock({
+      operatorRole: ctx.role,
+      action: 'lock',
+      bound: ctx.bound,
+      selfCoachId: ctx.selfCoachId,
+      courtName,
+      coachId: data && data.coachId
+    })
+    if (!dec.ok) return { ok: false, msg: dec.msg, ctx }
+    try { coachBind.assertCoachVenue(ctx, data && data.venueId) } catch (e) {
+      return { ok: false, msg: e.message || '只能在自己可管理的门店锁外场', ctx }
+    }
+    return { ok: true, ctx, coachLock: true, coachId: dec.coachId, coachName: ctx.selfCoachName }
+  }
+  if (action === 'cancel') {
+    return { ok: true, ctx, coachCancel: true }
+  }
+  return { ok: true, ctx }
+}
+
 exports.main = async (event) => {
   const conn = await pool.getConnection()
   try {
@@ -2604,7 +2644,21 @@ exports.main = async (event) => {
     }
     if (!action) return { ok: false, msg: '缺少 action', fnVer: FN_VER }
 
+    let coachPolicy = { ok: true, ctx: null }
+    if (['add', 'update', 'lock', 'batchLock', 'batchUnlock', 'saveLockRule', 'deleteLockRule', 'cancel'].includes(action)) {
+      coachPolicy = await enforceCoachBookingPolicy(conn, body, action, data)
+      if (!coachPolicy.ok) return { ok: false, msg: coachPolicy.msg, fnVer: FN_VER }
+    }
+
     if (action === 'cancel') {
+      if (coachPolicy.ctx && coachPolicy.ctx.isCoach) {
+        const [ownRows] = await conn.query('SELECT id, coach_id, source, status, user_name FROM bookings WHERE id=? LIMIT 1', [id])
+        const row = ownRows && ownRows[0]
+        const isOwnLock = row && (row.status === 'locked' || row.source === 'lock' || row.user_name === '锁场') && String(row.coach_id || '') === String(coachPolicy.ctx.selfCoachId || '')
+        if (!isOwnLock) {
+          return { ok: false, msg: '教练不能取消他人预约或私教课', fnVer: FN_VER }
+        }
+      }
       await conn.beginTransaction()
       const [rows] = await conn.query('SELECT * FROM bookings WHERE id=? FOR UPDATE', [id])
       const b = rows[0]
@@ -3770,10 +3824,13 @@ exports.main = async (event) => {
       if (!data || !data.venueId || !data.court || !data.date || !data.time) {
         return { ok: false, msg: '参数不完整', fnVer: FN_VER }
       }
-      try {
-        await assertOwnVenue(conn, data.operatorName, data.venueId)
-      } catch (e) {
-        return { ok: false, msg: e.message || '只能锁自己管理的场馆', fnVer: FN_VER }
+      const isCoachOutdoorLock = !!(coachPolicy && coachPolicy.coachLock)
+      if (!isCoachOutdoorLock) {
+        try {
+          await assertOwnVenue(conn, data.operatorName, data.venueId)
+        } catch (e) {
+          return { ok: false, msg: e.message || '只能锁自己管理的场馆', fnVer: FN_VER }
+        }
       }
       const dateYmd = fmtDate(data.date) || data.date
       const courtNorm = normCourt(data.court)
@@ -3805,11 +3862,39 @@ exports.main = async (event) => {
         return { ok: false, msg: '该时段为团课，不能锁场', fnVer: FN_VER }
       }
       const [busyAll] = await conn.query(
-        `SELECT id, status, time FROM bookings WHERE venue_id=? AND date=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked','pending_pay')`,
+        `SELECT id, status, time, source, user_name, coach_id FROM bookings WHERE venue_id=? AND date=? AND (court=? OR court=CONCAT(?,'场')) AND status IN ('booked','locked','pending_pay')`,
         [data.venueId, dateYmd, courtNorm, courtNorm]
       )
       const busy = pickOverlapping(busyAll, data.time)
-      if (busy.length) {
+      if (isCoachOutdoorLock) {
+        const selfId = coachPolicy.coachId
+        const conflict = await findCoachTimeConflict(conn, selfId, dateYmd, data.time, null)
+        if (conflict) {
+          await conn.rollback()
+          return { ok: false, msg: conflict, fnVer: FN_VER }
+        }
+        const [ownLocked] = await conn.query(
+          `SELECT id FROM bookings WHERE date=? AND coach_id=? AND status='locked' AND time=? LIMIT 1`,
+          [dateYmd, selfId, data.time]
+        )
+        // time overlap may not equal exact time; also scan busy rows
+        for (const row of busy) {
+          const dec = coachPerm.outdoorLockBusyDecision({
+            status: row.status,
+            source: row.source,
+            userName: row.user_name,
+            coachId: row.coach_id
+          }, selfId)
+          if (dec.block) {
+            await conn.rollback()
+            return { ok: false, msg: dec.msg, fnVer: FN_VER }
+          }
+        }
+        if (ownLocked && ownLocked.length) {
+          await conn.rollback()
+          return { ok: false, msg: '该时段已锁场', fnVer: FN_VER }
+        }
+      } else if (busy.length) {
         if (busy[0].status === 'locked') {
           await conn.rollback()
           return { ok: false, msg: '该时段已锁场', fnVer: FN_VER }
@@ -3841,16 +3926,30 @@ exports.main = async (event) => {
       }
       const remark = data.remark || '[锁场] 锁场'
       let res
+      const lockCoachId = isCoachOutdoorLock ? (coachPolicy.coachId || null) : (data.coachId || null)
+      const lockCoachName = isCoachOutdoorLock ? (coachPolicy.coachName || data.coachName || '') : (data.coachName || '')
       try {
-        const [r] = await conn.query(
-          `INSERT INTO bookings (
-            venue_id, venue_name, court, date, time,
-            user_id, openid, user_name, phone, status,
-            source, operator_name, remark, amount
-          ) VALUES (?, ?, ?, ?, ?, NULL, '', '锁场', '', 'locked', 'lock', ?, ?, 0)`,
-          [data.venueId, data.venueName || '', courtName, dateYmd, data.time, data.operatorName || '管理员', remark]
-        )
-        res = r
+        if (lockCoachId) {
+          const [r] = await conn.query(
+            `INSERT INTO bookings (
+              venue_id, venue_name, court, date, time,
+              user_id, openid, user_name, phone, status,
+              source, operator_name, remark, amount, coach_id, coach_name
+            ) VALUES (?, ?, ?, ?, ?, NULL, '', '锁场', '', 'locked', 'lock', ?, ?, 0, ?, ?)`,
+            [data.venueId, data.venueName || '', courtName, dateYmd, data.time, data.operatorName || '管理员', remark, lockCoachId, lockCoachName]
+          )
+          res = r
+        } else {
+          const [r] = await conn.query(
+            `INSERT INTO bookings (
+              venue_id, venue_name, court, date, time,
+              user_id, openid, user_name, phone, status,
+              source, operator_name, remark, amount
+            ) VALUES (?, ?, ?, ?, ?, NULL, '', '锁场', '', 'locked', 'lock', ?, ?, 0)`,
+            [data.venueId, data.venueName || '', courtName, dateYmd, data.time, data.operatorName || '管理员', remark]
+          )
+          res = r
+        }
       } catch (e) {
         await conn.rollback()
         return { ok: false, msg: '锁场失败：' + (e.message || '状态写不进去'), fnVer: FN_VER }
