@@ -171,7 +171,7 @@ function onSetAdminVenue(e) {
   else selectVenue({ venueId: vid, _id: vid, name: d.venueName || d.venue_name || vid }, true)
 }
 function logout() {
-  ;['admin_token', 'admin_name', 'admin_role', 'admin_perms', 'admin_venue_id', 'admin_venue_name', 'admin_venue_ids', 'venue_id', 'venue_name'].forEach((k) => localStorage.removeItem(k))
+  ;['admin_token', 'admin_name', 'admin_role', 'admin_username', 'admin_phone', 'admin_perms', 'admin_venue_id', 'admin_venue_name', 'admin_venue_ids', 'venue_id', 'venue_name'].forEach((k) => localStorage.removeItem(k))
   router.push('/login')
 }
 onMounted(() => {
