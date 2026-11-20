@@ -2,6 +2,7 @@
 
 const coachPerm = require('./coachPerm')
 const coachBind = require('./coachBind')
+const settingsLib = require('./groupClassSettings')
 
 function normCourt(c) {
   return String(c || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
@@ -99,15 +100,18 @@ async function checkGroupConflict(pool, data, excludeId, fmtDate) {
 
 async function handleSaveGroupClass(pool, event, fmtDate, FN_VER) {
   const coach = await findBoundCoach(pool, event)
+  const classType = event.classType === 'self' ? 'self' : 'fixed'
   const dec = coachPerm.decideCoachGroupClass({
     operatorRole: 'coach',
     action: event.id ? 'update' : 'add',
     bound: !!coach,
     selfCoachId: coach && coach.id,
     requestedCoachId: event.coachId,
-    existingCoachId: ''
+    existingCoachId: '',
+    classType
   })
   if (!dec.ok) return { ok: false, msg: dec.msg, fnVer: FN_VER }
+  if (classType === 'self') return { ok: false, msg: coachPerm.NO_SELF_GROUP_MSG, fnVer: FN_VER }
   const venueId = String(event.venueId || '').trim()
   const name = String(event.name || '').trim()
   const date = fmtDate(event.date) || String(event.date || '').slice(0, 10)
@@ -130,9 +134,19 @@ async function handleSaveGroupClass(pool, event, fmtDate, FN_VER) {
     remark: event.remark || '',
     minEnrollment: Number(event.minEnrollment) || 0,
     cancelBeforeHours: event.cancelBeforeHours != null ? Number(event.cancelBeforeHours) : 2,
-    classType: event.classType === 'self' ? 'self' : 'fixed',
-    theme: event.theme || ''
+    classType,
+    theme: event.theme || '',
+    courseContentId: String(event.courseContentId || event.course_content_id || '').trim()
   }
+  try {
+    const gcSettings = await settingsLib.loadSettings(pool)
+    const hit = settingsLib.findCourseContent(gcSettings, payload.courseContentId) ||
+      settingsLib.findCourseContent(gcSettings, payload.theme)
+    if (hit) {
+      payload.courseContentId = hit.id
+      if (!payload.theme) payload.theme = hit.name
+    }
+  } catch (e) {}
   if (event.id) {
     const [rows] = await pool.query('SELECT id, coach_id FROM group_classes WHERE id=? LIMIT 1', [event.id])
     if (!rows[0]) return { ok: false, msg: '团课不存在', fnVer: FN_VER }
@@ -142,31 +156,57 @@ async function handleSaveGroupClass(pool, event, fmtDate, FN_VER) {
       bound: true,
       selfCoachId: dec.coachId,
       existingCoachId: rows[0].coach_id,
-      requestedCoachId: dec.coachId
+      requestedCoachId: dec.coachId,
+      classType
     })
     if (!dec2.ok) return { ok: false, msg: dec2.msg, fnVer: FN_VER }
   }
   const err = await checkGroupConflict(pool, payload, event.id || null, fmtDate)
   if (err) return { ok: false, msg: err, fnVer: FN_VER }
   try {
+    const vals = [
+      payload.venueId, payload.name, payload.date, payload.time, payload.court, payload.coachId, payload.coachName,
+      payload.capacity, payload.status, payload.remark, payload.minEnrollment, payload.cancelBeforeHours,
+      payload.classType || 'fixed', payload.theme || '', payload.courseContentId || ''
+    ]
     if (event.id) {
-      await pool.query(
-        `UPDATE group_classes SET venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
-          capacity=?, status=?, remark=?, min_enrollment=?, cancel_before_hours=? WHERE id=?`,
-        [payload.venueId, payload.name, payload.date, payload.time, payload.court, payload.coachId, payload.coachName,
-          payload.capacity, payload.status, payload.remark, payload.minEnrollment, payload.cancelBeforeHours, event.id]
-      )
+      try {
+        await pool.query(
+          `UPDATE group_classes SET venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
+            capacity=?, status=?, remark=?, min_enrollment=?, cancel_before_hours=?,
+            class_type=?, theme=?, course_content_id=? WHERE id=?`,
+          vals.concat([event.id])
+        )
+      } catch (e) {
+        if (String((e && e.message) || '').indexOf('Unknown column') < 0) throw e
+        await pool.query(
+          `UPDATE group_classes SET venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
+            capacity=?, status=?, remark=?, min_enrollment=?, cancel_before_hours=? WHERE id=?`,
+          vals.slice(0, 12).concat([event.id])
+        )
+      }
       return { ok: true, id: String(event.id), fnVer: FN_VER }
     }
-    const [res] = await pool.query(
-      `INSERT INTO group_classes
-        (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
-         min_enrollment, cancel_before_hours, auto_cancel_exempt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)`,
-      [payload.venueId, payload.name, payload.date, payload.time, payload.court, payload.coachId, payload.coachName,
-        payload.capacity, payload.status, payload.remark, payload.minEnrollment, payload.cancelBeforeHours]
-    )
-    return { ok: true, id: String(res.insertId), fnVer: FN_VER }
+    try {
+      const [res] = await pool.query(
+        `INSERT INTO group_classes
+          (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
+           min_enrollment, cancel_before_hours, auto_cancel_exempt, class_type, theme, course_content_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?)`,
+        vals
+      )
+      return { ok: true, id: String(res.insertId), fnVer: FN_VER }
+    } catch (e) {
+      if (String((e && e.message) || '').indexOf('Unknown column') < 0) throw e
+      const [res] = await pool.query(
+        `INSERT INTO group_classes
+          (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
+           min_enrollment, cancel_before_hours, auto_cancel_exempt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)`,
+        vals.slice(0, 12)
+      )
+      return { ok: true, id: String(res.insertId), fnVer: FN_VER, missingColumns: true }
+    }
   } catch (e) {
     return { ok: false, msg: e.message || '保存失败', fnVer: FN_VER }
   }

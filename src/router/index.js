@@ -25,6 +25,7 @@ const routes = [
       { path: 'staff', name: 'Staff', component: () => import('../views/Staff.vue') },
       { path: 'users', name: 'Users', component: () => import('../views/Users.vue') },
       { path: 'cards', name: 'CardTemplates', component: () => import('../views/CardTemplates.vue') },
+      { path: 'card-refunds', name: 'CardRefunds', component: () => import('../views/CardRefunds.vue') },
       { path: 'evaluations', name: 'Evaluations', component: () => import('../views/Evaluations.vue') },
       { path: 'activities', name: 'Activities', component: () => import('../views/Activities.vue') },
       { path: 'banners', name: 'Banners', component: () => import('../views/Banners.vue') },

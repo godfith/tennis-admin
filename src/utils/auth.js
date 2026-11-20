@@ -116,6 +116,7 @@ export const PERM_GROUPS = [
     title: '会员卡与运营',
     items: [
       { key: '/cards', label: '卡模板管理' },
+      { key: '/card-refunds', label: '购卡退款申请' },
       { key: '/gift', label: '体验发放' },
       { key: '/evaluations', label: '学员评测' },
       { key: '/activities', label: '活动管理' },
