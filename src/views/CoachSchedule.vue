@@ -141,18 +141,37 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="detailVisible" title="私教课详情" width="440px">
+    <el-dialog v-model="detailVisible" :title="detailTitle" width="540px">
       <el-descriptions v-if="current" :column="1" border>
-        <el-descriptions-item label="学员">{{ current.userName }}</el-descriptions-item>
-        <el-descriptions-item label="教练">{{ current.coachName }}</el-descriptions-item>
+        <el-descriptions-item label="教练">{{ current.coachName || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="时段">{{ current.date || currentDate }} {{ current.time }}</el-descriptions-item>
         <el-descriptions-item v-if="current.venueName || current.venueShort" label="门店">{{ current.venueShort || current.venueName }}</el-descriptions-item>
-        <el-descriptions-item label="场地">{{ current.court }}</el-descriptions-item>
-        <el-descriptions-item label="时段">{{ current.date }} {{ current.time }}</el-descriptions-item>
-        <el-descriptions-item label="用卡">{{ current.cardName || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="场地">{{ current.court || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="detailKind === 'group'" label="课程">{{ current.name || current.userName || '团课' }}</el-descriptions-item>
+        <template v-if="detailKind !== 'group'">
+          <el-descriptions-item label="预约人">{{ current.userName || '-' }}</el-descriptions-item>
+          <el-descriptions-item v-if="current.phone" label="手机号">{{ current.phone }}</el-descriptions-item>
+          <el-descriptions-item label="付款方式">{{ bookingPayMethod(current) }}</el-descriptions-item>
+          <el-descriptions-item v-if="showAmount(current)" label="金额">{{ formatAmount(current.amount) }}</el-descriptions-item>
+          <el-descriptions-item label="用卡">{{ current.cardName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="来源">{{ sourceLabel(current) }}</el-descriptions-item>
+          <el-descriptions-item v-if="current.operatorName" label="操作人">{{ current.operatorName }}</el-descriptions-item>
+          <el-descriptions-item v-if="current.remark" label="备注">{{ current.remark }}</el-descriptions-item>
+          <el-descriptions-item v-if="current.orderNo" label="订单号">{{ current.orderNo }}</el-descriptions-item>
+        </template>
       </el-descriptions>
+      <div v-if="detailKind === 'group'" class="enroll-block">
+        <div class="enroll-title">报名的人（{{ detailMembers.length }}{{ current && current.capacity ? ' / ' + current.capacity : '' }}）</div>
+        <el-table :data="detailMembers" stripe border v-loading="detailMemberLoading" size="small">
+          <el-table-column prop="userName" label="学员" min-width="110" />
+          <el-table-column prop="phone" label="手机" width="130" />
+          <el-table-column prop="cardName" label="使用卡" min-width="140" />
+        </el-table>
+        <div v-if="!detailMemberLoading && !detailMembers.length" class="empty-enroll">这节课还没有人报名</div>
+      </div>
       <template #footer>
         <el-button @click="detailVisible = false">关闭</el-button>
-        <el-button v-if="!isCoachAccount" type="danger" :loading="saving" @click="cancelLesson">取消这节课</el-button>
+        <el-button v-if="canCancelLesson" type="danger" :loading="saving" @click="cancelLesson">取消这节课</el-button>
       </template>
     </el-dialog>
 
@@ -300,6 +319,21 @@ const occupied = ref([])
 const bookVisible = ref(false)
 const detailVisible = ref(false)
 const current = ref(null)
+const detailKind = ref('booking')
+const detailMembers = ref([])
+const detailMemberLoading = ref(false)
+
+const detailTitle = computed(() => {
+  if (detailKind.value === 'group') return '团课详情'
+  if (detailKind.value === 'lock') return '锁场详情'
+  return '预约详情'
+})
+const canCancelLesson = computed(() => {
+  if (isCoachAccount.value) return false
+  if (detailKind.value === 'group' || detailKind.value === 'lock') return false
+  const row = current.value
+  return !!(row && (row._id || row.id) && row.status !== 'locked')
+})
 const memberOptions = ref([])
 const memberCards = ref([])
 const memberLoading = ref(false)
@@ -644,6 +678,66 @@ function shortVenue(name, id) {
   if (m) return m[1].replace(/店$/, '')
   return s || String(id || '')
 }
+function bookingPayMethod(b) {
+  if (!b) return '-'
+  if (b.payMethod) return b.payMethod
+  if (b.cardId || b.cardName) return '会员卡'
+  if (String(b.source || '') === 'user') return Number(b.amount) > 0 ? '小程序支付' : '小程序'
+  if (Number(b.amount) > 0) return '现金'
+  if (b.status === 'locked') return '锁场'
+  return '未收款'
+}
+function sourceLabel(b) {
+  const s = String((b && b.source) || '')
+  if (s === 'user') return '小程序'
+  if (s === 'admin' || s === '后台') return '后台代约'
+  if (s === 'coach') return '教练排课'
+  return s || '-'
+}
+function formatAmount(n) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return '-'
+  return '¥' + x.toFixed(2)
+}
+function showAmount(b) {
+  return b && b.amount != null && b.amount !== '' && Number.isFinite(Number(b.amount))
+}
+function attachCoachMeta(row, coach) {
+  const next = Object.assign({}, row || {})
+  if (!next.coachName && coach) next.coachName = coach.name || ''
+  if (!next.date) next.date = currentDate.value
+  return next
+}
+function openBookingDetail(row, coach) {
+  current.value = attachCoachMeta(row, coach)
+  detailKind.value = (row && row.status === 'locked') ? 'lock' : 'booking'
+  detailMembers.value = []
+  detailVisible.value = true
+}
+async function openGroupDetail(row, coach) {
+  current.value = attachCoachMeta(row, coach)
+  detailKind.value = 'group'
+  detailMembers.value = []
+  detailVisible.value = true
+  const id = row && (row._id || row.id)
+  if (!id) return
+  detailMemberLoading.value = true
+  try {
+    const result = await post('/adminGetGroupEnrollments', { groupClassId: id })
+    if (result && result.ok === false) {
+      ElMessage.error(result.msg || '加载报名名单失败')
+      detailMembers.value = []
+      return
+    }
+    detailMembers.value = (result && result.list) || []
+  } catch (e) {
+    ElMessage.error((e && e.message) || '加载报名名单失败')
+    detailMembers.value = []
+  } finally {
+    detailMemberLoading.value = false
+  }
+}
+
 function getLesson(coach, time) {
   const ids = new Set(personIds(coach))
   const list = viewMode.value === 'outdoor' ? outdoorBookings.value : bookings.value
@@ -751,21 +845,18 @@ function onBookVenueChange(id) {
 function onCellClick(coach, time) {
   const lesson = getLesson(coach, time)
   if (lesson) {
-    current.value = lesson
-    detailVisible.value = true
+    openBookingDetail(lesson, coach)
     return
   }
   const occ = getOccupied(coach, time)
   if (occ) {
-    if (occ.kind === 'group') {
-      ElMessage.warning('该教练此时段已在' + (shortName(occ) || '其他门店') + '有团课')
-    } else {
-      ElMessage.warning('该教练此时段已在' + (shortName(occ) || '其他门店') + '排了' + (occ.court || '课'))
-    }
+    if (occ.kind === 'group') openGroupDetail(occ, coach)
+    else openBookingDetail(occ, coach)
     return
   }
-  if (getGroup(coach, time)) {
-    ElMessage.warning('该教练此时段有团课')
+  const groupLesson = getGroup(coach, time)
+  if (groupLesson) {
+    openGroupDetail(groupLesson, coach)
     return
   }
   if (isCoachAccount.value) {
@@ -969,3 +1060,7 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .free-text { color: #67c23a; }
 .empty { text-align: center; color: #999; padding: 40px; }
 </style>
+
+.enroll-block { margin-top: 14px; }
+.enroll-title { font-weight: 600; margin-bottom: 8px; color: #1a5c3a; }
+.empty-enroll { color: #909399; font-size: 13px; padding: 10px 0; text-align: center; }
