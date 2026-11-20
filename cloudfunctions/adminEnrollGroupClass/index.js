@@ -1,5 +1,6 @@
 const mysql = require('mysql2/promise')
 const { autoCancelDueGroupClasses } = require('./groupClassAutoCancel')
+const settingsLib = require('./groupClassSettings')
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -12,7 +13,7 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
-const FN_VER = 'enrollGroup-20261117a'
+const FN_VER = 'enrollGroup-20261120a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -291,6 +292,13 @@ exports.main = async (event) => {
     if (ruleMsg) {
       await conn.rollback()
       return { ok: false, msg: ruleMsg, fnVer: FN_VER }
+    }
+    const enrollSettings = await settingsLib.loadSettings(conn)
+    const content = settingsLib.resolveClassCourseContent(gc, enrollSettings)
+    const bind = settingsLib.cardAllowedForCourseContent(card, content)
+    if (!bind.ok) {
+      await conn.rollback()
+      return { ok: false, msg: bind.msg, fnVer: FN_VER }
     }
 
     const [dec] = await conn.query(

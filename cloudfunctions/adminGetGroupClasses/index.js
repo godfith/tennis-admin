@@ -3,7 +3,7 @@ const { autoCancelDueGroupClasses, fmtDate } = require('./groupClassAutoCancel')
 const { loadSettings, mapClassExtra } = require('./groupClassSettings')
 
 
-const FN_VER = 'getGroupClasses-20261119b'
+const FN_VER = 'getGroupClasses-20261120a'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
