@@ -488,20 +488,27 @@ async function resolveCoachAliases(conn, coachIdVal) {
   )
   const me = rows && rows[0]
   if (!me) return { ids: [id], name: '', phone: '', staffId: '' }
-  let sibs = [me]
+  const conds = ['id=?']
+  const params = [id]
   if (me.staff_id) {
-    const [rows2] = await conn.query(
-      'SELECT id, name, phone, staff_id FROM coaches WHERE staff_id=?',
-      [me.staff_id]
-    )
-    if (rows2 && rows2.length) sibs = rows2
-  } else if (me.phone && String(me.phone).trim()) {
-    const [rows2] = await conn.query(
-      'SELECT id, name, phone, staff_id FROM coaches WHERE phone=?',
-      [String(me.phone).trim()]
-    )
-    if (rows2 && rows2.length) sibs = rows2
+    conds.push('staff_id=?')
+    params.push(me.staff_id)
   }
+  const phone = String(me.phone || '').replace(/\D/g, '')
+  if (phone) {
+    conds.push('REPLACE(REPLACE(IFNULL(phone,"")," ",""),"-","")=?')
+    params.push(phone)
+  }
+  const name = String(me.name || '').replace(/\s+/g, '').trim()
+  if (name) {
+    conds.push("REPLACE(REPLACE(IFNULL(name,''),' ',''),'\\t','')=?")
+    params.push(name)
+  }
+  const [rows2] = await conn.query(
+    'SELECT id, name, phone, staff_id FROM coaches WHERE ' + conds.join(' OR '),
+    params
+  )
+  const sibs = rows2 && rows2.length ? rows2 : [me]
   const ids = Array.from(new Set(sibs.map((r) => Number(r.id)).filter(Boolean)))
   return { ids: ids.length ? ids : [id], name: me.name || '', phone: me.phone || '', staffId: me.staff_id ? String(me.staff_id) : '' }
 }
@@ -513,8 +520,8 @@ async function findCoachTimeConflict(conn, coachIdVal, dateYmd, timeStr, exclude
   if (!ids.length) return null
   const ph = ids.map(() => '?').join(',')
   const bookParams = [dateYmd, ...ids]
-  let bookSql = `SELECT id, time, venue_id, venue_name, court FROM bookings
-      WHERE date=? AND coach_id IN (${ph}) AND status='booked'`
+  let bookSql = `SELECT id, time, venue_id, venue_name, court, status FROM bookings
+      WHERE date=? AND coach_id IN (${ph}) AND status IN ('booked','locked','pending_pay')`
   if (excludeBookingId) {
     bookSql += ' AND id<>?'
     bookParams.push(excludeBookingId)
@@ -525,7 +532,10 @@ async function findCoachTimeConflict(conn, coachIdVal, dateYmd, timeStr, exclude
     const hit = coachBusy[0]
     const place = shortVenueName(hit.venue_name, hit.venue_id)
     const court = hit.court ? ' ' + hit.court : ''
-    return '该教练此时段已在' + (place || '其他门店') + court + '排课'
+    const where = (place || '其他门店') + court
+    if (String(hit.status) === 'locked') return '该教练此时段已在' + where + '锁场'
+    if (String(hit.status) === 'pending_pay') return '该教练此时段已在' + where + '有待支付预约'
+    return '该教练此时段已在' + where + '排课'
   }
   const [coachGroupAll] = await conn.query(
     `SELECT g.id, g.time, g.venue_id, v.name AS venue_name, g.court, g.name
@@ -2431,7 +2441,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261120a'
+const FN_VER = 'saveBooking-20261120b'
 
 function parseRuleObj(v) {
   if (!v) return null
@@ -3873,9 +3883,12 @@ exports.main = async (event) => {
           await conn.rollback()
           return { ok: false, msg: conflict, fnVer: FN_VER }
         }
+        const aliasIds = (await resolveCoachAliases(conn, selfId)).ids
+        const lockIds = aliasIds.length ? aliasIds : [selfId]
+        const lockPh = lockIds.map(() => '?').join(',')
         const [ownLocked] = await conn.query(
-          `SELECT id FROM bookings WHERE date=? AND coach_id=? AND status='locked' AND time=? LIMIT 1`,
-          [dateYmd, selfId, data.time]
+          `SELECT id FROM bookings WHERE date=? AND coach_id IN (${lockPh}) AND status='locked' AND time=? LIMIT 1`,
+          [dateYmd, ...lockIds, data.time]
         )
         // time overlap may not equal exact time; also scan busy rows
         for (const row of busy) {

@@ -558,6 +558,82 @@ function personIds(coach) {
   }
   return [String(coach)]
 }
+function normPersonName(n) {
+  return String(n || '').replace(/\s+/g, '').trim()
+}
+function normPersonPhone(p) {
+  return String(p || '').replace(/\D/g, '')
+}
+function mergeCoachesByPerson(list) {
+  const items = (list || []).filter(Boolean)
+  const parent = items.map((_, i) => i)
+  function find(i) {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]]
+      i = parent[i]
+    }
+    return i
+  }
+  function union(a, b) {
+    const pa = find(a)
+    const pb = find(b)
+    if (pa !== pb) parent[pa] = pb
+  }
+  const byStaff = {}
+  const byPhone = {}
+  const byName = {}
+  items.forEach((c, i) => {
+    const sid = String(c.staffId || c.staff_id || '').trim()
+    const phone = normPersonPhone(c.phone)
+    const name = normPersonName(c.name)
+    if (sid) {
+      if (byStaff[sid] != null) union(i, byStaff[sid])
+      else byStaff[sid] = i
+    }
+    if (phone) {
+      if (byPhone[phone] != null) union(i, byPhone[phone])
+      else byPhone[phone] = i
+    }
+    if (name) {
+      if (byName[name] != null) union(i, byName[name])
+      else byName[name] = i
+    }
+  })
+  const buckets = new Map()
+  items.forEach((c, i) => {
+    const root = find(i)
+    if (!buckets.has(root)) buckets.set(root, [])
+    buckets.get(root).push(c)
+  })
+  return Array.from(buckets.values()).map((group) => {
+    const first = group[0]
+    const seen = {}
+    const ids = []
+    const venues = []
+    let name = first.name || ''
+    let phone = first.phone || ''
+    let staffId = first.staffId || first.staff_id || ''
+    group.forEach((c) => {
+      const extra = Array.isArray(c.ids) && c.ids.length ? c.ids : [c._id || c.id]
+      extra.forEach((id) => {
+        const s = String(id || '')
+        if (s && !seen[s]) { seen[s] = 1; ids.push(s) }
+      })
+      if (Array.isArray(c.venues)) venues.push.apply(venues, c.venues)
+      if (!name && c.name) name = c.name
+      if (!phone && c.phone) phone = c.phone
+      if (!staffId && (c.staffId || c.staff_id)) staffId = c.staffId || c.staff_id
+    })
+    return Object.assign({}, first, {
+      _id: String(first._id || first.id || ids[0] || ''),
+      ids,
+      name,
+      phone,
+      staffId: staffId ? String(staffId) : '',
+      venues: venues.length ? venues : first.venues
+    })
+  }).sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh'))
+}
 function shortName(b) {
   if (!b) return ''
   return b.venueShort || shortVenue(b.venueName, b.venueId)
@@ -618,7 +694,7 @@ async function loadOutdoor() {
   try {
     const res = await post('/adminGetOutdoorSchedule', { date: currentDate.value })
     if (!res.ok) { ElMessage.error(res.msg || '加载失败'); return }
-    coaches.value = res.coaches || []
+    coaches.value = mergeCoachesByPerson(res.coaches || [])
     outdoorBookings.value = res.bookings || []
     occupied.value = res.occupied || []
     outdoorVenues.value = res.venues || []
@@ -652,7 +728,7 @@ async function loadAll() {
       post('/adminGetCourts', { venueId: venueId() }),
       post('/adminGetVenueHours', { venueId: venueId(), weekday: wd }).catch(() => ({ slots: [] }))
     ])
-    coaches.value = (cRes.list || []).filter((c) => c.status === 'active' || c.status === '在职' || !c.status)
+    coaches.value = mergeCoachesByPerson((cRes.list || []).filter((c) => c.status === 'active' || c.status === '在职' || !c.status))
     bookings.value = bRes.list || bRes.bookings || []
     groups.value = gRes.list || gRes.groupClasses || []
     courts.value = courtRes.list || []

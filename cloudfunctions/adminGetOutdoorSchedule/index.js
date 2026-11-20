@@ -12,7 +12,7 @@ const pool = mysql.createPool({
   dateStrings: true
 })
 
-const FN_VER = 'outdoorSched-20261116b'
+const FN_VER = 'outdoorSched-20261120a'
 
 const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
@@ -85,11 +85,62 @@ function mapBooking(r) {
   }
 }
 
+function normPersonName(n) {
+  return String(n || '').replace(/\s+/g, '').trim()
+}
+function normPersonPhone(p) {
+  return String(p || '').replace(/\D/g, '')
+}
 function personKey(c) {
-  if (c.staff_id) return 'staff:' + String(c.staff_id)
-  const phone = String(c.phone || '').trim()
+  const sid = c.staff_id ? String(c.staff_id).trim() : ''
+  if (sid) return 'staff:' + sid
+  const phone = normPersonPhone(c.phone)
   if (phone) return 'phone:' + phone
+  const name = normPersonName(c.name)
+  if (name) return 'name:' + name
   return 'id:' + String(c.id)
+}
+function mergeCoachGroups(items) {
+  const parent = items.map((_, i) => i)
+  function find(i) {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]]
+      i = parent[i]
+    }
+    return i
+  }
+  function union(a, b) {
+    const pa = find(a)
+    const pb = find(b)
+    if (pa !== pb) parent[pa] = pb
+  }
+  const byStaff = new Map()
+  const byPhone = new Map()
+  const byName = new Map()
+  items.forEach((r, i) => {
+    const sid = r.staff_id ? String(r.staff_id).trim() : ''
+    const phone = normPersonPhone(r.phone)
+    const name = normPersonName(r.name)
+    if (sid) {
+      if (byStaff.has(sid)) union(i, byStaff.get(sid))
+      else byStaff.set(sid, i)
+    }
+    if (phone) {
+      if (byPhone.has(phone)) union(i, byPhone.get(phone))
+      else byPhone.set(phone, i)
+    }
+    if (name) {
+      if (byName.has(name)) union(i, byName.get(name))
+      else byName.set(name, i)
+    }
+  })
+  const buckets = new Map()
+  items.forEach((r, i) => {
+    const root = find(i)
+    if (!buckets.has(root)) buckets.set(root, [])
+    buckets.get(root).push(r)
+  })
+  return Array.from(buckets.values())
 }
 
 function isActiveCoach(status) {
@@ -137,34 +188,33 @@ exports.main = async (event) => {
       venueIds
     )
 
-    const groups = new Map()
-    for (const r of (coachRows || [])) {
-      if (!isActiveCoach(r.status)) continue
-      const key = personKey(r)
-      if (!groups.has(key)) {
-        groups.set(key, {
-          _id: String(r.id),
-          ids: [],
-          name: r.name || '',
-          phone: r.phone || '',
-          staffId: r.staff_id ? String(r.staff_id) : '',
-          venues: []
-        })
+    const activeRows = (coachRows || []).filter((r) => isActiveCoach(r.status))
+    const coaches = mergeCoachGroups(activeRows).map((rows) => {
+      const first = rows[0]
+      const g = {
+        _id: String(first.id),
+        ids: [],
+        name: first.name || '',
+        phone: first.phone || '',
+        staffId: first.staff_id ? String(first.staff_id) : '',
+        venues: []
       }
-      const g = groups.get(key)
-      const cid = String(r.id)
-      if (g.ids.indexOf(cid) < 0) g.ids.push(cid)
-      const vmeta = venues.find((v) => v.id === r.venue_id)
-      g.venues.push({
-        id: r.venue_id,
-        name: vmeta ? vmeta.name : (r.venue_id || ''),
-        shortName: vmeta ? vmeta.shortName : shortVenueName('', r.venue_id),
-        coachId: cid
+      rows.forEach((r) => {
+        const cid = String(r.id)
+        if (g.ids.indexOf(cid) < 0) g.ids.push(cid)
+        const vmeta = venues.find((v) => v.id === r.venue_id)
+        g.venues.push({
+          id: r.venue_id,
+          name: vmeta ? vmeta.name : (r.venue_id || ''),
+          shortName: vmeta ? vmeta.shortName : shortVenueName('', r.venue_id),
+          coachId: cid
+        })
+        if (!g.name && r.name) g.name = r.name
+        if (!g.phone && r.phone) g.phone = r.phone
+        if (!g.staffId && r.staff_id) g.staffId = String(r.staff_id)
       })
-      if (!g.name && r.name) g.name = r.name
-      if (!g.phone && r.phone) g.phone = r.phone
-    }
-    const coaches = Array.from(groups.values()).sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'))
+      return g
+    }).sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'))
 
     const allCoachIds = []
     coaches.forEach((c) => c.ids.forEach((id) => allCoachIds.push(id)))

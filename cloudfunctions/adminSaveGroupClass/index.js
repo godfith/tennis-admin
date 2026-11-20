@@ -6,7 +6,7 @@ const { loadNextFixedVenue } = require('./nextFixedVenue')
 
 
 const adminRole = require('./adminRole')
-const FN_VER = 'saveGroupClass-20261120d'
+const FN_VER = 'saveGroupClass-20261120e'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -137,6 +137,40 @@ async function resolveCourtName(venueId, court) {
   return raw
 }
 
+
+async function resolveCoachAliasIds(coachIdVal) {
+  const id = Number(coachIdVal)
+  if (!id) return []
+  const [rows] = await pool.query(
+    'SELECT id, name, phone, staff_id FROM coaches WHERE id=? LIMIT 1',
+    [id]
+  )
+  const me = rows && rows[0]
+  if (!me) return [id]
+  const conds = ['id=?']
+  const params = [id]
+  if (me.staff_id) {
+    conds.push('staff_id=?')
+    params.push(me.staff_id)
+  }
+  const phone = String(me.phone || '').replace(/\D/g, '')
+  if (phone) {
+    conds.push('REPLACE(REPLACE(IFNULL(phone,"")," ",""),"-","")=?')
+    params.push(phone)
+  }
+  const name = String(me.name || '').replace(/\s+/g, '').trim()
+  if (name) {
+    conds.push("REPLACE(REPLACE(IFNULL(name,''),' ',''),'\\t','')=?")
+    params.push(name)
+  }
+  const [sibs] = await pool.query(
+    'SELECT id FROM coaches WHERE ' + conds.join(' OR '),
+    params
+  )
+  const ids = Array.from(new Set((sibs || []).map((r) => Number(r.id)).filter(Boolean)))
+  return ids.length ? ids : [id]
+}
+
 async function checkConflict(data, excludeId) {
   const courtNorm = normCourt(data.court)
   const courtName = data.courtName || data.court
@@ -156,12 +190,14 @@ async function checkConflict(data, excludeId) {
   }
 
   if (data.coachId) {
+    const aliasIds = await resolveCoachAliasIds(data.coachId)
+    const ph = aliasIds.map(() => '?').join(',')
     const [bCoach] = await pool.query(
       `SELECT id FROM bookings
-        WHERE venue_id=? AND date=? AND time=? AND coach_id=?
-          AND status IN ('booked','locked')
+        WHERE date=? AND time=? AND coach_id IN (${ph})
+          AND status IN ('booked','locked','pending_pay')
         LIMIT 1`,
-      [data.venueId, data.date, data.time, data.coachId]
+      [data.date, data.time, ...aliasIds]
     )
     if (bCoach.length) return '该时段教练已有预约，无法排团课'
   }
@@ -180,9 +216,11 @@ async function checkConflict(data, excludeId) {
   if (gCourt.length) return '该时段场地已有团课'
 
   if (data.coachId) {
+    const aliasIds = await resolveCoachAliasIds(data.coachId)
+    const ph = aliasIds.map(() => '?').join(',')
     let sql2 = `SELECT id FROM group_classes
-      WHERE venue_id=? AND date=? AND time=? AND coach_id=? AND status!='cancelled'`
-    const p2 = [data.venueId, data.date, data.time, data.coachId]
+      WHERE date=? AND time=? AND coach_id IN (${ph}) AND status!='cancelled'`
+    const p2 = [data.date, data.time, ...aliasIds]
     if (excludeId) {
       sql2 += ' AND id<>?'
       p2.push(excludeId)
