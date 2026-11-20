@@ -7,6 +7,10 @@ const settingsLib = require('./groupClassSettings')
 const { loadNextFixedVenue } = require('./nextFixedVenue')
 const venueBookingRule = require('./venueBookingRule')
 const coachActions = require('./coachActions')
+const mall = require('./cardMall')
+const cardRefund = require('./cardRefund')
+const bannerLink = require('./bannerLink')
+const adminRole = require('./adminRole')
 let cloud = null
 try {
   cloud = require('wx-server-sdk')
@@ -22,6 +26,36 @@ const pool = mysql.createPool({
   connectionLimit: 5,
   connectTimeout: 10000
 })
+async function refundCourtPayViaPay(payload) {
+  if (!cloud || !cloud.callFunction) {
+    return { ok: false, msg: '退款服务不可用（请安装/配置 wx-server-sdk，或在 pay 云函数手动退款）' }
+  }
+  try {
+    const res = await cloud.callFunction({
+      name: 'pay',
+      data: Object.assign({ action: 'refundCourtPay' }, payload || {})
+    })
+    return (res && res.result) || { ok: false, msg: '退款无响应' }
+  } catch (e) {
+    return { ok: false, msg: (e && e.message) || '退款调用失败' }
+  }
+}
+
+async function refundCardPayViaPay(payload) {
+  if (!cloud || !cloud.callFunction) {
+    return { ok: false, msg: '退款服务不可用，请稍后重试' }
+  }
+  try {
+    const res = await cloud.callFunction({
+      name: 'pay',
+      data: Object.assign({ action: 'refundCardPay', skipLedger: true }, payload || {})
+    })
+    return (res && res.result) || { ok: false, msg: '退款无响应' }
+  } catch (e) {
+    return { ok: false, msg: (e && e.message) || '退款调用失败' }
+  }
+}
+
 async function deductStoredCards(conn, userId, amount) {
   let left = Number(amount) || 0
   if (!userId || left <= 0) return 0
@@ -743,7 +777,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261120b'
+const FN_VER = 'userApi-20261120d'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -853,6 +887,7 @@ exports.main = async (rawEvent) => {
         }
         for (const g of classes) {
           if (used[String(g.id)]) continue
+          if (!settingsLib.isVisibleCalendarClass(g)) continue
           const extraG = settingsLib.mapClassExtra(g, actSettings, actNow)
           list.push({
             id: 'gc-' + g.id,
@@ -862,20 +897,50 @@ exports.main = async (rawEvent) => {
             time: g.time,
             venue: g.venue_name || '',
             venueId: g.venue_id || '',
+            venueShort: settingsLib.venueShortName(g.venue_name, g.venue_id),
             status: g.status || 'open',
             groupClassId: String(g.id),
             classType: extraG.classType,
             classTypeLabel: extraG.classTypeLabel,
             theme: extraG.theme,
+            courseContentId: extraG.courseContentId,
+            courseContentName: extraG.courseContentName,
+            coachName: g.coach_name || '',
+            enrolled: Number(g.enrolled) || 0,
+            capacity: Number(g.capacity) || 0,
             enrollOpen: extraG.enrollOpen,
             enrollClosedReason: extraG.enrollClosedReason
           })
         }
-        list.sort(function (a, b) {
+        // drop cancelled group activities copied from activities table
+        const visible = list.filter(function (a) {
+          if (a.type === '团课' || a.groupClassId) {
+            return settingsLib.isVisibleCalendarClass(a)
+          }
+          return true
+        })
+        visible.sort(function (a, b) {
           if (a.date !== b.date) return String(a.date).localeCompare(String(b.date))
           return String(a.time || '').localeCompare(String(b.time || ''))
         })
-        return { ok: true, list, fnVer: FN_VER }
+        const today = settingsLib.todayYmd(actNow)
+        let hasUpcomingGroupClass = visible.some(function (a) {
+          return (a.type === '团课' || a.groupClassId) && String(a.date || '') >= today
+        })
+        if (!hasUpcomingGroupClass) {
+          try {
+            const [up] = await pool.query(
+              `SELECT id, status, date FROM group_classes
+                WHERE date >= ?
+                ORDER BY date ASC, id ASC
+                LIMIT 40`,
+              [today]
+            )
+            hasUpcomingGroupClass = (up || []).some((row) => settingsLib.isVisibleCalendarClass(row))
+          } catch (e) {}
+        }
+        const calendar = settingsLib.buildCalendarDays(classes, actSettings)
+        return { ok: true, list: visible, hasUpcomingGroupClass, calendar, fnVer: FN_VER }
       } catch (e) {
         return { ok: true, list: [], fnVer: FN_VER }
       }
@@ -883,7 +948,18 @@ exports.main = async (rawEvent) => {
     if (action === 'getBanners') {
       try {
         const [rows] = await pool.query("SELECT image, title, link FROM banners WHERE status='active' ORDER BY sort_order, id")
-        return { ok: true, list: rows }
+        const list = (rows || []).map((r) => {
+          let link = bannerLink.normalizeBannerLink(r.link || '')
+          if (!link) link = bannerLink.defaultLinkForBanner(r) || ''
+          const nav = bannerLink.bannerNavType(link)
+          return {
+            image: r.image,
+            title: r.title || '',
+            link: nav.path,
+            navMode: nav.mode
+          }
+        })
+        return { ok: true, list, fnVer: FN_VER }
       } catch (e) {
         return { ok: true, list: [] }
       }
@@ -1782,13 +1858,38 @@ exports.main = async (rawEvent) => {
         venueId: r.venue_id || '',
         venueName: r.venue_name || '',
         timeRule: timeRule || {},
-        courtTypes: timeRule && Array.isArray(timeRule.courtTypes) ? timeRule.courtTypes : undefined
+        courtTypes: timeRule && Array.isArray(timeRule.courtTypes) ? timeRule.courtTypes : undefined,
+        templateId: r.template_id ? String(r.template_id) : '',
+        payOrderId: mall.parsePayOrderIdFromCard(r) ? String(mall.parsePayOrderIdFromCard(r)) : '',
+        paidAmount: mall.paidAmountOfCard(r),
+        canRequestRefund: mall.hasPayOrder(r) && !['refunded', 'deleted'].includes(String(r.status || '').toLowerCase()),
+        refundStatus: r.refund_status || ''
       }
       }).filter((c) => {
         // 小程序持卡页不展示停用/已退卡；过期、已用完仍返回。后台看全部卡走 admin 接口，不受影响。
         const s = String(c.status || '').toLowerCase()
         return s !== 'disabled' && s !== 'refunded'
       })
+      try {
+        const ids = list.map((c) => c._id).filter(Boolean)
+        if (ids.length) {
+          const [reqs] = await pool.query(
+            `SELECT card_id, status FROM card_refund_requests
+              WHERE card_id IN (${ids.map(() => '?').join(',')})
+                AND status IN ('pending','refunding','confirmed')
+              ORDER BY id DESC`,
+            ids
+          )
+          const latest = {}
+          ;(reqs || []).forEach((r) => {
+            const id = String(r.card_id)
+            if (!latest[id]) latest[id] = r.status
+          })
+          list.forEach((c) => {
+            if (latest[c._id]) c.refundStatus = latest[c._id]
+          })
+        }
+      } catch (e) {}
       return { ok: true, list, fnVer: FN_VER }
     }
     if (action === 'getGroupClasses') {
@@ -2044,6 +2145,12 @@ exports.main = async (rawEvent) => {
           await conn.rollback()
           return { ok: false, msg: ruleMsg, fnVer: FN_VER }
         }
+        const content = settingsLib.resolveClassCourseContent(gc, enrollSettings)
+        const bind = settingsLib.cardAllowedForCourseContent(card, content)
+        if (!bind.ok) {
+          await conn.rollback()
+          return { ok: false, msg: bind.msg, fnVer: FN_VER }
+        }
         const enrollAmt = cardUnit(card)
         const [dec] = await conn.query(
           `UPDATE member_cards
@@ -2234,6 +2341,144 @@ exports.main = async (rawEvent) => {
     if (action === 'coachBookPrivate' || action === 'coachSaveBooking' || action === 'bookPrivateLesson') {
       return { ok: false, msg: '教练不能代约私教课或为他人预约', fnVer: FN_VER }
     }
+
+    if (action === 'getMallProducts') {
+      try {
+        const [rows] = await pool.query(
+          `SELECT * FROM card_templates WHERE type='group' AND IFNULL(status,'active') IN ('active','启用','') ORDER BY id ASC`
+        )
+        const list = (rows || []).filter((r) => mall.isMallListed(r)).map((r) => ({
+          id: String(r.id),
+          templateId: String(r.id),
+          name: r.name,
+          desc: r.description || '',
+          detail: r.description || r.remark || '',
+          price: mall.templatePriceYuan(r),
+          totalTimes: Number(r.total_times) || 0,
+          type: r.type,
+          status: r.status || 'active'
+        }))
+        return { ok: true, list, fnVer: FN_VER }
+      } catch (e) {
+        return { ok: false, msg: e.message || '商城商品读取失败', list: [], fnVer: FN_VER }
+      }
+    }
+
+    if (action === 'getGroupClassCalendar') {
+      const start = event.startDate || event.start || ''
+      const end = event.endDate || event.end || ''
+      try {
+        try { await autoCancelDueGroupClasses(pool, { operatorName: '系统' }) } catch (e) {}
+        const settings = await settingsLib.loadSettings(pool)
+        let sql = `SELECT g.*, v.name AS venue_name
+                     FROM group_classes g
+                     LEFT JOIN venues v ON CAST(v.id AS CHAR) = CAST(g.venue_id AS CHAR)
+                    WHERE 1=1`
+        const params = []
+        if (start) { sql += ' AND g.date >= ?'; params.push(start) }
+        if (end) { sql += ' AND g.date <= ?'; params.push(end) }
+        sql += ' ORDER BY g.date, g.time, g.id'
+        let classes = []
+        try {
+          const [gr] = await pool.query(sql, params)
+          classes = gr || []
+        } catch (e) {
+          classes = []
+        }
+        const calendar = settingsLib.buildCalendarDays(classes, settings)
+        const today = settingsLib.todayYmd(new Date())
+        const hasUpcomingGroupClass = Object.keys(calendar.days || {}).some((d) => d >= today)
+        return { ok: true, calendar, hasUpcomingGroupClass, settings, fnVer: FN_VER }
+      } catch (e) {
+        return { ok: true, calendar: { days: {}, hasUpcoming: false, rotationVenueIds: [] }, hasUpcomingGroupClass: false, fnVer: FN_VER }
+      }
+    }
+
+    if (action === 'requestCardRefund') {
+      const cardId = event.cardId || event.id
+      if (!cardId) return { ok: false, msg: '缺少卡号', fnVer: FN_VER }
+      let userId = null
+      if (event.userId != null && /^\d+$/.test(String(event.userId).trim())) userId = Number(event.userId)
+      userId = await resolveUserId(pool, userId, openid, event.phone)
+      const [rows] = await pool.query('SELECT * FROM member_cards WHERE id=? LIMIT 1', [cardId])
+      const card = rows[0]
+      if (!card) return { ok: false, msg: '会员卡不存在', fnVer: FN_VER }
+      if (card.status === 'deleted') return { ok: false, msg: '这张卡已经删了', fnVer: FN_VER }
+      if (card.status === 'refunded') return { ok: false, msg: '已退卡', fnVer: FN_VER }
+      const ownerOk = (userId && Number(card.user_id) === Number(userId)) ||
+        (openid && card.openid && String(card.openid) === String(openid))
+      if (!ownerOk) return { ok: false, msg: '只能申请退自己的卡', fnVer: FN_VER }
+      if (!mall.hasPayOrder(card)) {
+        return { ok: false, msg: '这张卡不是线上微信支付购买，请到前台办理退卡', fnVer: FN_VER }
+      }
+      const payOrderId = mall.parsePayOrderIdFromCard(card)
+      const statusBefore = card.status
+      try {
+        const [exist] = await pool.query(
+          `SELECT id, status FROM card_refund_requests
+            WHERE card_id=? AND status IN ('pending','refunding') ORDER BY id DESC LIMIT 1`,
+          [cardId]
+        )
+        if (exist && exist[0]) {
+          return {
+            ok: true,
+            already: true,
+            requestId: String(exist[0].id),
+            cardStatus: statusBefore,
+            msg: '已提交退款申请，请等待管理员确认',
+            fnVer: FN_VER
+          }
+        }
+        const [ins] = await pool.query(
+          `INSERT INTO card_refund_requests
+            (card_id, user_id, openid, pay_order_id, status, remaining_times, total_times,
+             paid_amount, reason, requested_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, NOW(), NOW(), NOW())`,
+          [
+            card.id,
+            userId,
+            openid || card.openid || '',
+            payOrderId || null,
+            Number(card.remaining_times) || 0,
+            Number(card.total_times) || 0,
+            mall.paidAmountOfCard(card),
+            String(event.reason || '用户申请退款').slice(0, 255)
+          ]
+        )
+        const [after] = await pool.query('SELECT status FROM member_cards WHERE id=? LIMIT 1', [card.id])
+        return {
+          ok: true,
+          requestId: String(ins.insertId),
+          cardStatus: (after[0] && after[0].status) || statusBefore,
+          msg: '已提交退款申请，前台报备后由管理员确认才会退回微信',
+          fnVer: FN_VER
+        }
+      } catch (e) {
+        const msg = String((e && e.message) || '')
+        if (msg.indexOf('card_refund_requests') >= 0 || msg.indexOf("doesn't exist") >= 0) {
+          return { ok: false, msg: '退款申请功能尚未开通，请先执行预览/应用 SQL 创建申请表', fnVer: FN_VER }
+        }
+        return { ok: false, msg: e.message || '提交失败', fnVer: FN_VER }
+      }
+    }
+
+    if (action === 'getMyRefundRequests') {
+      try {
+        let userId = null
+        if (event.userId != null && /^\d+$/.test(String(event.userId).trim())) userId = Number(event.userId)
+        userId = await resolveUserId(pool, userId, openid, event.phone)
+        const [rows] = await pool.query(
+          `SELECT * FROM card_refund_requests
+            WHERE (user_id=? OR (? <> '' AND openid=?))
+            ORDER BY id DESC LIMIT 50`,
+          [userId || 0, openid || '', openid || '']
+        )
+        return { ok: true, list: rows || [], fnVer: FN_VER }
+      } catch (e) {
+        return { ok: true, list: [], fnVer: FN_VER }
+      }
+    }
+
     return { ok: false, msg: '未知 action', fnVer: FN_VER }
   } catch (e) {
     console.error(e)

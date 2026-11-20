@@ -1,7 +1,9 @@
 const crypto = require('crypto')
 const mysql = require('mysql2/promise')
 
-const PAYNOTIFY_FN_VER = 'payNotify-20261108a'
+const mall = require('./cardMall')
+const cardPayFulfill = require('./cardPayFulfill')
+const PAYNOTIFY_FN_VER = 'payNotify-20261120a'
 const BUSY_SQL = "('booked','locked','pending_pay')"
 
 function normCourt(c) {
@@ -165,6 +167,9 @@ async function writeBookingLog(conn, o) {
 
 async function fulfillPaidOrder(conn, o) {
   if (!o || !o.id) return { ok: false }
+  if (mall.isCardPayOrder(o)) {
+    return await cardPayFulfill.fulfillCardPayOrder(conn, o, { from: 'notify' })
+  }
   const amt = Math.round(Number(o.amount_fen) || 0) / 100
   const courtNorm = normCourt(o.court)
   const courtName = (await resolveCourtName(conn, o.venue_id, o.court)) || o.court

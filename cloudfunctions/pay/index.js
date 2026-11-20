@@ -18,7 +18,9 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
-const PAY_FN_VER = 'pay-20261116c'
+const mall = require('./cardMall')
+const cardPayFulfill = require('./cardPayFulfill')
+const PAY_FN_VER = 'pay-20261120a'
 const PENDING_TTL_MIN = 30
 const BUSY_SQL = "('booked','locked','pending_pay')"
 
@@ -443,13 +445,20 @@ async function refundPaidOrder(conn, o, opts) {
   }
   const mch = mchOf(o.venue_id)
   if (!mch) return { ok: false, msg: '该场馆未配置商户号', fnVer: PAY_FN_VER }
-  const outRefundNo = 'RF' + String(o.out_trade_no || o.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 30)
   const amountFen = Number(o.amount_fen) || 0
+  const refundFen = Number(opts.refundFen != null ? opts.refundFen : amountFen) || 0
+  if (!refundFen || refundFen < 1) {
+    return { ok: false, msg: '退款金额无效', fnVer: PAY_FN_VER }
+  }
+  if (refundFen > amountFen) {
+    return { ok: false, msg: '退款金额不能大于实付', fnVer: PAY_FN_VER }
+  }
+  const outRefundNo = opts.outRefundNo || ('RF' + String(o.out_trade_no || o.id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 30))
   const wx = await refundWxOrder(mch, {
     outTradeNo: o.out_trade_no,
     transactionId: o.transaction_id || '',
     amountFen,
-    refundFen: amountFen,
+    refundFen,
     outRefundNo,
     reason: opts.reason || '取消订场退款'
   })
@@ -464,16 +473,19 @@ async function refundPaidOrder(conn, o, opts) {
       WHERE id=? AND status IN ('paid','refunded')`,
     [outRefundNo, o.id]
   )
-  try {
-    await ensureLedgerCourtRefund(conn, o, o.booking_id || opts.bookingId || null, outRefundNo)
-  } catch (e) {
-    console.warn('court_refund ledger', e.message || e)
+  if (!opts.skipLedger) {
+    try {
+      await ensureLedgerCourtRefund(conn, o, o.booking_id || opts.bookingId || null, outRefundNo)
+    } catch (e) {
+      console.warn('court_refund ledger', e.message || e)
+    }
   }
   return {
     ok: true,
     already: !!wx.already,
     outRefundNo,
     refundId: wx.refundId || '',
+    refundFen,
     fnVer: PAY_FN_VER
   }
 }
@@ -537,6 +549,9 @@ async function writeBookingLog(conn, o, bookingId) {
 async function fulfillPaidOrder(conn, o, opts) {
   opts = opts || {}
   if (!o || !o.id) return { ok: false, msg: '无订单' }
+  if (mall.isCardPayOrder(o)) {
+    return await cardPayFulfill.fulfillCardPayOrder(conn, o, opts)
+  }
   const amt = Math.round(Number(o.amount_fen) || 0) / 100
   const courtNorm = normCourt(o.court)
   const courtName = (await resolveCourtName(conn, o.venue_id, o.court)) || o.court
@@ -864,7 +879,9 @@ async function handleNotify(rawEvent) {
       const o = rows[0]
       if (o) {
         try {
-          slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+          if (!mall.isCardPayOrder(o)) {
+            slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+          }
         } catch (e) {
           console.warn('notify lock', e.message || e)
         }
@@ -911,7 +928,8 @@ exports.main = async (rawEvent) => {
     }
 
     const event = parseEvent(rawEvent)
-    const action = event.action || 'createCourtPay'
+    let action = event.action || 'createCourtPay'
+    if (action === 'confirmCardPay' || action === 'confirmPay') action = 'confirmCourtPay'
 
     if (action === 'ver') {
       return { ok: true, fnVer: PAY_FN_VER }
@@ -964,7 +982,9 @@ exports.main = async (rawEvent) => {
           }
         }
         try {
-          slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+          if (!mall.isCardPayOrder(o)) {
+            slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+          }
         } catch (e) {
           return { ok: false, msg: e.message || '系统繁忙', fnVer: PAY_FN_VER }
         }
@@ -1041,7 +1061,9 @@ exports.main = async (rawEvent) => {
           return { ok: false, msg: '已支付不能取消', fnVer: PAY_FN_VER }
         }
         try {
-          slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+          if (!mall.isCardPayOrder(o)) {
+            slotLock = await acquireSlotLock(conn, o.venue_id, o.book_date, o.book_time, o.court)
+          }
         } catch (e) {}
         if (o.booking_id) {
           await conn.query(
@@ -1069,6 +1091,174 @@ exports.main = async (rawEvent) => {
       } finally {
         await releaseSlotLock(conn, slotLock)
         conn.release()
+      }
+    }
+
+    if (action === 'refundCardPay') {
+      const tradeNo = event.outTradeNo || event.out_trade_no || ''
+      const payOrderId = event.payOrderId || event.pay_order_id || ''
+      const conn = await pool.getConnection()
+      try {
+        let o = null
+        if (payOrderId) {
+          const [rows] = await conn.query('SELECT * FROM pay_orders WHERE id=? LIMIT 1', [payOrderId])
+          o = rows[0]
+        } else if (tradeNo) {
+          const [rows] = await conn.query('SELECT * FROM pay_orders WHERE out_trade_no=? LIMIT 1', [tradeNo])
+          o = rows[0]
+        }
+        if (!o) return { ok: false, msg: '支付订单不存在', fnVer: PAY_FN_VER }
+        if (!mall.isCardPayOrder(o)) {
+          return { ok: false, msg: '不是购卡订单，请走订场退款', fnVer: PAY_FN_VER }
+        }
+        const result = await refundPaidOrder(conn, o, {
+          reason: event.reason || '团课卡退款',
+          refundFen: event.refundFen,
+          outRefundNo: event.outRefundNo || event.out_refund_no || '',
+          skipLedger: event.skipLedger !== false
+        })
+        return result
+      } catch (e) {
+        console.error('refundCardPay', e)
+        return { ok: false, msg: e.message || '退款异常', fnVer: PAY_FN_VER }
+      } finally {
+        conn.release()
+      }
+    }
+
+    if (action === 'createCardPay') {
+      const picked = await cardPayFulfill.pickMchVenueId(event.venueId || '', mchOf, VENUE_MCH)
+      const venueId = picked.venueId || event.venueId || ''
+      const mch = picked.mch
+      if (!mch) {
+        return { ok: false, msg: '暂未开通线上支付，请到店购买或联系前台', fnVer: PAY_FN_VER }
+      }
+      if (!mch.keyPem || !mch.apiV3Key) {
+        return { ok: false, msg: '支付证书未配置，请联系管理员', fnVer: PAY_FN_VER }
+      }
+      let openid = ''
+      try {
+        if (cloud && cloud.getWXContext) {
+          const ctx = cloud.getWXContext()
+          if (ctx && ctx.OPENID) openid = ctx.OPENID
+        }
+      } catch (e) {}
+      if (!openid && event.code) openid = await code2openid(event.code)
+      if (!openid) openid = event.openid || ''
+      if (!openid) return { ok: false, msg: '请先登录', fnVer: PAY_FN_VER }
+
+      const templateId = event.templateId || event.template_id || ''
+      if (!templateId) return { ok: false, msg: '请选择要购买的团课卡', fnVer: PAY_FN_VER }
+      const [tplRows] = await pool.query('SELECT * FROM card_templates WHERE id=? LIMIT 1', [templateId])
+      const tpl = tplRows && tplRows[0]
+      if (!tpl) return { ok: false, msg: '卡模板不存在', fnVer: PAY_FN_VER }
+      if (String(tpl.type || '') !== 'group') return { ok: false, msg: '商城目前仅支持购买团课卡', fnVer: PAY_FN_VER }
+      const st = String(tpl.status || 'active').toLowerCase()
+      if (st && st !== 'active' && st !== '启用') return { ok: false, msg: '该卡已停用', fnVer: PAY_FN_VER }
+      if (!mall.isMallListed(tpl)) {
+        return { ok: false, msg: '该卡未在商城上架', fnVer: PAY_FN_VER }
+      }
+      const charged = mall.resolveChargeFen(tpl, event.amount)
+      if (!charged.ok) return { ok: false, msg: charged.msg, fnVer: PAY_FN_VER }
+      const amountFen = charged.amountFen
+      const no = outTradeNo()
+      let venueName = event.venueName || ''
+      if (!venueName && venueId) {
+        try {
+          const [vn] = await pool.query('SELECT name FROM venues WHERE id=? LIMIT 1', [venueId])
+          venueName = (vn[0] && vn[0].name) || ''
+        } catch (e) {}
+      }
+      const desc = mall.encodeCardPayDescription(tpl)
+      const today = cardPayFulfill.ymdNowLocal()
+      const userIdVal = event.userId != null && /^\d+$/.test(String(event.userId).trim())
+        ? Number(String(event.userId).trim())
+        : (event.userId || '')
+      let payOrderDbId = null
+      try {
+        const [insPay] = await pool.query(
+          `INSERT INTO pay_orders (
+            out_trade_no, venue_id, venue_name, court, book_date, book_time,
+            user_id, openid, user_name, phone, mchid, amount_fen, status, description,
+            biz_type, template_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'card', ?)`,
+          [
+            no, venueId, venueName, mall.CARD_PAY_COURT, today, '',
+            userIdVal, openid, event.userName || '', event.phone || '',
+            mch.mchid, amountFen, desc, tpl.id
+          ]
+        )
+        payOrderDbId = Number(insPay.insertId)
+      } catch (e) {
+        const msg = String((e && e.message) || '')
+        if (msg.indexOf('Unknown column') < 0) throw e
+        const [insPay] = await pool.query(
+          `INSERT INTO pay_orders (
+            out_trade_no, venue_id, venue_name, court, book_date, book_time,
+            user_id, openid, user_name, phone, mchid, amount_fen, status, description
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+          [
+            no, venueId, venueName, mall.CARD_PAY_COURT, today, '',
+            userIdVal, openid, event.userName || '', event.phone || '',
+            mch.mchid, amountFen, desc
+          ]
+        )
+        payOrderDbId = Number(insPay.insertId)
+      }
+
+      const privateKey = normalizePem(mch.keyPem)
+      const wxBodyObj = {
+        appid: APPID,
+        mchid: mch.mchid,
+        description: desc.slice(0, 127),
+        out_trade_no: no,
+        notify_url: NOTIFY_URL,
+        amount: { total: amountFen, currency: 'CNY' },
+        payer: { openid: openid }
+      }
+      const wxBody = JSON.stringify(wxBodyObj)
+      const urlPath = '/v3/pay/transactions/jsapi'
+      const authorization = authHeader(mch.mchid, mch.serial, privateKey, 'POST', urlPath, wxBody)
+      const wxRes = await requestJson(
+        'POST',
+        'api.mch.weixin.qq.com',
+        urlPath,
+        {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: authorization
+        },
+        wxBody
+      )
+      if (!wxRes.json || !wxRes.json.prepay_id) {
+        const msg = (wxRes.json && (wxRes.json.message || wxRes.json.detail && wxRes.json.detail.message)) || '微信下单失败'
+        console.error('jsapi card fail', wxRes.status, wxRes.raw)
+        try {
+          await pool.query(`UPDATE pay_orders SET status='failed', updated_at=NOW() WHERE out_trade_no=?`, [no])
+        } catch (e) {}
+        return { ok: false, msg: msg, fnVer: PAY_FN_VER }
+      }
+      const prepayId = wxRes.json.prepay_id
+      await pool.query(`UPDATE pay_orders SET prepay_id=?, updated_at=NOW() WHERE out_trade_no=?`, [prepayId, no])
+      const timeStamp = String(Math.floor(Date.now() / 1000))
+      const nonceStr = crypto.randomBytes(16).toString('hex')
+      const pkg = 'prepay_id=' + prepayId
+      const paySign = jsapiPaySign(APPID, timeStamp, nonceStr, pkg, privateKey)
+      return {
+        ok: true,
+        outTradeNo: no,
+        payOrderId: payOrderDbId ? String(payOrderDbId) : '',
+        templateId: String(tpl.id),
+        amountFen,
+        amountYuan: mall.money(amountFen / 100),
+        fnVer: PAY_FN_VER,
+        payParams: {
+          timeStamp,
+          nonceStr,
+          package: pkg,
+          signType: 'RSA',
+          paySign
+        }
       }
     }
 
