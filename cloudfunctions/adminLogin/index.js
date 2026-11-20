@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'adminLogin-20260926a'
+const FN_VER = 'adminLogin-20261120a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -35,16 +35,24 @@ exports.main = async (event) => {
     let rows
     try {
       const [r] = await pool.query(
-        'SELECT id, username, password, name, role, venue_id, venue_name, status, permissions FROM admins WHERE username=? OR name=? OR phone=? LIMIT 1',
+        'SELECT id, username, password, name, role, phone, venue_id, venue_name, status, permissions FROM admins WHERE username=? OR name=? OR phone=? LIMIT 1',
         [username, username, username]
       )
       rows = r
     } catch (e) {
-      const [r] = await pool.query(
-        'SELECT id, username, password, name, role, venue_id, venue_name, status FROM admins WHERE username=? OR name=? OR phone=? LIMIT 1',
-        [username, username, username]
-      )
-      rows = r
+      try {
+        const [r] = await pool.query(
+          'SELECT id, username, password, name, role, venue_id, venue_name, status, permissions FROM admins WHERE username=? OR name=? OR phone=? LIMIT 1',
+          [username, username, username]
+        )
+        rows = r
+      } catch (e2) {
+        const [r] = await pool.query(
+          'SELECT id, username, password, name, role, venue_id, venue_name, status FROM admins WHERE username=? OR name=? OR phone=? LIMIT 1',
+          [username, username, username]
+        )
+        rows = r
+      }
     }
     const u = rows[0]
     if (!u || String(u.password || '').trim() !== password) {
@@ -63,6 +71,7 @@ exports.main = async (event) => {
         username: u.username,
         name: u.name || u.username,
         role: u.role || 'front',
+        phone: u.phone || u.username || '',
         venueId: u.venue_id || '',
         venue_id: u.venue_id || '',
         venueName: u.venue_name || '',

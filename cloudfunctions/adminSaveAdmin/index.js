@@ -13,8 +13,8 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'saveAdmin-20261119a'
-const ROLES = ['admin', 'manager', 'front', 'service', 'partner']
+const FN_VER = 'saveAdmin-20261120a'
+const ROLES = ['admin', 'manager', 'front', 'service', 'partner', 'coach']
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -33,12 +33,20 @@ function normRole(r) {
   if (['partner', '联营', '联营人'].includes(s)) return 'partner'
   if (['service', '客服'].includes(s)) return 'service'
   if (['front', 'staff', '前台', '店员'].includes(s)) return 'front'
+  if (['coach', '教练'].includes(s)) return 'coach'
   return 'front'
 }
 
 function parsePerms(raw) {
   if (Array.isArray(raw)) return raw
   try { return JSON.parse(raw || '[]') } catch (e) { return [] }
+}
+
+
+async function trySetPhone(id, phone) {
+  const p = String(phone || '').trim()
+  if (!id || !p) return
+  try { await pool.query('UPDATE admins SET phone=? WHERE id=?', [p, id]) } catch (e) {}
 }
 
 function accountVenueIds(row) {
@@ -58,15 +66,20 @@ exports.main = async (event) => {
     const venueId = String(body.venueId || body.venue_id || '').trim()
 
     if (action === 'list') {
-      let sql = `SELECT id, username, name, role, venue_id, venue_name, status, created_at, permissions
+      let sql = `SELECT id, username, name, role, phone, venue_id, venue_name, status, created_at, permissions
                    FROM admins ORDER BY id DESC LIMIT 200`
       let rows
       try {
         const [r] = await pool.query(sql)
         rows = r
       } catch (e) {
-        const [r] = await pool.query(sql.replace(', permissions', ''))
-        rows = r
+        try {
+          const [r] = await pool.query(sql.replace(', permissions', ''))
+          rows = r
+        } catch (e2) {
+          const [r] = await pool.query(sql.replace(', phone', '').replace(', permissions', ''))
+          rows = r
+        }
       }
       if (venueId) {
         rows = (rows || []).filter((r) => {
@@ -82,6 +95,7 @@ exports.main = async (event) => {
           username: r.username,
           name: r.name,
           role: r.role,
+          phone: r.phone || '',
           venueId: r.venue_id,
           venueName: r.venue_name,
           status: r.status || 'active',
@@ -110,6 +124,7 @@ exports.main = async (event) => {
            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NOW())`,
           [username, password, name, role, venueId || null, venueName || null, JSON.stringify(body.perms)]
         )
+        await trySetPhone(res.insertId, body.phone || username)
         return { ok: true, fnVer: FN_VER, id: res.insertId }
       }
       const [res] = await pool.query(
@@ -117,6 +132,7 @@ exports.main = async (event) => {
          VALUES (?, ?, ?, ?, ?, ?, 'active', NOW())`,
         [username, password, name, role, venueId || null, venueName || null]
       )
+      await trySetPhone(res.insertId, body.phone || username)
       return { ok: true, fnVer: FN_VER, id: res.insertId }
     }
 
@@ -147,6 +163,7 @@ exports.main = async (event) => {
       if (!sets.length) return { ok: false, msg: '没有要改的内容', fnVer: FN_VER }
       args.push(id)
       await pool.query('UPDATE admins SET ' + sets.join(', ') + ' WHERE id=?', args)
+      if (body.phone != null) await trySetPhone(id, body.phone)
       return { ok: true, fnVer: FN_VER }
     }
 
