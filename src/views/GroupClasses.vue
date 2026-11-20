@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>团课排期</h2>
-        <p class="tip">全部门店共享课表 · 上课场地决定上课门店 · 可查看报名名单并加减学员</p>
+        <p class="tip">固定团课是门店按顺序轮流开课，时间由教练或店长每次开课时自定 · 全部门店共享课表 · 可查看报名名单并加减学员</p>
       </div>
       <div>
         <el-button :loading="loading" @click="loadData">刷新</el-button>
@@ -102,6 +102,7 @@
           <el-select v-model="form.venueId" placeholder="选择门店" style="width:100%" @change="onFormVenueChange">
             <el-option v-for="v in venues" :key="v.venueId" :label="v.name" :value="String(v.venueId)" />
           </el-select>
+          <div v-if="nextFixedHint" class="field-hint">{{ nextFixedHint }}</div>
         </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="form.name" placeholder="如：周三晚提高班" />
@@ -257,9 +258,9 @@
     </el-dialog>
 
     <el-dialog v-model="settingsVisible" title="团课设置" width="680px" destroy-on-close>
-      <p class="tip" style="margin-bottom:12px">轮转顺序、各店人数和报名规则都在这里改，不会写死在代码里。每家店的人数你自己填，1 个人也可以。循环周期等于参与轮转的门店数，没有休息日。</p>
+      <p class="tip" style="margin-bottom:12px">固定团课是门店按顺序轮流开课，时间由教练或店长每次开课时自定。可在下面批量勾选固定门店并调整轮转顺序；各店人数和报名规则都在这里改，不会写死在代码里。每家店的人数你自己填，1 个人也可以。</p>
       <el-form label-width="150px">
-        <el-form-item label="轮转起始日">
+        <el-form-item v-if="showBatchAndRotation" label="轮转起始日">
           <el-date-picker v-model="settingsForm.rotationStartDate" type="date" value-format="YYYY-MM-DD" />
           <div class="field-hint">用来对齐「第几天轮到哪家店」。改日期会平移后续排期对应的门店。</div>
         </el-form-item>
@@ -480,6 +481,7 @@ import { can as canAction, roleKind } from '../utils/auth.js'
 import { downloadExcelHtml } from '../utils/exportTable.js'
 import { operatorFields } from '../utils/operator.js'
 import { digits, isCoachRole, pickCoachBind, UNBOUND_MSG } from '../utils/coachPerm.js'
+import { emptyNextFixedVenue } from '../utils/nextFixedVenue.js'
 import {
   GROUP_CLASS_EXPORT_HEADERS,
   groupClassExportRows,
@@ -587,6 +589,7 @@ const settingsVisible = ref(false)
 const settingsSaving = ref(false)
 const settingsAddVenueId = ref('')
 const settingsForm = ref(emptySettings())
+const nextFixedVenueInfo = ref(emptyNextFixedVenue())
 const generateVisible = ref(false)
 const generating = ref(false)
 const generatePreviewing = ref(false)
@@ -851,6 +854,17 @@ function onClassTypeChange() {
   if (!form.value.name || form.value.name === '固定团课' || form.value.name === '自组团课') {
     form.value.name = form.value.classType === 'self' ? '自组团课' : '固定团课'
   }
+  if (form.value._id) return
+  if (form.value.classType === 'fixed') {
+    const prev = form.value.venueId
+    applyNextFixedVenueToForm()
+    if (form.value.venueId && form.value.venueId !== prev) {
+      form.value.court = ''
+      form.value.time = ''
+      loadHours(form.value.venueId)
+      loadMeta(form.value.venueId)
+    }
+  }
 }
 
 async function loadData() {
@@ -880,7 +894,12 @@ function emptyForm() {
   return {
     _id: '',
     name: '固定团课',
-    date: new Date().toISOString().slice(0, 10),
+    date: (function () {
+      const d = new Date()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return d.getFullYear() + '-' + m + '-' + day
+    })(),
     time: '',
     court: '',
     coachId: '',
@@ -897,18 +916,39 @@ function emptyForm() {
   }
 }
 
-function openAdd() {
+const nextFixedHint = computed(() => {
+  if (form.value._id || form.value.classType !== 'fixed') return ''
+  const nxt = nextFixedVenueInfo.value || {}
+  if (!nxt.venueId) return ''
+  const name = nxt.venueName || venueLabel(nxt.venueId) || nxt.venueId
+  return '下一站：' + name + '（可改）'
+})
+
+function applyNextFixedVenueToForm() {
+  const nxt = nextFixedVenueInfo.value || {}
+  if (!nxt.venueId) return
+  form.value.venueId = String(nxt.venueId)
+  form.value.venueName = nxt.venueName || venueLabel(nxt.venueId) || form.value.venueName || ''
+  applyVenueDefaults(form.value.venueId)
+}
+
+async function openAdd() {
   if (isCoachRole(roleKind())) {
     const self = boundCoach()
     if (!self) {
       ElMessage.warning(UNBOUND_MSG)
       return
     }
-    form.value = emptyForm()
-    form.value.coachId = self._id || self.id
-    form.value.coachName = self.name || ''
-  } else {
-    form.value = emptyForm()
+  }
+  await loadSettingsSilent()
+  form.value = emptyForm()
+  applyNextFixedVenueToForm()
+  if (isCoachRole(roleKind())) {
+    const self = boundCoach()
+    if (self) {
+      form.value.coachId = self._id || self.id
+      form.value.coachName = self.name || ''
+    }
   }
   visible.value = true
   const vid = form.value.venueId
@@ -1225,6 +1265,9 @@ async function loadSettingsSilent() {
           capacity: Number(x.capacity != null ? x.capacity : (x.maxCapacity != null ? x.maxCapacity : 4)) || 1
         }))
       })
+    }
+    if (result && result.ok && result.nextFixedVenue) {
+      nextFixedVenueInfo.value = Object.assign(emptyNextFixedVenue(), result.nextFixedVenue)
     }
   } catch (e) {}
 }

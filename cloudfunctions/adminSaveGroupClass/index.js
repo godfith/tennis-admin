@@ -2,9 +2,10 @@ const mysql = require('mysql2/promise')
 const settingsLib = require('./groupClassSettings')
 const coachPerm = require('./coachPerm')
 const coachBind = require('./coachBind')
+const { loadNextFixedVenue } = require('./nextFixedVenue')
 
 
-const FN_VER = 'saveGroupClass-20261120b'
+const FN_VER = 'saveGroupClass-20261120c'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -633,7 +634,14 @@ exports.main = async (event) => {
 
     if (action === 'getSettings') {
       const settings = await loadSettings(pool)
-      return { ok: true, settings, fnVer: FN_VER }
+      const next = await loadNextFixedVenue(pool, settings)
+      return { ok: true, settings, nextFixedVenue: next, fnVer: FN_VER }
+    }
+
+    if (action === 'nextFixedVenue') {
+      const settings = await loadSettings(pool)
+      const next = await loadNextFixedVenue(pool, settings)
+      return { ok: true, nextFixedVenue: next, fnVer: FN_VER }
     }
 
     if (action === 'saveSettings') {
