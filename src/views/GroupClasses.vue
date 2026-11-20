@@ -45,7 +45,7 @@
         </template>
       </el-table-column>
       <el-table-column label="主题" min-width="140">
-        <template #default="{ row }">{{ row.theme || '-' }}</template>
+        <template #default="{ row }">{{ row.courseContentName || row.theme || '-' }}</template>
       </el-table-column>
       <el-table-column prop="venueName" label="上课门店" width="160">
         <template #default="{ row }">
@@ -110,11 +110,14 @@
         <el-form-item label="类型" required>
           <el-radio-group v-model="form.classType" @change="onClassTypeChange">
             <el-radio-button value="fixed">固定团课</el-radio-button>
-            <el-radio-button value="self">自组团课</el-radio-button>
+            <el-radio-button v-if="canOpenSelf" value="self">自组团课</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="当日主题">
-          <el-input v-model="form.theme" placeholder="选填，如：发球与接发" maxlength="200" show-word-limit />
+        <el-form-item label="课程内容">
+          <el-select v-model="form.courseContentId" placeholder="选择课程内容" clearable filterable style="width:100%" @change="onCourseContentChange">
+            <el-option v-for="c in courseContents" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
+          <div class="field-hint">在团课设置里增删课程内容，并勾选可用于报名的卡模板。「正手球-进阶」可先留空入口。</div>
         </el-form-item>
         <el-form-item label="日期" required>
           <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" style="width:100%" />
@@ -279,9 +282,37 @@
           <div class="field-hint">生成排期时写入每节课。0 表示不自动取消；可随时改成 1 或其他数字。</div>
         </el-form-item>
       </el-form>
+      <div class="settings-block">
+        <div class="settings-head">
+          <span>课程内容（可增删，并勾选报名可用的卡）</span>
+          <el-button size="small" type="primary" plain @click="addCourseContent">新增内容</el-button>
+        </div>
+        <el-table :data="settingsForm.courseContents" border size="small" style="margin-bottom:16px">
+          <el-table-column label="名称" min-width="160">
+            <template #default="{ row }">
+              <el-input v-model="row.name" maxlength="80" />
+            </template>
+          </el-table-column>
+          <el-table-column label="报名可用卡模板" min-width="280">
+            <template #default="{ row }">
+              <el-checkbox-group v-model="row.templateIds">
+                <el-checkbox v-for="tpl in groupTemplates" :key="tpl.id" :value="String(tpl.id)" :label="String(tpl.id)">
+                  {{ tpl.name }}（¥{{ Number(tpl.price)||0 }}）
+                </el-checkbox>
+              </el-checkbox-group>
+              <div v-if="!groupTemplates.length" class="field-hint">暂未读到团课卡模板，请确认卡模板已创建。</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="" width="80">
+            <template #default="{ $index }">
+              <el-button link type="danger" @click="removeCourseContent($index)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
       <div class="settings-head">
-        <span>轮转门店（可调顺序）</span>
-        <el-select v-model="settingsAddVenueId" placeholder="增加门店" clearable filterable style="width:240px" @change="addRotationVenue">
+        <span>{{ canReorderRotation ? '轮转门店（可调顺序）' : '轮转门店（店长可改人数，顺序仅超管可调）' }}</span>
+        <el-select v-if="canReorderRotation" v-model="settingsAddVenueId" placeholder="增加门店" clearable filterable style="width:240px" @change="addRotationVenue">
           <el-option
             v-for="v in venuesNotInRotation"
             :key="v.venueId"
@@ -303,7 +334,7 @@
             <el-input-number v-model="row.capacity" :min="1" :max="999" size="small" />
           </template>
         </el-table-column>
-        <el-table-column label="排序" width="140">
+        <el-table-column v-if="canReorderRotation" label="排序" width="140">
           <template #default="{ $index }">
             <el-button link type="primary" :disabled="$index===0" @click="moveRotation($index,-1)">上移</el-button>
             <el-button link type="primary" :disabled="$index===settingsForm.rotationVenues.length-1" @click="moveRotation($index,1)">下移</el-button>
@@ -335,7 +366,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="类型" required>
-          <el-radio-group v-model="generateForm.classType">
+          <el-radio-group v-model="generateForm.classType" v-if="canOpenSelf">
             <el-radio-button value="fixed">固定团课</el-radio-button>
             <el-radio-button value="self">自组团课</el-radio-button>
           </el-radio-group>
@@ -545,12 +576,16 @@ const form = ref({
   _id: '', name: '', date: '', time: '', court: '',
   coachId: '', coachName: '', capacity: 6, open: true, remark: '',
   venueId: '', venueName: '', minEnrollment: 0, cancelBeforeHours: 2,
-  classType: 'fixed', theme: ''
+  classType: 'fixed', theme: '', courseContentId: ''
 })
 const filterType = ref('')
 // 老板口径：固定的是门店轮转，不是时间。批量排课/轮转生成先藏，需要时改 true。
 const showBatchAndRotation = false
 const canManageAll = computed(() => !isCoachRole(roleKind()) && canAction('editGroup'))
+const canOpenSelf = computed(() => !isCoachRole(roleKind()))
+const canReorderRotation = computed(() => roleKind() === 'admin')
+const groupTemplates = ref([])
+const courseContents = computed(() => (settingsForm.value.courseContents || []))
 const canPublishGroup = computed(() => canAction('editGroup'))
 const coachLocked = computed(() => isCoachRole(roleKind()) && !!boundCoach())
 function boundCoach() {
@@ -610,8 +645,26 @@ function emptySettings() {
     fixedOpenAnytime: true,
     selfOrganizeAdvanceDays: 2,
     defaultCancelBeforeHours: 2,
-    defaultMinEnrollment: 0
+    defaultMinEnrollment: 0,
+    courseContents: [
+      { id: 'forehand-basic', name: '正手球-基础', templateIds: [] },
+      { id: 'forehand-advanced', name: '正手球-进阶', templateIds: [] }
+    ]
   }
+}
+function newContentId() {
+  return 'cc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+}
+function addCourseContent() {
+  if (!settingsForm.value.courseContents) settingsForm.value.courseContents = []
+  settingsForm.value.courseContents.push({ id: newContentId(), name: '', templateIds: [] })
+}
+function removeCourseContent(index) {
+  settingsForm.value.courseContents = (settingsForm.value.courseContents || []).filter((_, i) => i !== index)
+}
+function onCourseContentChange() {
+  const hit = (settingsForm.value.courseContents || []).find((x) => x.id === form.value.courseContentId)
+  form.value.theme = hit ? hit.name : form.value.theme
 }
 function emptyGenerate() {
   return { range: [], time: '', classType: 'fixed', name: '', theme: '', coachId: '', coachName: '' }
@@ -973,7 +1026,8 @@ function openEdit(row) {
     minEnrollment: row.minEnrollment != null ? Number(row.minEnrollment) : 0,
     cancelBeforeHours: row.cancelBeforeHours != null ? Number(row.cancelBeforeHours) : 2,
     classType: row.classType === 'self' ? 'self' : 'fixed',
-    theme: row.theme || ''
+    theme: row.theme || '',
+    courseContentId: row.courseContentId || ''
   }
   visible.value = true
   loadHours(form.value.venueId)
@@ -1007,7 +1061,8 @@ async function save() {
       minEnrollment: form.value.minEnrollment || 0,
       cancelBeforeHours: form.value.cancelBeforeHours != null ? form.value.cancelBeforeHours : 2,
       classType: form.value.classType === 'self' ? 'self' : 'fixed',
-      theme: form.value.theme || ''
+      theme: form.value.theme || '',
+      courseContentId: form.value.courseContentId || ''
     }
     const result = form.value._id
       ? await post('/adminSaveGroupClass', { action: 'update', id: form.value._id, data })
@@ -1258,8 +1313,16 @@ async function submitAddMember() {
 async function loadSettingsSilent() {
   try {
     const result = await post('/adminSaveGroupClass', { action: 'getSettings' })
+    if (result && result.ok && result.groupTemplates) {
+      groupTemplates.value = result.groupTemplates || []
+    }
     if (result && result.ok && result.settings) {
       settingsForm.value = Object.assign(emptySettings(), result.settings, {
+        courseContents: (result.settings.courseContents || emptySettings().courseContents).map((x) => ({
+          id: x.id,
+          name: x.name,
+          templateIds: (x.templateIds || []).map((id) => String(id))
+        })),
         rotationVenues: (result.settings.rotationVenues || []).map((x) => ({
           venueId: String(x.venueId || ''),
           capacity: Number(x.capacity != null ? x.capacity : (x.maxCapacity != null ? x.maxCapacity : 4)) || 1
@@ -1324,7 +1387,12 @@ async function saveSettings() {
         fixedOpenAnytime: !!settingsForm.value.fixedOpenAnytime,
         selfOrganizeAdvanceDays: settingsForm.value.selfOrganizeAdvanceDays,
         defaultCancelBeforeHours: settingsForm.value.defaultCancelBeforeHours,
-        defaultMinEnrollment: settingsForm.value.defaultMinEnrollment
+        defaultMinEnrollment: settingsForm.value.defaultMinEnrollment,
+        courseContents: (settingsForm.value.courseContents || []).filter((x) => String(x.name || '').trim()).map((x) => ({
+          id: x.id,
+          name: String(x.name).trim(),
+          templateIds: (x.templateIds || []).map((id) => String(id))
+        }))
       }
     })
     if (!result.ok) {
@@ -1352,6 +1420,7 @@ function rotationPayload() {
     classType: generateForm.value.classType === 'self' ? 'self' : 'fixed',
     name: generateForm.value.name || '',
     theme: generateForm.value.theme || '',
+    courseContentId: generateForm.value.courseContentId || '',
     coachId: generateForm.value.coachId || '',
     coachName: generateForm.value.coachName || '',
     cancelBeforeHours: settingsForm.value.defaultCancelBeforeHours
@@ -1523,7 +1592,8 @@ function batchPayload() {
     minEnrollment: batchForm.value.minEnrollment || 0,
     cancelBeforeHours: batchForm.value.cancelBeforeHours != null ? batchForm.value.cancelBeforeHours : 2,
     classType: batchForm.value.classType === 'self' ? 'self' : 'fixed',
-    theme: batchForm.value.theme || ''
+    theme: batchForm.value.theme || '',
+    courseContentId: batchForm.value.courseContentId || ''
   }
 }
 

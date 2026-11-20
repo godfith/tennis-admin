@@ -84,6 +84,13 @@
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="商城上架" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.mallListed ? 'success' : 'info'" size="small">
+            {{ row.mallListed ? '已上架' : '未上架' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
@@ -129,7 +136,10 @@
           <div v-if="form._id" class="hint" style="margin-left:0">已发出的卡仍保留自己的类型，只影响以后新发的卡。</div>
         </el-form-item>
         <el-form-item v-if="form.type === 'group'" label="说明">
-          <span class="hint" style="margin-left:0">团课：时间由场馆排期，同一教练同一时段可带多名学员</span>
+          <span class="hint" style="margin-left:0">团课：时间由场馆排期，同一教练同一时段可带多名学员。小程序商城售价始终取上面的默认金额，改价后客人刷新即可看到，不用重新发布。</span>
+        </el-form-item>
+        <el-form-item v-if="form.type === 'group'" label="商城上架">
+          <el-switch v-model="form.mallListed" active-text="在小程序商城出售" inactive-text="不上架" />
         </el-form-item>
         <template v-if="isTimesLike(form.type)">
           <el-form-item label="总次数" required><el-input-number v-model="form.totalTimes" :min="1" /></el-form-item>
@@ -388,7 +398,7 @@ const emptyForm = () => ({
   _id: '', name: '', type: 'times', totalTimes: 10, durationDays: 30,
   timeRule: { mode: 'unlimited', rules: [emptyRule()], maxHoursPerDay: 0, dateRanges: [{ start: '', end: '', range: [] }], holidayKey: '', venueIds: [], courtTypes: [] },
   venueScope: 'all',
-  price: 0, activateMode: 'now', active: true, description: '', syncIssued: false
+  price: 0, activateMode: 'now', active: true, description: '', syncIssued: false, mallListed: false
 })
 const venueList = ref([])
 const holidayPresets = [
@@ -547,7 +557,8 @@ function openEdit(row) {
     description: row.description || '',
     activateMode: (row.timeRule && row.timeRule.activateMode) || 'now',
     price: Number(row.price) || 0,
-    syncIssued: false
+    syncIssued: false,
+    mallListed: !!row.mallListed
   }
   visible.value = true
 }
@@ -592,7 +603,8 @@ async function save() {
       maxHoursPerDay: Number(form.value.timeRule.maxHoursPerDay) || 0,
       timeRule: payloadRule,
       status: form.value.active ? 'active' : 'disabled',
-      description: form.value.description
+      description: form.value.description,
+      mallListed: !!form.value.mallListed
     }
     const result = form.value._id
       ? await post('/adminSaveCardTemplate', { action: 'update', id: form.value._id, syncIssued: !!form.value.syncIssued, data })

@@ -38,8 +38,14 @@
         <el-form-item label="标题">
           <el-input v-model="form.title" placeholder="选填" />
         </el-form-item>
-        <el-form-item label="跳转链接">
-          <el-input v-model="form.link" placeholder="选填，小程序页面路径" />
+        <el-form-item label="点击跳转">
+          <el-select v-model="form.link" placeholder="不跳转" clearable style="width:100%" allow-create filterable>
+            <el-option label="不跳转" value="" />
+            <el-option label="团课报名" value="/pages/group/group" />
+            <el-option label="商城" value="/pages/shop/shop" />
+            <el-option label="立即订场" value="/pages/booking/booking" />
+          </el-select>
+          <div style="color:#888;font-size:12px;margin-top:4px">团课海报请选「团课报名」。也可直接填小程序路径。</div>
         </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="form.sortOrder" :min="0" />
@@ -86,7 +92,9 @@ async function fetchList() {
   if (r.ok) list.value = r.list || []
 }
 function openEdit(row) {
-  form.value = row ? { id: row.id, image: row.image, title: row.title, link: row.link, sortOrder: row.sort_order, status: row.status } : { image: '', title: '', link: '', sortOrder: 0, status: 'active' }
+  let link = row ? (row.link || '') : ''
+  if (row && !link && String(row.title || '').indexOf('团课') >= 0) link = '/pages/group/group'
+  form.value = row ? { id: row.id, image: row.image, title: row.title, link, sortOrder: row.sort_order, status: row.status } : { image: '', title: '', link: '', sortOrder: 0, status: 'active' }
   visible.value = true
 }
 async function onFile(file) {
