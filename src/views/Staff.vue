@@ -35,8 +35,13 @@
       </el-table-column>
     </el-table>
 
-    <h3 class="sub">后台登录账号</h3>
-    <p class="tip">这些人可以用账号密码登录管理后台。超级管理员只能改自己已有账号，不要在这里再建超管。</p>
+    <div class="sub-row">
+      <div>
+        <h3 class="sub">后台登录账号</h3>
+        <p class="tip">这些人可以用账号密码登录管理后台。超级管理员只能改自己已有账号，不要在这里再建超管。给教练开通登录时，请使用与教练资料相同的手机号。</p>
+      </div>
+      <el-button type="primary" plain @click="openAddAdmin">新增登录账号</el-button>
+    </div>
     <el-table :data="admins" stripe border v-loading="adminLoading">
       <el-table-column prop="username" label="登录账号" min-width="120" />
       <el-table-column prop="name" label="显示名" min-width="100" />
@@ -93,17 +98,27 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="adminVisible" title="编辑登录账号" width="680px" destroy-on-close class="perm-dialog">
+    <el-dialog v-model="adminVisible" :title="adminForm._id ? '编辑登录账号' : '新增登录账号'" width="680px" destroy-on-close class="perm-dialog">
       <el-form label-width="100px">
-        <el-form-item label="登录账号"><el-input :model-value="adminForm.username" disabled /></el-form-item>
+        <el-form-item label="登录账号" required>
+          <el-input v-model="adminForm.username" :disabled="!!adminForm._id" placeholder="建议用教练/店员手机号" />
+        </el-form-item>
+        <el-form-item v-if="!adminForm._id" label="登录密码" required>
+          <el-input v-model="adminForm.password" type="password" show-password placeholder="至少 4 位" />
+        </el-form-item>
         <el-form-item label="显示名"><el-input v-model="adminForm.name" /></el-form-item>
+        <el-form-item label="手机号">
+          <el-input v-model="adminForm.phone" placeholder="教练请填与教练资料相同的手机号" />
+        </el-form-item>
         <el-form-item label="角色">
           <el-select v-model="adminForm.role" style="width: 100%" :disabled="adminForm.role === 'admin'" @change="onAdminRoleChange">
             <el-option label="前台 / 店员" value="front" />
             <el-option label="客服" value="service" />
             <el-option label="店长" value="manager" />
             <el-option label="联营人" value="partner" />
+            <el-option label="教练" value="coach" />
           </el-select>
+          <div v-if="adminForm.role === 'coach'" class="hint">教练默认只能进入「团课排期」「教练排课」：可发布自己的团课、锁自己的外场，不能代约私教课。请用与教练资料相同的手机号开通登录。</div>
         </el-form-item>
         <el-form-item label="可查看场馆">
           <el-checkbox-group v-model="adminForm.venueIds" class="venue-checks">
@@ -156,7 +171,7 @@ const saving = ref(false)
 const visible = ref(false)
 const adminVisible = ref(false)
 const adminSaving = ref(false)
-const adminForm = ref({ _id: '', username: '', name: '', role: 'front', password: '', perms: [], venueIds: [], homeVenueId: '' })
+const adminForm = ref({ _id: '', username: '', name: '', phone: '', role: 'front', password: '', perms: [], venueIds: [], homeVenueId: '' })
 const permMode = ref('default')
 const permGroups = PERM_GROUPS
 const venueOptions = ref([])
@@ -165,8 +180,8 @@ const venueName = ref(localStorage.getItem('venue_name') || '')
 const form = ref({ _id: '', name: '', phone: '', role: 'front', specialty: '', sort: 0, active: true, remark: '', openLogin: true, username: '', password: '' })
 const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
 function venueId() { return localStorage.getItem('venue_id') || '' }
-function roleLabel(r) { return { admin: '超管', front: '前台', service: '客服', manager: '店长', partner: '联营人', other: '其他' }[r] || r }
-function roleTag(r) { return { admin: 'danger', front: 'success', service: 'primary', manager: 'warning', partner: 'info', other: 'info' }[r] || 'info' }
+function roleLabel(r) { return { admin: '超管', front: '前台', service: '客服', manager: '店长', partner: '联营人', coach: '教练', other: '其他' }[r] || r }
+function roleTag(r) { return { admin: 'danger', front: 'success', service: 'primary', manager: 'warning', partner: 'info', coach: 'success', other: 'info' }[r] || 'info' }
 function pagePerms(perms) {
   return (perms || []).filter((p) => p && !String(p).startsWith('venue:'))
 }
@@ -321,6 +336,22 @@ async function onDelete(row) {
     loadData()
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || '失败') }
 }
+function openAddAdmin() {
+  if (!venueId()) { ElMessage.warning('请先选择场馆'); return }
+  permMode.value = 'default'
+  adminForm.value = {
+    _id: '',
+    username: '',
+    name: '',
+    phone: '',
+    role: 'coach',
+    password: '',
+    perms: defaultPermsForRole('coach'),
+    venueIds: venueId() ? [venueId()] : [],
+    homeVenueId: venueId() || ''
+  }
+  adminVisible.value = true
+}
 function openEditAdmin(row) {
   if (row.role === 'admin' || String(row.username).toLowerCase() === 'admin') {
     ElMessage.warning('超级管理员请在库里改，这里只改店员账号')
@@ -335,6 +366,7 @@ function openEditAdmin(row) {
     _id: row._id,
     username: row.username,
     name: row.name || '',
+    phone: row.phone || '',
     role: row.role || 'front',
     password: '',
     perms: custom ? pages.slice() : defaultPermsForRole(row.role || 'front'),
@@ -346,24 +378,35 @@ function openEditAdmin(row) {
 async function saveAdmin() {
   const venueIds = [...new Set((adminForm.value.venueIds || []).map(String).filter(Boolean))]
   if (!venueIds.length) { ElMessage.warning('请至少选择一个可查看的场馆'); return }
+  if (!adminForm.value._id) {
+    const user = (adminForm.value.username || adminForm.value.phone || '').trim()
+    if (!user) { ElMessage.warning('请填写登录账号或手机号'); return }
+    if (!adminForm.value.password || adminForm.value.password.length < 4) { ElMessage.warning('请设置至少 4 位密码'); return }
+  }
   adminSaving.value = true
   try {
     const pages = permMode.value === 'default' ? [] : pagePerms(adminForm.value.perms)
     const perms = pages.concat(venueIds.map((id) => 'venue:' + id))
     const homeId = venueIds.includes(adminForm.value.homeVenueId) ? adminForm.value.homeVenueId : venueIds[0]
     const home = venueOptions.value.find((v) => v.id === homeId)
-    const result = await post('/adminSaveAdmin', {
-      action: 'update',
-      id: adminForm.value._id,
+    const payload = {
       name: adminForm.value.name,
+      phone: (adminForm.value.phone || '').trim(),
       role: adminForm.value.role,
       password: adminForm.value.password || '',
       perms,
       venueId: homeId,
-      venueName: home ? home.name : (homeId === venueId() ? venueName.value : '')
-    })
+      venueName: home ? home.name : (homeId === venueId() ? venueName.value : ''),
+      operatorRole: localStorage.getItem('admin_role') || ''
+    }
+    const result = adminForm.value._id
+      ? await post('/adminSaveAdmin', Object.assign({ action: 'update', id: adminForm.value._id }, payload))
+      : await post('/adminSaveAdmin', Object.assign({
+          action: 'add',
+          username: (adminForm.value.username || adminForm.value.phone || '').trim()
+        }, payload))
     if (!result.ok) { ElMessage.error(result.msg || '保存失败'); return }
-    ElMessage.success('账号已更新')
+    ElMessage.success(adminForm.value._id ? '账号已更新' : '账号已创建')
     adminVisible.value = false
     loadAdmins()
   } catch (e) { ElMessage.error(e.message || '失败') }
@@ -399,7 +442,8 @@ onUnmounted(() => window.removeEventListener('venue-changed', loadData))
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
 h2 { margin: 0 0 4px; font-size: 20px; }
-.sub { margin: 28px 0 8px; font-size: 16px; }
+.sub-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-top: 20px; }
+.sub { margin: 8px 0; font-size: 16px; }
 .tip { margin: 0 0 12px; color: #888; font-size: 13px; }
 .filters { margin-bottom: 12px; }
 .hint { margin: 8px 0 0; color: #888; font-size: 12px; line-height: 1.5; }

@@ -54,6 +54,8 @@ async function onLogin() {
     localStorage.setItem('admin_token', admin._id || admin.id || '')
     localStorage.setItem('admin_name', admin.name || admin.username || '')
     localStorage.setItem('admin_role', admin.role || 'admin')
+    localStorage.setItem('admin_username', admin.username || '')
+    localStorage.setItem('admin_phone', admin.phone || admin.username || '')
     localStorage.setItem('admin_perms', JSON.stringify(admin.permissions || []))
     const perms = Array.isArray(admin.permissions) ? admin.permissions : []
     const fromPerms = perms.filter((p) => String(p).startsWith('venue:')).map((p) => String(p).slice(6)).filter(Boolean)

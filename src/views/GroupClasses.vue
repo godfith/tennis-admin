@@ -7,10 +7,11 @@
       </div>
       <div>
         <el-button :loading="loading" @click="loadData">刷新</el-button>
-        <el-button @click="openSettings">团课设置</el-button>
-        <el-button @click="openGenerate">生成轮转排期</el-button>
-        <el-button @click="openBatch">批量排课</el-button>
-        <el-button type="primary" @click="openAdd">新增团课</el-button>
+        <el-button type="success" plain :disabled="!list.length" @click="exportExcel">导出</el-button>
+        <el-button v-if="canManageAll" @click="openSettings">团课设置</el-button>
+        <el-button v-if="canManageAll" @click="openGenerate">生成轮转排期</el-button>
+        <el-button v-if="canManageAll" @click="openBatch">批量排课</el-button>
+        <el-button v-if="canPublishGroup" type="primary" @click="openAdd">新增团课</el-button>
       </div>
     </div>
 
@@ -80,12 +81,12 @@
       <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <el-button link type="success" @click="openMembers(row)">名单</el-button>
-          <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button v-if="row.status === 'cancelled'" link type="warning" @click="onRestore(row)">恢复</el-button>
-          <el-button v-else link type="warning" @click="toggleStatus(row)">
+          <el-button v-if="canEditClass(row)" link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button v-if="canEditClass(row) && row.status === 'cancelled'" link type="warning" @click="onRestore(row)">恢复</el-button>
+          <el-button v-else-if="canEditClass(row)" link type="warning" @click="toggleStatus(row)">
             {{ row.status === 'open' ? '关闭' : '开放' }}
           </el-button>
-          <el-button link type="danger" @click="onDelete(row)">删除</el-button>
+          <el-button v-if="canEditClass(row)" link type="danger" @click="onDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -128,9 +129,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="教练">
-          <el-select v-model="form.coachId" placeholder="选择教练（可空）" clearable style="width:100%" @change="onCoachChange">
+          <el-select v-model="form.coachId" placeholder="选择教练（可空）" :clearable="!coachLocked" :disabled="coachLocked" style="width:100%" @change="onCoachChange">
             <el-option v-for="c in coaches" :key="c._id" :label="coachOptionLabel(c)" :value="c._id" />
           </el-select>
+          <div v-if="coachLocked" class="field-hint">教练账号只能发布自己的团课</div>
         </el-form-item>
         <el-form-item label="人数" required>
           <el-input-number v-model="form.capacity" :min="1" :max="999" />
@@ -474,6 +476,16 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { can as canAction, roleKind } from '../utils/auth.js'
+import { downloadExcelHtml } from '../utils/exportTable.js'
+import { operatorFields } from '../utils/operator.js'
+import { digits, isCoachRole, pickCoachBind, UNBOUND_MSG } from '../utils/coachPerm.js'
+import {
+  GROUP_CLASS_EXPORT_HEADERS,
+  groupClassExportRows,
+  groupClassExportFilename,
+  exportDateRangeLabel
+} from '../utils/scheduleExport.js'
 
 const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
@@ -534,6 +546,41 @@ const form = ref({
   classType: 'fixed', theme: ''
 })
 const filterType = ref('')
+const canManageAll = computed(() => !isCoachRole(roleKind()) && canAction('editGroup'))
+const canPublishGroup = computed(() => canAction('editGroup'))
+const coachLocked = computed(() => isCoachRole(roleKind()) && !!boundCoach())
+function boundCoach() {
+  if (!isCoachRole(roleKind())) return null
+  const op = operatorFields()
+  return pickCoachBind(coaches.value || [], {
+    phone: op.operatorPhone || op.operatorUsername,
+    name: op.operatorName
+  })
+}
+function canEditClass(row) {
+  if (!canAction('editGroup')) return false
+  if (!isCoachRole(roleKind())) return true
+  const self = boundCoach()
+  if (!self) return false
+  return String(row && (row.coachId || row.coach_id) || '') === String(self._id || self.id || '')
+}
+function exportExcel() {
+  const rows = groupClassExportRows(list.value || [], {
+    venueLabel,
+    formatDateCn,
+    formatTimeSlot,
+    statusLabel
+  })
+  if (!rows.length) { ElMessage.warning('当前筛选没有可导出的团课'); return }
+  const venuePart = filterVenueId.value
+    ? (venueLabel(filterVenueId.value) || '所选门店')
+    : '全部门店'
+  const range = exportDateRangeLabel(filterDate.value, list.value || [])
+  const fname = groupClassExportFilename(venuePart, range)
+  downloadExcelHtml(fname, '团课排期', GROUP_CLASS_EXPORT_HEADERS, rows)
+  ElMessage.success('已导出 ' + rows.length + ' 节')
+}
+
 const settingsVisible = ref(false)
 const settingsSaving = ref(false)
 const settingsAddVenueId = ref('')
@@ -671,10 +718,17 @@ function venueLabel(id) {
 }
 
 async function post(path, body = {}) {
+  let payload = body || {}
+  if (String(path || '').indexOf('adminSave') >= 0) {
+    payload = Object.assign({}, operatorFields(), payload)
+    if (payload.data && typeof payload.data === 'object') {
+      payload.data = Object.assign({}, operatorFields(), payload.data)
+    }
+  }
   const res = await fetch(base + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(payload)
   })
   const data = await res.json()
   return data.body
@@ -842,7 +896,18 @@ function emptyForm() {
 }
 
 function openAdd() {
-  form.value = emptyForm()
+  if (isCoachRole(roleKind())) {
+    const self = boundCoach()
+    if (!self) {
+      ElMessage.warning(UNBOUND_MSG)
+      return
+    }
+    form.value = emptyForm()
+    form.value.coachId = self._id || self.id
+    form.value.coachName = self.name || ''
+  } else {
+    form.value = emptyForm()
+  }
   visible.value = true
   const vid = form.value.venueId
   loadHours(vid)

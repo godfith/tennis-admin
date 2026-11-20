@@ -16,9 +16,11 @@
         </el-button-group>
         <span class="venue-tip">{{ viewMode === 'outdoor' ? '全店外场' : (venueName || '未选场馆') }}</span>
       </div>
+      <el-button type="success" plain :disabled="!coaches.length" @click="exportExcel">导出</el-button>
       <el-button :loading="loading" @click="loadAll">刷新</el-button>
     </div>
-    <p class="hint" v-if="viewMode !== 'outdoor'">小程序暂不开放学员自约私教。这里按教练排课，占用场地并扣教练卡。</p>
+    <p class="hint" v-if="isCoachAccount">教练可在「全店外场」点击自己的空档锁定外场时段，不能代约私教课。{{ bindHint }}</p>
+    <p class="hint" v-else-if="viewMode !== 'outdoor'">小程序暂不开放学员自约私教。这里按教练排课，占用场地并扣教练卡。</p>
     <p class="hint" v-else>全店外场集中排课：各馆外场课显示在一起，排课时选择记到哪家店。同一教练同一时段不能在两家店重复排课。</p>
 
     <div class="grid-wrap" v-loading="loading">
@@ -150,7 +152,22 @@
       </el-descriptions>
       <template #footer>
         <el-button @click="detailVisible = false">关闭</el-button>
-        <el-button type="danger" :loading="saving" @click="cancelLesson">取消这节课</el-button>
+        <el-button v-if="!isCoachAccount" type="danger" :loading="saving" @click="cancelLesson">取消这节课</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="lockVisible" title="锁定自己的外场" width="420px">
+      <el-form label-width="88px">
+        <el-form-item label="日期时段">{{ currentDate }} {{ lockTime }}</el-form-item>
+        <el-form-item label="记入门店" required>
+          <el-select v-model="lockVenueId" style="width:100%" filterable>
+            <el-option v-for="v in outdoorVenues" :key="v.id" :label="v.shortName || v.name" :value="v.id" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="lockVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="confirmLockOutdoor">确认锁定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -160,6 +177,15 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { cardAllowsCourt } from '../utils/courtTypeRule.js'
+import { roleKind, can as canAction } from '../utils/auth.js'
+import { downloadExcelHtml } from '../utils/exportTable.js'
+import { operatorFields } from '../utils/operator.js'
+import { digits, isCoachRole, pickCoachBind, UNBOUND_MSG } from '../utils/coachPerm.js'
+import {
+  coachScheduleExportFilename,
+  scheduleCellText,
+  buildCoachScheduleRows
+} from '../utils/scheduleExport.js'
 
 const FALLBACK_SLOTS = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
@@ -298,6 +324,114 @@ function templateAllowedAtVenue(tpl, vid) {
 }
 const issuableTemplates = computed(() => templates.value.filter((t) => templateAllowedAtVenue(t, currentVenueId.value)))
 const venueName = computed(() => localStorage.getItem('venue_name') || '')
+const isCoachAccount = computed(() => isCoachRole(roleKind()))
+function boundCoach() {
+  if (!isCoachAccount.value) return null
+  const op = operatorFields()
+  const hit = pickCoachBind(coaches.value || [], {
+    phone: op.operatorPhone || op.operatorUsername,
+    name: op.operatorName
+  })
+  if (hit) return hit
+  // outdoor rows may group the same person under ids[]
+  const phone = String(op.operatorPhone || op.operatorUsername || '').replace(/\D/g, '')
+  const name = String(op.operatorName || '').trim()
+  return (coaches.value || []).find((c) => {
+    const ids = personIds(c)
+    if (hit && ids.includes(String(hit._id || hit.id))) return true
+    if (phone && String(c.phone || '').replace(/\D/g, '') === phone) return true
+    if (!phone && name && String(c.name || '').trim() === name) return true
+    return false
+  }) || null
+}
+const bindHint = computed(() => {
+  if (!isCoachAccount.value) return ''
+  return boundCoach() ? '' : UNBOUND_MSG
+})
+function isSelfCoachRow(coach) {
+  const self = boundCoach()
+  if (!self || !coach) return false
+  const ids = new Set(personIds(coach).concat(personIds(self)))
+  const selfId = String(self._id || self.id || '')
+  if (selfId && personIds(coach).includes(selfId)) return true
+  if (selfId && personIds(self).some((id) => personIds(coach).includes(String(id)))) return true
+  const phone = String((operatorFields().operatorPhone || operatorFields().operatorUsername || '')).replace(/\D/g, '')
+  if (phone && String(coach.phone || '').replace(/\D/g, '') === phone) return true
+  return String(coach.name || '').trim() && String(coach.name || '').trim() === String(self.name || '').trim()
+}
+function exportExcel() {
+  if (!coaches.value.length) { ElMessage.warning('没有可导出的排课表'); return }
+  const headers = ['教练'].concat((timeSlots.value || []).map((t) => String(t).slice(0, 5)))
+  const rows = buildCoachScheduleRows(coaches.value, timeSlots.value, (coach, t) => {
+    const lesson = getLesson(coach, t)
+    if (lesson) return scheduleCellText({ lesson, lessonPlace: lessonPlace(lesson) })
+    const occ = getOccupied(coach, t)
+    if (occ) return scheduleCellText({ occupied: occ, occupiedTitle: occupiedTitle(occ), occupiedPlace: occupiedPlace(occ) })
+    const group = getGroup(coach, t)
+    if (group) return scheduleCellText({ group })
+    return '可排'
+  })
+  const mode = viewMode.value === 'outdoor' ? 'outdoor' : 'venue'
+  const fname = coachScheduleExportFilename(mode, venueName.value, currentDate.value)
+  const sheet = viewMode.value === 'outdoor' ? '全店外场' : (venueName.value || '本店排课')
+  downloadExcelHtml(fname, sheet, headers, rows)
+  ElMessage.success('已导出 ' + currentDate.value + ' 的排课表')
+}
+const lockVisible = ref(false)
+const lockVenueId = ref('')
+const lockTime = ref('')
+const lockCoach = ref(null)
+function lockOwnOutdoor(coach, time) {
+  const self = boundCoach()
+  if (!self) { ElMessage.warning(UNBOUND_MSG); return }
+  if (!isSelfCoachRow(coach)) { ElMessage.warning('只能锁自己的外场'); return }
+  let useVenueId = venueId()
+  const has = (outdoorVenues.value || []).find((v) => v.id === useVenueId)
+  if (!has) {
+    const first = (outdoorVenues.value || [])[0]
+    useVenueId = first ? first.id : ''
+  }
+  lockCoach.value = coach
+  lockTime.value = time
+  lockVenueId.value = useVenueId
+  lockVisible.value = true
+}
+async function confirmLockOutdoor() {
+  const self = boundCoach()
+  const coach = lockCoach.value
+  const time = lockTime.value
+  if (!self || !time) { ElMessage.warning(UNBOUND_MSG); return }
+  const picked = (outdoorVenues.value || []).find((v) => v.id === lockVenueId.value)
+  const useVenueId = lockVenueId.value || venueId()
+  const useVenueName = picked ? picked.name : venueName.value
+  if (!useVenueId) { ElMessage.warning('请先选择门店'); return }
+  saving.value = true
+  try {
+    const useCoachId = (coach && (personIds(coach)[0] || coach._id)) || self._id || self.id
+    const result = await post('/adminSaveBooking', {
+      action: 'lock',
+      data: {
+        venueId: useVenueId,
+        venueName: useVenueName,
+        court: '外场',
+        date: currentDate.value,
+        time,
+        coachId: useCoachId,
+        coachName: coach && coach.name ? coach.name : (self.name || ''),
+        remark: '[锁场] 教练锁外场'
+      }
+    })
+    if (!result.ok) { ElMessage.error(result.msg || '锁场失败'); return }
+    lockVisible.value = false
+    ElMessage.success(result.pending ? (result.msg || '已记录，取消后自动锁场') : '已锁定外场')
+    loadAll()
+  } catch (e) {
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    saving.value = false
+  }
+}
+
 const base = import.meta.env.DEV
   ? '/api'
   : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
@@ -400,10 +534,17 @@ function onDatePick(v) {
 }
 
 async function post(path, body) {
+  let payload = body || {}
+  if (String(path || '').indexOf('adminSave') >= 0) {
+    payload = Object.assign({}, operatorFields(), payload)
+    if (payload.data && typeof payload.data === 'object') {
+      payload.data = Object.assign({}, operatorFields(), payload.data)
+    }
+  }
   const res = await fetch(base + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(payload)
   })
   const data = await res.json()
   return data.body ? (typeof data.body === 'string' ? JSON.parse(data.body) : data.body) : data
@@ -551,6 +692,14 @@ function onCellClick(coach, time) {
     ElMessage.warning('该教练此时段有团课')
     return
   }
+  if (isCoachAccount.value) {
+    if (viewMode.value !== 'outdoor') {
+      ElMessage.warning('教练不能代约私教课。如需锁自己的外场，请切换到「全店外场」。')
+      return
+    }
+    lockOwnOutdoor(coach, time)
+    return
+  }
   let defaultVenueId = venueId()
   let defaultVenueName = venueName.value
   if (viewMode.value === 'outdoor') {
@@ -608,6 +757,10 @@ async function onPickMember(id) {
 }
 
 async function submitLesson() {
+  if (isCoachAccount.value || !canAction('book')) {
+    ElMessage.warning('教练不能代约私教课或为他人预约')
+    return
+  }
   if (!bookForm.value.court) { ElMessage.warning('请选择场地'); return }
   if (!bookForm.value.memberKey || !bookForm.value.userName) { ElMessage.warning('请选择学员'); return }
   if (!bookForm.value.cardId && !bookForm.value.issueTpl) { ElMessage.warning('请选择教练卡或同时发卡'); return }
