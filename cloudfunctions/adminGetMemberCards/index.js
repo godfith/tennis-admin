@@ -22,7 +22,7 @@ const pool = mysql.createPool({
   dateStrings: true
 })
 
-const FN_VER = 'getMemberCards-20261117b'
+const FN_VER = 'getMemberCards-20261120a'
 
 function parseRuleObj(v) {
   if (!v) return null
@@ -128,7 +128,13 @@ function mapCard(c) {
     templateId: c.template_id ? String(c.template_id) : '',
     timeRule: rule,
     remark: c.remark || '',
-    rulesEdited
+    rulesEdited,
+    payOrderId: (function () {
+      if (c.pay_order_id) return String(c.pay_order_id)
+      var m = String(c.remark || '').match(/\[pay_order:(\d+)\]/)
+      return m ? m[1] : ''
+    })(),
+    paidAmount: c.paid_amount != null && c.paid_amount !== '' ? Number(c.paid_amount) : (c.price != null ? Number(c.price) : null)
   }
 }
 

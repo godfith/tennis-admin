@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise')
+const mall = require('./cardMall')
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -12,7 +13,7 @@ const pool = mysql.createPool({
   dateStrings: true
 })
 
-const FN_VER = 'getCardTpl-20261116a'
+const FN_VER = 'getCardTpl-20261120a'
 
 function parseEvent(event) {
   let body = event || {}
@@ -44,7 +45,8 @@ function mapRow(r) {
     maxHoursPerDay,
     status: r.status || 'active',
     description: r.description || '',
-    sortOrder: Number(r.sort_order) || 0
+    sortOrder: Number(r.sort_order) || 0,
+    mallListed: mall.isMallListed(r, { defaultByName: true })
   }
 }
 

@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise')
+const mall = require('./cardMall')
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -13,7 +14,7 @@ const pool = mysql.createPool({
   timezone: '+08:00'
 })
 
-const FN_VER = 'saveCardTpl-20261117b'
+const FN_VER = 'saveCardTpl-20261120a'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -24,6 +25,33 @@ function parseEvent(event) {
     }
   }
   return event || {}
+}
+
+
+let mallListedColumn = null
+async function hasMallListedColumn() {
+  if (mallListedColumn != null) return mallListedColumn
+  try {
+    const [rows] = await pool.query("SHOW COLUMNS FROM card_templates LIKE 'mall_listed'")
+    mallListedColumn = !!(rows && rows[0])
+  } catch (e) {
+    mallListedColumn = false
+  }
+  return mallListedColumn
+}
+
+async function persistMallListed(id, listed, currentRule) {
+  const flag = listed === true || listed === 1 || listed === '1'
+  if (await hasMallListedColumn()) {
+    await pool.query('UPDATE card_templates SET mall_listed=?, updated_at=NOW() WHERE id=?', [flag ? 1 : 0, id])
+    return
+  }
+  let rule = currentRule
+  if (typeof rule === 'string') {
+    try { rule = JSON.parse(rule) } catch (e) { rule = {} }
+  }
+  rule = mall.setMallListedOnRule(rule, flag)
+  await pool.query('UPDATE card_templates SET time_rule=?, updated_at=NOW() WHERE id=?', [JSON.stringify(rule), id])
 }
 
 function packRule(v, maxHours) {
@@ -58,6 +86,7 @@ function mapRow(r) {
     durationDays: r.duration_days,
     timeRule: { ...timeRule, maxHoursPerDay },
     maxHoursPerDay,
+    mallListed: mall.isMallListed(r, { defaultByName: true }),
     status: r.status,
     description: r.description || '',
     sortOrder: Number(r.sort_order) || 0
@@ -225,6 +254,9 @@ exports.main = async (event) => {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           params.concat([sortOrder])
         )
+        if (data.mallListed != null || data.mall_listed != null) {
+          await persistMallListed(res.insertId, data.mallListed != null ? data.mallListed : data.mall_listed, data.timeRule)
+        }
         return { ok: true, id: String(res.insertId), fnVer: FN_VER }
       }
       const [res] = await pool.query(
@@ -233,6 +265,9 @@ exports.main = async (event) => {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         params
       )
+      if (data.mallListed != null || data.mall_listed != null) {
+        await persistMallListed(res.insertId, data.mallListed != null ? data.mallListed : data.mall_listed, data.timeRule)
+      }
       return { ok: true, id: String(res.insertId), fnVer: FN_VER }
     }
 
@@ -255,10 +290,23 @@ exports.main = async (event) => {
         fields.push('sort_order=?')
         params.push(Number(data.sortOrder != null ? data.sortOrder : data.sort_order) || 0)
       }
-      if (!fields.length) return { ok: false, msg: '没有要改的字段', fnVer: FN_VER }
+      const wantMall = data.mallListed != null || data.mall_listed != null
+      const mallFlag = data.mallListed != null ? data.mallListed : data.mall_listed
+      if (wantMall && (await hasMallListedColumn())) {
+        fields.push('mall_listed=?')
+        params.push((mallFlag === true || mallFlag === 1 || mallFlag === '1') ? 1 : 0)
+      }
+      if (!fields.length && !wantMall) return { ok: false, msg: '没有要改的字段', fnVer: FN_VER }
+      if (!fields.length && wantMall) {
+        await persistMallListed(id, mallFlag, data.timeRule)
+        return { ok: true, synced: 0, fnVer: FN_VER }
+      }
       fields.push('updated_at=NOW()')
       params.push(id)
       await pool.query(`UPDATE card_templates SET ${fields.join(', ')} WHERE id=?`, params)
+      if (wantMall && !(await hasMallListedColumn())) {
+        await persistMallListed(id, mallFlag, data.timeRule)
+      }
       let synced = 0
       if (body.syncIssued && data.timeRule) {
         const [issued] = await pool.query(
