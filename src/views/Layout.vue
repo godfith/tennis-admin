@@ -37,6 +37,7 @@
         <el-sub-menu v-if="showCard" index="grp-card">
           <template #title><el-icon><Ticket /></el-icon><span>会员卡</span></template>
           <el-menu-item v-if="ok('/cards')" index="/cards">卡模板管理</el-menu-item>
+          <el-menu-item v-if="ok('/card-refunds') || ok('/cards')" index="/card-refunds">购卡退款申请</el-menu-item>
           <el-menu-item v-if="ok('/evaluations')" index="/evaluations">学员评测</el-menu-item>
           <el-menu-item v-if="ok('/activities')" index="/activities">活动管理</el-menu-item>
           <el-menu-item v-if="ok('/banners')" index="/banners">轮播图</el-menu-item>
@@ -60,6 +61,7 @@
         <el-menu-item v-if="ok('/batch-lock')" index="/batch-lock">锁场规则</el-menu-item>
         <el-menu-item v-if="ok('/users')" index="/users">用户管理</el-menu-item>
         <el-menu-item v-if="ok('/cards')" index="/cards">卡模板</el-menu-item>
+        <el-menu-item v-if="ok('/card-refunds') || ok('/cards')" index="/card-refunds">购卡退款</el-menu-item>
         <el-menu-item v-if="ok('/coaches')" index="/coaches">教练管理</el-menu-item>
         <el-menu-item v-if="ok('/courts')" index="/courts">场地管理</el-menu-item>
         <el-menu-item v-if="ok('/staff')" index="/staff">员工管理</el-menu-item>

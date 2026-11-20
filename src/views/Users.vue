@@ -2028,6 +2028,10 @@ async function onDeleteCard(card) {
 
 async function onRefund(card) {
   try {
+    if (card.payOrderId || card.pay_order_id) {
+      ElMessage.warning('该卡为线上微信支付购买，请到「购卡退款申请」由超级管理员确认后退回微信')
+      return
+    }
     await ElMessageBox.confirm(`确定退卡「${card.cardName}」？`, '退卡确认', { type: 'warning', confirmButtonText: '确认退卡' })
     const result = await post('/adminRefundCard', {
       cardId: card._id,
