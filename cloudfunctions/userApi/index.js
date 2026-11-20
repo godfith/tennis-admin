@@ -4,6 +4,7 @@ const { expireDueCards } = require('./expireDueCards')
 const courtTypeRule = require('./courtTypeRule')
 const cardActivateHelper = require('./cardActivateHelper')
 const settingsLib = require('./groupClassSettings')
+const { loadNextFixedVenue } = require('./nextFixedVenue')
 const venueBookingRule = require('./venueBookingRule')
 const coachActions = require('./coachActions')
 let cloud = null
@@ -742,7 +743,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261120a'
+const FN_VER = 'userApi-20261120b'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -1904,6 +1905,12 @@ exports.main = async (rawEvent) => {
       }
       if (!coach) return { ok: true, coach: null, list: [], fnVer: FN_VER }
       const list = await coachActions.enhanceWorkbench(pool, event, coach, fmtDate)
+      let gcSettings = null
+      let nextFixed = { venueId: '', venueName: '', lastVenueId: '', lastDate: '', lastTime: '' }
+      try {
+        gcSettings = await settingsLib.loadSettings(pool)
+        nextFixed = await loadNextFixedVenue(pool, gcSettings)
+      } catch (e) {}
       return {
         ok: true,
         fnVer: FN_VER,
@@ -1916,7 +1923,9 @@ exports.main = async (rawEvent) => {
           desc: coach.remark || '',
           avatar: coach.avatar || ''
         },
-        list
+        list,
+        settings: gcSettings,
+        nextFixedVenue: nextFixed
       }
     }
     if (action === 'coachSaveGroupClass') {
