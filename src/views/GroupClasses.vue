@@ -9,8 +9,8 @@
         <el-button :loading="loading" @click="loadData">刷新</el-button>
         <el-button type="success" plain :disabled="!list.length" @click="exportExcel">导出</el-button>
         <el-button v-if="canManageAll" @click="openSettings">团课设置</el-button>
-        <el-button v-if="canManageAll" @click="openGenerate">生成轮转排期</el-button>
-        <el-button v-if="canManageAll" @click="openBatch">批量排课</el-button>
+        <el-button v-if="showBatchAndRotation && canManageAll" @click="openGenerate">生成轮转排期</el-button>
+        <el-button v-if="showBatchAndRotation && canManageAll" @click="openBatch">批量排课</el-button>
         <el-button v-if="canPublishGroup" type="primary" @click="openAdd">新增团课</el-button>
       </div>
     </div>
@@ -546,6 +546,8 @@ const form = ref({
   classType: 'fixed', theme: ''
 })
 const filterType = ref('')
+// 老板口径：固定的是门店轮转，不是时间。批量排课/轮转生成先藏，需要时改 true。
+const showBatchAndRotation = false
 const canManageAll = computed(() => !isCoachRole(roleKind()) && canAction('editGroup'))
 const canPublishGroup = computed(() => canAction('editGroup'))
 const coachLocked = computed(() => isCoachRole(roleKind()) && !!boundCoach())
