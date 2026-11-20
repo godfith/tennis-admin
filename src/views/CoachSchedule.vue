@@ -739,14 +739,26 @@ async function openGroupDetail(row, coach) {
 }
 
 function getLesson(coach, time) {
+  const occ = viewMode.value === 'outdoor' ? getOccupied(coach, time) : null
+  if (occ && occ.kind === 'group') return null
+  if (getGroup(coach, time)) return null
   const ids = new Set(personIds(coach))
   const list = viewMode.value === 'outdoor' ? outdoorBookings.value : bookings.value
-  return list.find((b) => ids.has(String(b.coachId || b.coach_id)) && b.time === time && b.status === 'booked')
+  return list.find((b) =>
+    ids.has(String(b.coachId || b.coach_id)) &&
+    b.time === time &&
+    b.status === 'booked' &&
+    !b.groupClassId &&
+    !b.group_class_id
+  )
 }
 function getOccupied(coach, time) {
   if (viewMode.value !== 'outdoor') return null
   const ids = new Set(personIds(coach))
-  return (occupied.value || []).find((b) => ids.has(String(b.coachId || b.coach_id)) && b.time === time)
+  const list = (occupied.value || []).filter((b) => ids.has(String(b.coachId || b.coach_id)) && b.time === time)
+  const group = list.find((b) => b.kind === 'group')
+  if (group) return group
+  return list[0] || null
 }
 function getGroup(coach, time) {
   const ids = new Set(personIds(coach))

@@ -520,7 +520,7 @@ async function findCoachTimeConflict(conn, coachIdVal, dateYmd, timeStr, exclude
   if (!ids.length) return null
   const ph = ids.map(() => '?').join(',')
   const bookParams = [dateYmd, ...ids]
-  let bookSql = `SELECT id, time, venue_id, venue_name, court, status FROM bookings
+  let bookSql = `SELECT id, time, venue_id, venue_name, court, status, group_class_id FROM bookings
       WHERE date=? AND coach_id IN (${ph}) AND status IN ('booked','locked','pending_pay')`
   if (excludeBookingId) {
     bookSql += ' AND id<>?'
@@ -529,10 +529,12 @@ async function findCoachTimeConflict(conn, coachIdVal, dateYmd, timeStr, exclude
   const [coachBusyAll] = await conn.query(bookSql, bookParams)
   const coachBusy = pickOverlapping(coachBusyAll, timeStr)
   if (coachBusy.length) {
-    const hit = coachBusy[0]
+    const privateHit = coachBusy.find((b) => !b.group_class_id)
+    const hit = privateHit || coachBusy[0]
     const place = shortVenueName(hit.venue_name, hit.venue_id)
     const court = hit.court ? ' ' + hit.court : ''
     const where = (place || '其他门店') + court
+    if (hit.group_class_id) return '该教练此时段已在' + (place || '其他门店') + '有团课'
     if (String(hit.status) === 'locked') return '该教练此时段已在' + where + '锁场'
     if (String(hit.status) === 'pending_pay') return '该教练此时段已在' + where + '有待支付预约'
     return '该教练此时段已在' + where + '排课'
@@ -2441,7 +2443,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261120b'
+const FN_VER = 'saveBooking-20261120c'
 
 function parseRuleObj(v) {
   if (!v) return null

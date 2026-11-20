@@ -6,7 +6,7 @@ const { loadNextFixedVenue } = require('./nextFixedVenue')
 
 
 const adminRole = require('./adminRole')
-const FN_VER = 'saveGroupClass-20261120e'
+const FN_VER = 'saveGroupClass-20261120f'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -179,7 +179,7 @@ async function checkConflict(data, excludeId) {
     `SELECT id, status FROM bookings
       WHERE venue_id=? AND date=? AND time=?
         AND (court=? OR court=? OR court=CONCAT(?,'场'))
-        AND status IN ('booked','locked')
+        AND status IN ('booked','locked','pending_pay')
       LIMIT 1`,
     [data.venueId, data.date, data.time, courtName, courtNorm, courtNorm]
   )
