@@ -5,6 +5,7 @@ const courtTypeRule = require('./courtTypeRule')
 const cardActivateHelper = require('./cardActivateHelper')
 const settingsLib = require('./groupClassSettings')
 const venueBookingRule = require('./venueBookingRule')
+const coachActions = require('./coachActions')
 let cloud = null
 try {
   cloud = require('wx-server-sdk')
@@ -741,7 +742,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261119d'
+const FN_VER = 'userApi-20261120a'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -1901,15 +1902,11 @@ exports.main = async (rawEvent) => {
           coach = rows2[0] || null
         }
       }
-      if (!coach) return { ok: true, coach: null, list: [] }
-      const [books] = await pool.query(
-        `SELECT * FROM bookings
-         WHERE coach_id=? AND status='booked'
-         ORDER BY date ASC, time ASC LIMIT 100`,
-        [coach.id]
-      )
+      if (!coach) return { ok: true, coach: null, list: [], fnVer: FN_VER }
+      const list = await coachActions.enhanceWorkbench(pool, event, coach, fmtDate)
       return {
         ok: true,
+        fnVer: FN_VER,
         coach: {
           _id: String(coach.id),
           name: coach.name,
@@ -1919,15 +1916,14 @@ exports.main = async (rawEvent) => {
           desc: coach.remark || '',
           avatar: coach.avatar || ''
         },
-        list: (books || []).map((r) => ({
-          _id: String(r.id),
-          date: fmtDate(r.date),
-          time: r.time,
-          court: r.court,
-          userName: r.user_name || '',
-          status: r.status
-        }))
+        list
       }
+    }
+    if (action === 'coachSaveGroupClass') {
+      return await coachActions.handleSaveGroupClass(pool, event, fmtDate, FN_VER)
+    }
+    if (action === 'coachLockOutdoor') {
+      return await coachActions.handleLockOutdoor(pool, event, fmtDate, FN_VER)
     }
     if (action === 'getBookingDetail') {
       const id = event.id
@@ -2226,7 +2222,10 @@ exports.main = async (rawEvent) => {
         return { ok: true, notice: null, fnVer: FN_VER }
       }
     }
-    return { ok: false, msg: '未知 action' }
+    if (action === 'coachBookPrivate' || action === 'coachSaveBooking' || action === 'bookPrivateLesson') {
+      return { ok: false, msg: '教练不能代约私教课或为他人预约', fnVer: FN_VER }
+    }
+    return { ok: false, msg: '未知 action', fnVer: FN_VER }
   } catch (e) {
     console.error(e)
     return { ok: false, msg: e.message || '服务异常' }
