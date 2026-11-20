@@ -2,7 +2,7 @@ const mysql = require('mysql2/promise')
 const settingsLib = require('./groupClassSettings')
 
 
-const FN_VER = 'saveGroupClass-20261119b'
+const FN_VER = 'saveGroupClass-20261120a'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -54,6 +54,48 @@ function readTheme(data) {
   if (!data || data.theme == null) return ''
   return String(data.theme).trim().slice(0, 200)
 }
+
+
+function normalizeWeekdays(list) {
+  let raw = list
+  if (raw == null) return []
+  if (!Array.isArray(raw)) {
+    if (typeof raw === 'number' || (typeof raw === 'string' && /^\s*\d+\s*$/.test(raw))) {
+      raw = [raw]
+    } else {
+      return []
+    }
+  }
+  const seen = new Set()
+  const out = []
+  for (const x of raw) {
+    const n = Number(x)
+    if (!Number.isInteger(n) || n < 0 || n > 6) continue
+    if (seen.has(n)) continue
+    seen.add(n)
+    out.push(n)
+  }
+  return out
+}
+
+function ymdUtcWeekday(ymd) {
+  const s = fmtDate(ymd)
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return null
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()
+}
+
+function filterDatesByWeekdays(dates, weekdays) {
+  const set = new Set(weekdays)
+  const out = []
+  for (const ymd of dates || []) {
+    const w = ymdUtcWeekday(ymd)
+    if (w != null && set.has(w)) out.push(ymd)
+  }
+  return out
+}
+
+const MAX_BATCH_CLASSES = 62
 
 function normCourt(c) {
   return String(c || '')
@@ -263,7 +305,156 @@ async function hasDuplicateClass(venueId, date, time) {
   return !!(rows && rows[0])
 }
 
-async function generateRotation(data) {
+async function planBatch(data) {
+  const venueId = data && (data.venueId || data.venue_id)
+  const name = String((data && data.name) || '').trim()
+  const startDate = fmtDate(data && (data.startDate || data.start_date))
+  const endDate = fmtDate(data && (data.endDate || data.end_date))
+  const time = String((data && data.time) || '').trim()
+  const courtRaw = String((data && (data.court || data.courtName || data.court_name)) || '').trim()
+  const weekdays = normalizeWeekdays(data && (data.weekdays != null ? data.weekdays : data.weekday))
+
+  if (!venueId || !name || !startDate || !endDate || !time || !courtRaw) {
+    return { ok: false, msg: '请填写门店、名称、日期范围、星期、时段和场地', fnVer: FN_VER }
+  }
+  if (!weekdays.length) {
+    return { ok: false, msg: '请选择至少一个星期', fnVer: FN_VER }
+  }
+  if (endDate < startDate) {
+    return { ok: false, msg: '结束日期不能早于开始日期', fnVer: FN_VER }
+  }
+
+  const venue = await venueExists(venueId)
+  if (!venue) return { ok: false, msg: '门店不存在', fnVer: FN_VER }
+
+  const dates = filterDatesByWeekdays(datesInRange(startDate, endDate), weekdays)
+  if (!dates.length) {
+    return { ok: false, msg: '选定范围内没有符合星期的日期', fnVer: FN_VER }
+  }
+  if (dates.length > MAX_BATCH_CLASSES) {
+    return { ok: false, msg: '一次最多排 62 节', fnVer: FN_VER }
+  }
+
+  const courtName = await resolveCourtName(venueId, courtRaw)
+  const settings = await loadSettings(pool)
+  const limits = venueLimits(settings, venueId)
+  const classType = readClassType(data)
+  const theme = readTheme(data)
+  const minEnrollment = readMinEnrollment(data, 0)
+  const cancelBeforeHours = readCancelBeforeHours(data, settings.defaultCancelBeforeHours)
+  const capacity = data.capacity != null && data.capacity !== ''
+    ? intOr(data.capacity, limits.capacity || 1, 1, null)
+    : (limits.capacity || 1)
+  const coachId = (data && (data.coachId || data.coach_id)) || null
+  const coachName = (data && (data.coachName || data.coach_name)) || ''
+  const status = (data && data.status) || 'open'
+  const remark = (data && data.remark) || ''
+
+  const list = []
+  const skippedList = []
+  for (const date of dates) {
+    const weekday = ymdUtcWeekday(date)
+    const payload = { venueId, date, time, court: courtName, courtName, coachId }
+    const err = await checkConflict(payload, null)
+    const item = { date, weekday, venueId, venueName: venue.name, court: courtName, time }
+    if (err) skippedList.push(Object.assign({}, item, { reason: err }))
+    else list.push(item)
+  }
+
+  return {
+    ok: true,
+    fnVer: FN_VER,
+    created: list.length,
+    skipped: skippedList.length,
+    list,
+    skippedList,
+    rowTemplate: {
+      venueId,
+      name,
+      time,
+      court: courtName,
+      coachId,
+      coachName,
+      capacity,
+      status,
+      remark,
+      minEnrollment,
+      cancelBeforeHours,
+      classType,
+      theme
+    }
+  }
+}
+
+function publicBatchPlan(planned) {
+  return {
+    ok: true,
+    fnVer: FN_VER,
+    created: planned.created,
+    skipped: planned.skipped,
+    list: planned.list,
+    skippedList: planned.skippedList
+  }
+}
+
+async function addBatch(data) {
+  const planned = await planBatch(data)
+  if (!planned.ok) return planned
+  if (!planned.list.length) {
+    return {
+      ok: true,
+      fnVer: FN_VER,
+      created: 0,
+      skipped: planned.skippedList.length,
+      list: [],
+      skippedList: planned.skippedList
+    }
+  }
+
+  const created = []
+  const skippedList = planned.skippedList.slice()
+  const tpl = planned.rowTemplate
+  for (const item of planned.list) {
+    const payload = {
+      venueId: item.venueId,
+      date: item.date,
+      time: item.time,
+      court: item.court,
+      courtName: item.court,
+      coachId: tpl.coachId
+    }
+    const err = await checkConflict(payload, null)
+    if (err) {
+      skippedList.push(Object.assign({}, item, { reason: err }))
+      continue
+    }
+    try {
+      const ins = await insertGroupClass(Object.assign({}, tpl, { date: item.date }))
+      created.push({
+        id: ins.id,
+        date: item.date,
+        weekday: item.weekday,
+        venueId: item.venueId,
+        venueName: item.venueName,
+        court: item.court,
+        time: item.time,
+        classType: tpl.classType
+      })
+    } catch (e) {
+      skippedList.push(Object.assign({}, item, { reason: (e && e.message) || '写入失败' }))
+    }
+  }
+  return {
+    ok: true,
+    fnVer: FN_VER,
+    created: created.length,
+    skipped: skippedList.length,
+    list: created,
+    skippedList
+  }
+}
+
+async function planRotation(data) {
   const startDate = fmtDate(data && (data.startDate || data.start_date))
   const endDate = fmtDate(data && (data.endDate || data.end_date))
   const time = String((data && data.time) || '').trim()
@@ -284,7 +475,8 @@ async function generateRotation(data) {
   const cancelBeforeHours = readCancelBeforeHours(data, settings.defaultCancelBeforeHours)
   const status = (data && data.status) || 'open'
 
-  const created = []
+  const willCreate = []
+  const pending = []
   const skipped = []
   for (const date of dates) {
     const slot = rotationVenueForDate(settings, date)
@@ -322,7 +514,15 @@ async function generateRotation(data) {
       continue
     }
     const limits = venueLimits(settings, slot.venueId)
-    const ins = await insertGroupClass({
+    const listItem = {
+      date,
+      venueId: slot.venueId,
+      venueName: venue.name,
+      court: courtName,
+      time,
+      classType
+    }
+    const row = {
       venueId: slot.venueId,
       name: defaultName,
       date,
@@ -337,16 +537,51 @@ async function generateRotation(data) {
       cancelBeforeHours,
       classType,
       theme
-    })
-    created.push({
-      id: ins.id,
-      date,
-      venueId: slot.venueId,
-      venueName: venue.name,
-      court: courtName,
-      time,
-      classType
-    })
+    }
+    willCreate.push(listItem)
+    pending.push({ listItem, row, venueName: venue.name })
+  }
+  return { ok: true, fnVer: FN_VER, willCreate, pending, skipped }
+}
+
+async function generateRotation(data, opts) {
+  const dryRun = !!(opts && opts.dryRun) || !!(data && (data.dryRun === true || data.dryRun === 'true'))
+  const planned = await planRotation(data)
+  if (!planned.ok) return planned
+  if (dryRun) {
+    return {
+      ok: true,
+      fnVer: FN_VER,
+      created: planned.willCreate.length,
+      skipped: planned.skipped.length,
+      list: planned.willCreate,
+      skippedList: planned.skipped
+    }
+  }
+
+  const created = []
+  const skipped = planned.skipped.slice()
+  for (const item of planned.pending) {
+    const row = item.row
+    const payload = {
+      venueId: row.venueId,
+      date: row.date,
+      time: row.time,
+      court: row.court,
+      courtName: row.court,
+      coachId: row.coachId
+    }
+    if (await hasDuplicateClass(row.venueId, row.date, row.time)) {
+      skipped.push({ date: row.date, venueId: row.venueId, venueName: item.venueName, reason: '该门店此时段已有团课' })
+      continue
+    }
+    const err = await checkConflict(payload, null)
+    if (err) {
+      skipped.push({ date: row.date, venueId: row.venueId, venueName: item.venueName, reason: err })
+      continue
+    }
+    const ins = await insertGroupClass(row)
+    created.push(Object.assign({}, item.listItem, { id: ins.id }))
   }
   return {
     ok: true,
@@ -379,8 +614,22 @@ exports.main = async (event) => {
       return { ok: true, settings: out.settings, fnVer: FN_VER }
     }
 
+    if (action === 'previewRotation') {
+      return await generateRotation(data || body || {}, { dryRun: true })
+    }
+
     if (action === 'generateRotation') {
       return await generateRotation(data || body || {})
+    }
+
+    if (action === 'previewBatch') {
+      const planned = await planBatch(data || body || {})
+      if (!planned.ok) return planned
+      return publicBatchPlan(planned)
+    }
+
+    if (action === 'addBatch') {
+      return await addBatch(data || body || {})
     }
 
     if (action === 'add' || action === 'update') {

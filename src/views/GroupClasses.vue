@@ -9,6 +9,7 @@
         <el-button :loading="loading" @click="loadData">刷新</el-button>
         <el-button @click="openSettings">团课设置</el-button>
         <el-button @click="openGenerate">生成轮转排期</el-button>
+        <el-button @click="openBatch">批量排课</el-button>
         <el-button type="primary" @click="openAdd">新增团课</el-button>
       </div>
     </div>
@@ -313,7 +314,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="generateVisible" title="生成轮转排期" width="520px" destroy-on-close>
+    <el-dialog v-model="generateVisible" title="生成轮转排期" width="640px" destroy-on-close>
       <el-form label-width="120px">
         <el-form-item label="日期范围" required>
           <el-date-picker
@@ -347,11 +348,124 @@
             <el-option v-for="c in coaches" :key="c._id" :label="coachOptionLabel(c)" :value="c._id" />
           </el-select>
         </el-form-item>
-        <div class="field-hint">按当前设置的门店顺序逐日排课，已有相同门店+日期+时段的课会跳过。空壳馆使用内部「团课1号场」，不会使用「外场」。</div>
+        <div class="field-hint">先预览冲突，确认后才写入。按当前设置的门店顺序逐日排课，已有相同门店+日期+时段的课会跳过并列出原因。空壳馆使用内部「团课1号场」，不会使用「外场」。一次最多 62 天。</div>
       </el-form>
+      <div v-if="generatePreviewFresh" class="preview-box">
+        <p class="preview-summary">可排 {{ generatePreview.created || 0 }} 节，冲突/跳过 {{ generatePreview.skipped || 0 }} 节</p>
+        <el-table :data="generatePreviewRows" stripe border size="small" max-height="240">
+          <el-table-column label="日期" width="160">
+            <template #default="{ row }">{{ formatDateCn(row.date) }}</template>
+          </el-table-column>
+          <el-table-column label="门店" min-width="120">
+            <template #default="{ row }">{{ row.venueName || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="court" label="场地" width="110" />
+          <el-table-column label="结果" min-width="200">
+            <template #default="{ row }">
+              <el-tag v-if="row.ok" type="success" size="small">可排</el-tag>
+              <span v-else class="hint-error">跳过：{{ row.reason }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
       <template #footer>
         <el-button @click="generateVisible=false">取消</el-button>
-        <el-button type="primary" :loading="generating" @click="submitGenerate">开始生成</el-button>
+        <el-button :type="generatePreviewFresh ? 'default' : 'primary'" :loading="generatePreviewing" @click="previewGenerate">{{ generatePreviewFresh ? '重新预览' : '预览' }}</el-button>
+        <el-button type="primary" :loading="generating" :disabled="!generateCanConfirm" @click="submitGenerate">确认生成</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="batchVisible" title="批量排课" width="640px" destroy-on-close>
+      <el-form label-width="120px">
+        <el-form-item label="上课门店" required>
+          <el-select v-model="batchForm.venueId" placeholder="选择门店" style="width:100%" @change="onBatchVenueChange">
+            <el-option v-for="v in venues" :key="v.venueId" :label="v.name" :value="String(v.venueId)" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="名称" required>
+          <el-input v-model="batchForm.name" placeholder="如：周三晚提高班" />
+        </el-form-item>
+        <el-form-item label="类型" required>
+          <el-radio-group v-model="batchForm.classType" @change="onBatchClassTypeChange">
+            <el-radio-button value="fixed">固定团课</el-radio-button>
+            <el-radio-button value="self">自组团课</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="当日主题">
+          <el-input v-model="batchForm.theme" placeholder="选填，如：发球与接发" maxlength="200" show-word-limit />
+        </el-form-item>
+        <el-form-item label="日期范围" required>
+          <el-date-picker
+            v-model="batchForm.range"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="开始"
+            end-placeholder="结束"
+            style="width:100%"
+          />
+        </el-form-item>
+        <el-form-item label="星期" required>
+          <el-checkbox-group v-model="batchForm.weekdays">
+            <el-checkbox :label="1" :value="1">周一</el-checkbox>
+            <el-checkbox :label="2" :value="2">周二</el-checkbox>
+            <el-checkbox :label="3" :value="3">周三</el-checkbox>
+            <el-checkbox :label="4" :value="4">周四</el-checkbox>
+            <el-checkbox :label="5" :value="5">周五</el-checkbox>
+            <el-checkbox :label="6" :value="6">周六</el-checkbox>
+            <el-checkbox :label="0" :value="0">周日</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <el-form-item label="时段" required>
+          <el-select v-model="batchForm.time" placeholder="选择时段" style="width:100%">
+            <el-option v-for="t in timeSlots" :key="t" :label="formatTimeSlot(t)" :value="t" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="场地" required>
+          <el-select v-model="batchForm.court" placeholder="选择场地" style="width:100%">
+            <el-option v-for="c in courts" :key="c._id" :label="c.name" :value="c.name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="教练">
+          <el-select v-model="batchForm.coachId" placeholder="选择教练（可空）" clearable style="width:100%" @change="onBatchCoachChange">
+            <el-option v-for="c in coaches" :key="c._id" :label="coachOptionLabel(c)" :value="c._id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="人数" required>
+          <el-input-number v-model="batchForm.capacity" :min="1" :max="999" />
+        </el-form-item>
+        <el-form-item label="最低开班人数">
+          <el-input-number v-model="batchForm.minEnrollment" :min="0" :max="999" />
+          <div class="field-hint">0 表示不自动取消；大于 0 时人数不足将在开课前自动取消</div>
+        </el-form-item>
+        <el-form-item label="提前取消(小时)">
+          <el-input-number v-model="batchForm.cancelBeforeHours" :min="0" :max="72" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-switch v-model="batchForm.open" active-text="开放报名" inactive-text="关闭" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="batchForm.remark" type="textarea" :rows="2" />
+        </el-form-item>
+        <div class="field-hint">先预览冲突，确认后才写入。已有团课、预约或锁场的日期会跳过并列出原因。一次最多 62 节。</div>
+      </el-form>
+      <div v-if="batchPreviewFresh" class="preview-box">
+        <p class="preview-summary">可排 {{ batchPreview.created || 0 }} 节，冲突/跳过 {{ batchPreview.skipped || 0 }} 节</p>
+        <el-table :data="batchPreviewRows" stripe border size="small" max-height="240">
+          <el-table-column label="日期" width="160">
+            <template #default="{ row }">{{ formatDateCn(row.date) }}</template>
+          </el-table-column>
+          <el-table-column label="结果" min-width="260">
+            <template #default="{ row }">
+              <el-tag v-if="row.ok" type="success" size="small">可排</el-tag>
+              <span v-else class="hint-error">跳过：{{ row.reason }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <el-button @click="batchVisible=false">取消</el-button>
+        <el-button :type="batchPreviewFresh ? 'default' : 'primary'" :loading="batchPreviewing" @click="previewBatch">{{ batchPreviewFresh ? '重新预览' : '预览' }}</el-button>
+        <el-button type="primary" :loading="batchSaving" :disabled="!batchCanConfirm" @click="submitBatch">确认排课</el-button>
       </template>
     </el-dialog>
   </div>
@@ -426,7 +540,16 @@ const settingsAddVenueId = ref('')
 const settingsForm = ref(emptySettings())
 const generateVisible = ref(false)
 const generating = ref(false)
+const generatePreviewing = ref(false)
+const generatePreview = ref(null)
+const generatePreviewKey = ref('')
 const generateForm = ref(emptyGenerate())
+const batchVisible = ref(false)
+const batchPreviewing = ref(false)
+const batchSaving = ref(false)
+const batchPreview = ref(null)
+const batchPreviewKey = ref('')
+const batchForm = ref(emptyBatch())
 
 function emptySettings() {
   return {
@@ -440,6 +563,28 @@ function emptySettings() {
 }
 function emptyGenerate() {
   return { range: [], time: '', classType: 'fixed', name: '', theme: '', coachId: '', coachName: '' }
+}
+function emptyBatch() {
+  const vid = venueId() ? String(venueId()) : ''
+  const lim = venueLimitsOf(vid)
+  return {
+    venueId: vid,
+    venueName: localStorage.getItem('venue_name') || '',
+    name: '固定团课',
+    classType: 'fixed',
+    theme: '',
+    range: [],
+    weekdays: [],
+    time: '',
+    court: '',
+    coachId: '',
+    coachName: '',
+    capacity: lim.capacity || 4,
+    minEnrollment: lim.minEnrollment || 0,
+    cancelBeforeHours: settingsForm.value.defaultCancelBeforeHours != null ? settingsForm.value.defaultCancelBeforeHours : 2,
+    open: true,
+    remark: ''
+  }
 }
 function isShellVenue(id) {
   const v = venues.value.find((x) => String(x.venueId) === String(id))
@@ -1088,8 +1233,45 @@ async function saveSettings() {
   }
 }
 
+function rotationPayload() {
+  const range = generateForm.value.range || []
+  return {
+    startDate: range[0],
+    endDate: range[1],
+    time: generateForm.value.time,
+    classType: generateForm.value.classType === 'self' ? 'self' : 'fixed',
+    name: generateForm.value.name || '',
+    theme: generateForm.value.theme || '',
+    coachId: generateForm.value.coachId || '',
+    coachName: generateForm.value.coachName || '',
+    cancelBeforeHours: settingsForm.value.defaultCancelBeforeHours
+  }
+}
+
+function mergePreviewRows(preview) {
+  if (!preview) return []
+  const ok = (preview.list || []).map((x) => Object.assign({ ok: true }, x))
+  const skip = (preview.skippedList || []).map((x) => Object.assign({ ok: false }, x))
+  return ok.concat(skip).sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+}
+
+function rotationPreviewKey() {
+  return JSON.stringify(rotationPayload())
+}
+function currentBatchPreviewKey() {
+  return JSON.stringify(batchPayload())
+}
+const generatePreviewFresh = computed(() => !!(generatePreview.value && generatePreviewKey.value === rotationPreviewKey()))
+const batchPreviewFresh = computed(() => !!(batchPreview.value && batchPreviewKey.value === currentBatchPreviewKey()))
+const generatePreviewRows = computed(() => generatePreviewFresh.value ? mergePreviewRows(generatePreview.value) : [])
+const batchPreviewRows = computed(() => batchPreviewFresh.value ? mergePreviewRows(batchPreview.value) : [])
+const generateCanConfirm = computed(() => !!(generatePreviewFresh.value && Number(generatePreview.value.created || 0) > 0))
+const batchCanConfirm = computed(() => !!(batchPreviewFresh.value && Number(batchPreview.value.created || 0) > 0))
+
 function openGenerate() {
   generateForm.value = emptyGenerate()
+  generatePreview.value = null
+  generatePreviewKey.value = ''
   generateVisible.value = true
   loadHours(venueId())
   loadAllCoaches()
@@ -1100,7 +1282,45 @@ function onGenerateCoachChange(id) {
   generateForm.value.coachName = c ? c.name : ''
 }
 
+async function previewGenerate() {
+  const range = generateForm.value.range || []
+  if (!range[0] || !range[1] || !generateForm.value.time) {
+    ElMessage.warning('请选择日期范围和时段')
+    return
+  }
+  generatePreviewing.value = true
+  try {
+    const result = await post('/adminSaveGroupClass', {
+      action: 'previewRotation',
+      data: rotationPayload()
+    })
+    if (!result.ok) {
+      generatePreview.value = null
+      generatePreviewKey.value = ''
+      ElMessage.error(result.msg || '预览失败')
+      return
+    }
+    generatePreview.value = result
+    generatePreviewKey.value = rotationPreviewKey()
+    const created = Number(result.created || 0)
+    const skipped = Number(result.skipped || 0)
+    if (created <= 0) {
+      ElMessage.warning('可排 0 节，冲突/跳过 ' + skipped + ' 节，未写入')
+    }
+  } catch (e) {
+    generatePreview.value = null
+    generatePreviewKey.value = ''
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    generatePreviewing.value = false
+  }
+}
+
 async function submitGenerate() {
+  if (!generateCanConfirm.value) {
+    ElMessage.warning('请先预览，且至少有一节可排再确认生成')
+    return
+  }
   const range = generateForm.value.range || []
   if (!range[0] || !range[1] || !generateForm.value.time) {
     ElMessage.warning('请选择日期范围和时段')
@@ -1110,17 +1330,7 @@ async function submitGenerate() {
   try {
     const result = await post('/adminSaveGroupClass', {
       action: 'generateRotation',
-      data: {
-        startDate: range[0],
-        endDate: range[1],
-        time: generateForm.value.time,
-        classType: generateForm.value.classType === 'self' ? 'self' : 'fixed',
-        name: generateForm.value.name || '',
-        theme: generateForm.value.theme || '',
-        coachId: generateForm.value.coachId || '',
-        coachName: generateForm.value.coachName || '',
-        cancelBeforeHours: settingsForm.value.defaultCancelBeforeHours
-      }
+      data: rotationPayload()
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '生成失败')
@@ -1129,6 +1339,12 @@ async function submitGenerate() {
     const created = Number(result.created || 0)
     const skipped = Number(result.skipped || 0)
     const firstReasons = (result.skippedList || []).slice(0, 3).map((x) => (x.date || '') + (x.venueName ? ' ' + x.venueName : '') + '：' + (x.reason || '')).join('；')
+    if (created <= 0) {
+      ElMessage.warning('已生成 0 节' + (skipped ? '，跳过 ' + skipped + ' 天' + (firstReasons ? '（' + firstReasons + '）' : '') : ''))
+      generatePreview.value = result
+      generatePreviewKey.value = rotationPreviewKey()
+      return
+    }
     ElMessage.success('已生成 ' + created + ' 节' + (skipped ? '，跳过 ' + skipped + ' 天' + (firstReasons ? '（' + firstReasons + '）' : '') : ''))
     generateVisible.value = false
     loadData()
@@ -1136,6 +1352,142 @@ async function submitGenerate() {
     ElMessage.error(e.message || '网络错误')
   } finally {
     generating.value = false
+  }
+}
+
+function applyBatchVenueDefaults(id) {
+  const lim = venueLimitsOf(id)
+  batchForm.value.capacity = lim.capacity
+  batchForm.value.minEnrollment = lim.minEnrollment
+  if (settingsForm.value.defaultCancelBeforeHours != null) {
+    batchForm.value.cancelBeforeHours = settingsForm.value.defaultCancelBeforeHours
+  }
+}
+
+function openBatch() {
+  batchForm.value = emptyBatch()
+  batchPreview.value = null
+  batchPreviewKey.value = ''
+  batchVisible.value = true
+  const vid = batchForm.value.venueId
+  if (vid) applyBatchVenueDefaults(vid)
+  loadHours(vid)
+  loadMeta(vid)
+}
+
+async function onBatchVenueChange(id) {
+  const v = venues.value.find((x) => String(x.venueId) === String(id))
+  batchForm.value.venueName = v ? v.name : ''
+  batchForm.value.court = ''
+  batchForm.value.time = ''
+  applyBatchVenueDefaults(id)
+  await Promise.all([loadHours(id), loadMeta(id)])
+}
+
+function onBatchClassTypeChange() {
+  if (!batchForm.value.name || batchForm.value.name === '固定团课' || batchForm.value.name === '自组团课') {
+    batchForm.value.name = batchForm.value.classType === 'self' ? '自组团课' : '固定团课'
+  }
+}
+
+function onBatchCoachChange(id) {
+  const c = coaches.value.find((x) => String(x._id) === String(id))
+  batchForm.value.coachName = c ? c.name : ''
+}
+
+function batchPayload() {
+  const range = batchForm.value.range || []
+  return {
+    venueId: batchForm.value.venueId,
+    name: batchForm.value.name,
+    startDate: range[0],
+    endDate: range[1],
+    weekdays: (batchForm.value.weekdays || []).slice(),
+    time: batchForm.value.time,
+    court: batchForm.value.court,
+    coachId: batchForm.value.coachId,
+    coachName: batchForm.value.coachName,
+    capacity: batchForm.value.capacity,
+    status: batchForm.value.open ? 'open' : 'closed',
+    remark: batchForm.value.remark || '',
+    minEnrollment: batchForm.value.minEnrollment || 0,
+    cancelBeforeHours: batchForm.value.cancelBeforeHours != null ? batchForm.value.cancelBeforeHours : 2,
+    classType: batchForm.value.classType === 'self' ? 'self' : 'fixed',
+    theme: batchForm.value.theme || ''
+  }
+}
+
+function validateBatchForm() {
+  const range = batchForm.value.range || []
+  const weekdays = batchForm.value.weekdays || []
+  if (!batchForm.value.venueId || !batchForm.value.name || !range[0] || !range[1] || !weekdays.length || !batchForm.value.time || !batchForm.value.court) {
+    ElMessage.warning('请填写门店、名称、日期范围、星期、时段和场地')
+    return false
+  }
+  return true
+}
+
+async function previewBatch() {
+  if (!validateBatchForm()) return
+  batchPreviewing.value = true
+  try {
+    const result = await post('/adminSaveGroupClass', {
+      action: 'previewBatch',
+      data: batchPayload()
+    })
+    if (!result.ok) {
+      batchPreview.value = null
+      batchPreviewKey.value = ''
+      ElMessage.error(result.msg || '预览失败')
+      return
+    }
+    batchPreview.value = result
+    batchPreviewKey.value = currentBatchPreviewKey()
+    const created = Number(result.created || 0)
+    const skipped = Number(result.skipped || 0)
+    if (created <= 0) {
+      ElMessage.warning('可排 0 节，冲突/跳过 ' + skipped + ' 节，未写入')
+    }
+  } catch (e) {
+    batchPreview.value = null
+    batchPreviewKey.value = ''
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    batchPreviewing.value = false
+  }
+}
+
+async function submitBatch() {
+  if (!batchCanConfirm.value) {
+    ElMessage.warning('请先预览，且至少有一节可排再确认排课')
+    return
+  }
+  if (!validateBatchForm()) return
+  batchSaving.value = true
+  try {
+    const result = await post('/adminSaveGroupClass', {
+      action: 'addBatch',
+      data: batchPayload()
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '排课失败')
+      return
+    }
+    const created = Number(result.created || 0)
+    const skipped = Number(result.skipped || 0)
+    if (created <= 0) {
+      ElMessage.warning('已排 0 节，跳过 ' + skipped + ' 节，未写入成功记录')
+      batchPreview.value = result
+      batchPreviewKey.value = currentBatchPreviewKey()
+      return
+    }
+    ElMessage.success('已排 ' + created + ' 节，跳过 ' + skipped + ' 节')
+    batchVisible.value = false
+    loadData()
+  } catch (e) {
+    ElMessage.error(e.message || '网络错误')
+  } finally {
+    batchSaving.value = false
   }
 }
 
@@ -1206,5 +1558,13 @@ h2 {
   align-items: center;
   margin: 8px 0 10px;
   font-size: 14px;
+}
+.preview-box {
+  margin-top: 12px;
+}
+.preview-summary {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #606266;
 }
 </style>
