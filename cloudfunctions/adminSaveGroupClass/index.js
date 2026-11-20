@@ -5,7 +5,8 @@ const coachBind = require('./coachBind')
 const { loadNextFixedVenue } = require('./nextFixedVenue')
 
 
-const FN_VER = 'saveGroupClass-20261120c'
+const adminRole = require('./adminRole')
+const FN_VER = 'saveGroupClass-20261120d'
 
 const pool = mysql.createPool({
   host: 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -56,6 +57,16 @@ function readClassType(data) {
 function readTheme(data) {
   if (!data || data.theme == null) return ''
   return String(data.theme).trim().slice(0, 200)
+}
+
+function readCourseContent(data, settings) {
+  const raw = data ? String(data.courseContentId || data.course_content_id || '').trim() : ''
+  const themeIn = readTheme(data)
+  const hit = settingsLib.findCourseContent(settings, raw) || settingsLib.findCourseContent(settings, themeIn)
+  if (hit) {
+    return { courseContentId: hit.id, theme: themeIn || hit.name }
+  }
+  return { courseContentId: raw, theme: themeIn }
 }
 
 
@@ -185,9 +196,7 @@ async function checkConflict(data, excludeId) {
 }
 
 async function insertGroupClass(row) {
-  const colsFull = `(venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
-             min_enrollment, cancel_before_hours, auto_cancel_exempt, class_type, theme)`
-  const vals = [
+  const valsFull = [
     row.venueId,
     row.name,
     row.date,
@@ -201,28 +210,42 @@ async function insertGroupClass(row) {
     row.minEnrollment,
     row.cancelBeforeHours,
     row.classType || 'fixed',
-    row.theme || ''
+    row.theme || '',
+    row.courseContentId || ''
   ]
   try {
     const [res] = await pool.query(
-      `INSERT INTO group_classes ${colsFull}
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?)`,
-      vals
+      `INSERT INTO group_classes
+        (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
+         min_enrollment, cancel_before_hours, auto_cancel_exempt, class_type, theme, course_content_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      valsFull
     )
     return { ok: true, id: String(res.insertId) }
   } catch (e) {
     const msg = (e && e.message) || ''
-    if (msg.indexOf('class_type') < 0 && msg.indexOf('theme') < 0 && msg.indexOf('Unknown column') < 0) {
-      throw e
+    if (msg.indexOf('Unknown column') < 0) throw e
+    try {
+      const [res] = await pool.query(
+        `INSERT INTO group_classes
+          (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
+           min_enrollment, cancel_before_hours, auto_cancel_exempt, class_type, theme)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, ?, ?)`,
+        valsFull.slice(0, 14)
+      )
+      return { ok: true, id: String(res.insertId), missingColumns: true }
+    } catch (e2) {
+      const msg2 = (e2 && e2.message) || ''
+      if (msg2.indexOf('Unknown column') < 0) throw e2
+      const [res] = await pool.query(
+        `INSERT INTO group_classes
+          (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
+           min_enrollment, cancel_before_hours, auto_cancel_exempt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)`,
+        valsFull.slice(0, 12)
+      )
+      return { ok: true, id: String(res.insertId), missingColumns: true }
     }
-    const [res] = await pool.query(
-      `INSERT INTO group_classes
-        (venue_id, name, date, time, court, coach_id, coach_name, capacity, enrolled, status, remark,
-         min_enrollment, cancel_before_hours, auto_cancel_exempt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0)`,
-      vals.slice(0, 12)
-    )
-    return { ok: true, id: String(res.insertId), missingColumns: true }
   }
 }
 
@@ -233,23 +256,14 @@ async function updateGroupClass(id, row) {
         venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
         capacity=?, status=?, remark=?,
         min_enrollment=?, cancel_before_hours=?,
-        class_type=?, theme=?
+        class_type=?, theme=?, course_content_id=?
        WHERE id=?`,
       [
-        row.venueId,
-        row.name,
-        row.date,
-        row.time,
-        row.court,
-        row.coachId || null,
-        row.coachName || '',
-        row.capacity,
-        row.status || 'open',
-        row.remark || '',
-        row.minEnrollment,
-        row.cancelBeforeHours,
-        row.classType || 'fixed',
-        row.theme || '',
+        row.venueId, row.name, row.date, row.time, row.court,
+        row.coachId || null, row.coachName || '',
+        row.capacity, row.status || 'open', row.remark || '',
+        row.minEnrollment, row.cancelBeforeHours,
+        row.classType || 'fixed', row.theme || '', row.courseContentId || '',
         id
       ]
     )
@@ -257,29 +271,43 @@ async function updateGroupClass(id, row) {
   } catch (e) {
     const msg = (e && e.message) || ''
     if (msg.indexOf('Unknown column') < 0) throw e
-    await pool.query(
-      `UPDATE group_classes SET
-        venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
-        capacity=?, status=?, remark=?,
-        min_enrollment=?, cancel_before_hours=?
-       WHERE id=?`,
-      [
-        row.venueId,
-        row.name,
-        row.date,
-        row.time,
-        row.court,
-        row.coachId || null,
-        row.coachName || '',
-        row.capacity,
-        row.status || 'open',
-        row.remark || '',
-        row.minEnrollment,
-        row.cancelBeforeHours,
-        id
-      ]
-    )
-    return { ok: true, missingColumns: true }
+    try {
+      await pool.query(
+        `UPDATE group_classes SET
+          venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
+          capacity=?, status=?, remark=?,
+          min_enrollment=?, cancel_before_hours=?,
+          class_type=?, theme=?
+         WHERE id=?`,
+        [
+          row.venueId, row.name, row.date, row.time, row.court,
+          row.coachId || null, row.coachName || '',
+          row.capacity, row.status || 'open', row.remark || '',
+          row.minEnrollment, row.cancelBeforeHours,
+          row.classType || 'fixed', row.theme || '',
+          id
+        ]
+      )
+      return { ok: true, missingColumns: true }
+    } catch (e2) {
+      const msg2 = (e2 && e2.message) || ''
+      if (msg2.indexOf('Unknown column') < 0) throw e2
+      await pool.query(
+        `UPDATE group_classes SET
+          venue_id=?, name=?, date=?, time=?, court=?, coach_id=?, coach_name=?,
+          capacity=?, status=?, remark=?,
+          min_enrollment=?, cancel_before_hours=?
+         WHERE id=?`,
+        [
+          row.venueId, row.name, row.date, row.time, row.court,
+          row.coachId || null, row.coachName || '',
+          row.capacity, row.status || 'open', row.remark || '',
+          row.minEnrollment, row.cancelBeforeHours,
+          id
+        ]
+      )
+      return { ok: true, missingColumns: true }
+    }
   }
 }
 
@@ -342,7 +370,9 @@ async function planBatch(data) {
   const settings = await loadSettings(pool)
   const limits = venueLimits(settings, venueId)
   const classType = readClassType(data)
-  const theme = readTheme(data)
+  const content = readCourseContent(data, settings)
+  const theme = content.theme
+  const courseContentId = content.courseContentId
   const minEnrollment = readMinEnrollment(data, 0)
   const cancelBeforeHours = readCancelBeforeHours(data, settings.defaultCancelBeforeHours)
   const capacity = data.capacity != null && data.capacity !== ''
@@ -384,7 +414,8 @@ async function planBatch(data) {
       minEnrollment,
       cancelBeforeHours,
       classType,
-      theme
+      theme,
+      courseContentId
     }
   }
 }
@@ -471,7 +502,9 @@ async function planRotation(data) {
 
   const settings = await loadSettings(pool)
   const classType = readClassType(data)
-  const theme = readTheme(data)
+  const content = readCourseContent(data, settings)
+  const theme = content.theme
+  const courseContentId = content.courseContentId
   const defaultName = String((data && data.name) || '').trim() || (classType === 'self' ? '自组团课' : '固定团课')
   const coachId = (data && (data.coachId || data.coach_id)) || null
   const coachName = (data && (data.coachName || data.coach_name)) || ''
@@ -539,7 +572,8 @@ async function planRotation(data) {
       minEnrollment: settings.defaultMinEnrollment,
       cancelBeforeHours,
       classType,
-      theme
+      theme,
+      courseContentId
     }
     willCreate.push(listItem)
     pending.push({ listItem, row, venueName: venue.name })
@@ -623,7 +657,8 @@ exports.main = async (event) => {
         bound: ctx.bound,
         selfCoachId: ctx.selfCoachId,
         requestedCoachId: requested,
-        existingCoachId
+        existingCoachId,
+        classType: data && (data.classType || data.class_type)
       })
       if (!dec.ok) return { ok: false, msg: dec.msg, fnVer: FN_VER }
       if (data && dec.coachId) {
@@ -632,10 +667,37 @@ exports.main = async (event) => {
       }
     }
 
+    async function loadGroupTemplates() {
+      try {
+        const [rows] = await pool.query(
+          `SELECT id, name, type, price, total_times, status FROM card_templates
+            WHERE type='group' AND IFNULL(status,'active') IN ('active','启用','')
+            ORDER BY id ASC`
+        )
+        return (rows || []).map((r) => ({
+          id: String(r.id),
+          name: r.name,
+          price: Number(r.price) || 0,
+          totalTimes: Number(r.total_times) || 0,
+          status: r.status || 'active'
+        }))
+      } catch (e) {
+        return []
+      }
+    }
+
     if (action === 'getSettings') {
       const settings = await loadSettings(pool)
       const next = await loadNextFixedVenue(pool, settings)
-      return { ok: true, settings, nextFixedVenue: next, fnVer: FN_VER }
+      const groupTemplates = await loadGroupTemplates()
+      return {
+        ok: true,
+        settings,
+        nextFixedVenue: next,
+        groupTemplates,
+        canReorderRotation: adminRole.canReorderRotation(ctx.role),
+        fnVer: FN_VER
+      }
     }
 
     if (action === 'nextFixedVenue') {
@@ -645,7 +707,10 @@ exports.main = async (event) => {
     }
 
     if (action === 'saveSettings') {
-      const out = await saveSettings(pool, data || body.settings || body)
+      const incoming = data || body.settings || body
+      const existing = await loadSettings(pool)
+      const next = settingsLib.applySettingsForRole(existing, incoming, ctx.admin ? ctx.admin.role : '')
+      const out = await saveSettings(pool, next)
       if (!out.ok) return { ok: false, msg: out.msg || '保存失败', fnVer: FN_VER }
       return { ok: true, settings: out.settings, fnVer: FN_VER }
     }
@@ -683,7 +748,12 @@ exports.main = async (event) => {
       const settings = await loadSettings(pool)
       const limits = venueLimits(settings, payload.venueId)
       const classType = readClassType(payload)
-      const theme = readTheme(payload)
+      if (ctx.isCoach && classType === 'self') {
+        return { ok: false, msg: coachPerm.NO_SELF_GROUP_MSG, fnVer: FN_VER }
+      }
+      const content = readCourseContent(payload, settings)
+      const theme = content.theme
+      const courseContentId = content.courseContentId
       const minEnrollment = readMinEnrollment(payload, 0)
       const cancelBeforeHours = readCancelBeforeHours(payload, settings.defaultCancelBeforeHours)
       const capacity = payload.capacity != null && payload.capacity !== ''
@@ -703,7 +773,8 @@ exports.main = async (event) => {
         minEnrollment,
         cancelBeforeHours,
         classType,
-        theme
+        theme,
+        courseContentId
       }
       if (action === 'add') {
         const ins = await insertGroupClass(row)

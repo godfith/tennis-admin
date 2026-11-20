@@ -11,13 +11,22 @@ const DEFAULT_ROTATION = [
   { venueId: 'venue_weisha', capacity: 4 }
 ]
 
+const BASIC_CONTENT_ID = 'forehand-basic'
+const ADVANCED_CONTENT_ID = 'forehand-advanced'
+const DEFAULT_COURSE_CONTENTS = [
+  { id: BASIC_CONTENT_ID, name: '正手球-基础', templateIds: [] },
+  { id: ADVANCED_CONTENT_ID, name: '正手球-进阶', templateIds: [] }
+]
+
 const DEFAULT_SETTINGS = {
   rotationVenues: DEFAULT_ROTATION.map((x) => Object.assign({}, x)),
   rotationStartDate: '2026-11-16',
   fixedOpenAnytime: true,
   selfOrganizeAdvanceDays: 2,
   defaultCancelBeforeHours: 2,
-  defaultMinEnrollment: 0
+  defaultMinEnrollment: 0,
+  courseContents: DEFAULT_COURSE_CONTENTS.map((x) => Object.assign({}, x, { templateIds: x.templateIds.slice() })),
+  bindingsSeeded: false
 }
 
 function intOr(v, dft, min, max) {
@@ -132,6 +141,188 @@ function normalizeRotation(list) {
   return out
 }
 
+
+function newCourseContentId() {
+  return 'cc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+}
+
+function normalizeCourseContents(list, opts) {
+  opts = opts || {}
+  const hasKey = opts.hasKey === true
+  const arr = Array.isArray(list) ? list : null
+  if (!arr || (!arr.length && !hasKey)) {
+    return DEFAULT_COURSE_CONTENTS.map((x) => Object.assign({}, x, { templateIds: x.templateIds.slice() }))
+  }
+  const seen = {}
+  const out = []
+  for (const item of arr) {
+    if (!item) continue
+    let id = String(item.id || item.contentId || item.content_id || '').trim()
+    const name = String(item.name || item.title || item.label || '').trim().slice(0, 80)
+    if (!name) continue
+    if (!id) id = newCourseContentId()
+    if (seen[id]) continue
+    seen[id] = true
+    const idsRaw = item.templateIds || item.template_ids || item.cardTemplateIds || []
+    const templateIds = []
+    const seenTpl = {}
+    const src = Array.isArray(idsRaw) ? idsRaw : String(idsRaw || '').split(',')
+    for (const t of src) {
+      const tid = String(t == null ? '' : t).trim()
+      if (!tid || seenTpl[tid]) continue
+      seenTpl[tid] = true
+      templateIds.push(tid)
+    }
+    out.push({ id, name, templateIds })
+  }
+  return out
+}
+
+function findCourseContent(settings, idOrName) {
+  const s = normalizeSettings(settings)
+  const key = String(idOrName || '').trim()
+  if (!key) return null
+  return (s.courseContents || []).find((x) => x.id === key || x.name === key) || null
+}
+
+function resolveClassCourseContent(row, settings) {
+  const id = String((row && (row.course_content_id || row.courseContentId)) || '').trim()
+  const theme = String((row && row.theme) || '').trim()
+  const hit = findCourseContent(settings, id) || findCourseContent(settings, theme)
+  return {
+    courseContentId: hit ? hit.id : id,
+    courseContentName: hit ? hit.name : theme,
+    templateIds: hit ? hit.templateIds.slice() : [],
+    theme: hit ? hit.name : theme
+  }
+}
+
+function cardAllowedForCourseContent(card, content) {
+  if (!content || (!content.id && !(content.templateIds || []).length && !content.name)) {
+    return { ok: false, msg: '该课程未配置课程内容，暂不可报名' }
+  }
+  const ids = (content.templateIds || []).map(String)
+  if (!ids.length) {
+    return { ok: false, msg: '该课程暂未绑定可用团课卡，暂不可报名' }
+  }
+  const tid = String((card && (card.template_id || card.templateId)) || '').trim()
+  if (!tid || ids.indexOf(tid) < 0) {
+    return { ok: false, msg: '这张卡不能用于当前课程内容，请购买对应团课卡后再报名' }
+  }
+  return { ok: true }
+}
+
+function rotationIds(settings) {
+  return (normalizeSettings(settings).rotationVenues || []).map((x) => String(x.venueId))
+}
+
+function applySettingsForRole(existing, incoming, role) {
+  const adminRole = require('./adminRole')
+  const next = normalizeSettings(incoming)
+  if (adminRole.canReorderRotation(role)) return next
+  const old = normalizeSettings(existing)
+  const capMap = {}
+  ;(next.rotationVenues || []).forEach((x) => {
+    capMap[String(x.venueId)] = x.capacity
+  })
+  next.rotationVenues = (old.rotationVenues || []).map((x) => ({
+    venueId: x.venueId,
+    capacity: capMap[String(x.venueId)] != null ? capMap[String(x.venueId)] : x.capacity
+  }))
+  next.rotationStartDate = old.rotationStartDate
+  return next
+}
+
+function isVisibleCalendarClass(row) {
+  const s = String((row && row.status) || 'open').toLowerCase()
+  if (
+    s === 'cancelled' ||
+    s === 'canceled' ||
+    s === 'deleted' ||
+    s === 'disabled' ||
+    s === '已取消' ||
+    s === '停用' ||
+    s === 'closed' && false
+  ) return false
+  // closed (未开放) should not appear on guest calendar
+  if (s === 'closed' || s === 'close' || s === '未开放' || s === '关闭') return false
+  return true
+}
+
+function venueShortName(name, venueId) {
+  const id = String(venueId || '')
+  const map = {
+    venue_huadiwan: '花地湾',
+    venue_haixinsha: '海心沙',
+    venue_zhongda: '中大',
+    venue_chenjiaci: '陈家祠',
+    venue_yangji: '杨箕',
+    venue_weisha: '温莎'
+  }
+  if (map[id]) return map[id]
+  const n = String(name || '').trim()
+  const stripped = n.replace(/山羊Goat/g, '').replace(/网球馆|网球中心|网球/g, '').replace(/店$/g, '').trim()
+  return (stripped || n).slice(0, 4)
+}
+
+function buildCalendarDays(classes, settings) {
+  const order = rotationIds(settings)
+  const orderIdx = {}
+  order.forEach((id, i) => { orderIdx[id] = i })
+  const byDate = {}
+  for (const row of classes || []) {
+    if (!isVisibleCalendarClass(row)) continue
+    const date = fmtDate(row.date || row.dateYmd)
+    if (!date) continue
+    if (!byDate[date]) byDate[date] = []
+    const venueId = String(row.venue_id || row.venueId || '')
+    const venueName = String(row.venue_name || row.venueName || '')
+    let bucket = byDate[date].find((x) => x.venueId === venueId)
+    if (!bucket) {
+      bucket = {
+        venueId,
+        venueName,
+        venueShort: venueShortName(venueName, venueId),
+        classes: []
+      }
+      byDate[date].push(bucket)
+    }
+    const content = resolveClassCourseContent(row, settings)
+    const typ = normClassType(row.class_type || row.classType)
+    bucket.classes.push({
+      _id: String(row.id || row._id || ''),
+      name: row.name || '',
+      date,
+      time: row.time || '',
+      court: row.court || '',
+      coachName: row.coach_name || row.coachName || '',
+      classType: typ,
+      classTypeLabel: classTypeLabel(typ),
+      courseContentId: content.courseContentId,
+      courseContentName: content.courseContentName,
+      theme: content.theme,
+      enrolled: Number(row.enrolled) || 0,
+      capacity: Number(row.capacity) || 0,
+      status: row.status || 'open'
+    })
+  }
+  Object.keys(byDate).forEach((date) => {
+    byDate[date].sort((a, b) => {
+      const ia = orderIdx[a.venueId]
+      const ib = orderIdx[b.venueId]
+      if (ia != null && ib != null && ia !== ib) return ia - ib
+      if (ia != null && ib == null) return -1
+      if (ia == null && ib != null) return 1
+      return String(a.venueShort || a.venueName).localeCompare(String(b.venueShort || b.venueName), 'zh')
+    })
+    byDate[date].forEach((bucket) => {
+      bucket.classes.sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
+    })
+  })
+  const hasUpcoming = Object.keys(byDate).length > 0
+  return { days: byDate, hasUpcoming, rotationVenueIds: order }
+}
+
 function normalizeSettings(raw) {
   const src = raw && typeof raw === 'object' ? raw : {}
   const rotationVenues = normalizeRotation(src.rotationVenues || src.rotation_venues)
@@ -159,7 +350,12 @@ function normalizeSettings(raw) {
       0,
       0,
       null
-    )
+    ),
+    courseContents: normalizeCourseContents(
+      src.courseContents || src.course_contents,
+      { hasKey: Object.prototype.hasOwnProperty.call(src, 'courseContents') || Object.prototype.hasOwnProperty.call(src, 'course_contents') }
+    ),
+    bindingsSeeded: !!(src.bindingsSeeded || src.bindings_seeded)
   }
   return out
 }
@@ -264,13 +460,17 @@ function userEnrollGate(gc, settings, now) {
 
 function mapClassExtra(r, settings, now) {
   const classType = normClassType(r && (r.class_type || r.classType))
-  const theme = r && r.theme != null ? String(r.theme) : ''
+  const content = resolveClassCourseContent(r, settings)
+  const theme = content.theme || (r && r.theme != null ? String(r.theme) : '')
   const gate = userEnrollGate(r, settings, now)
   const s = normalizeSettings(settings)
   return {
     classType,
     classTypeLabel: classTypeLabel(classType),
     theme,
+    courseContentId: content.courseContentId,
+    courseContentName: content.courseContentName,
+    boundTemplateIds: content.templateIds.slice(),
     enrollOpen: !!gate.enrollOpen,
     enrollClosedReason: gate.enrollOpen ? '' : (gate.reason || ''),
     selfOrganizeAdvanceDays: s.selfOrganizeAdvanceDays,
@@ -303,6 +503,9 @@ module.exports = {
   SETTING_KEY,
   DEFAULT_SETTINGS,
   DEFAULT_ROTATION,
+  BASIC_CONTENT_ID,
+  ADVANCED_CONTENT_ID,
+  DEFAULT_COURSE_CONTENTS,
   intOr,
   fmtDate,
   dayDiff,
@@ -318,5 +521,15 @@ module.exports = {
   userEnrollGate,
   mapClassExtra,
   isOutdoorCourtName,
-  pickInternalClassCourt
+  pickInternalClassCourt,
+  newCourseContentId,
+  normalizeCourseContents,
+  findCourseContent,
+  resolveClassCourseContent,
+  cardAllowedForCourseContent,
+  rotationIds,
+  applySettingsForRole,
+  isVisibleCalendarClass,
+  venueShortName,
+  buildCalendarDays
 }
