@@ -170,8 +170,8 @@ function parseTimeRule(v) {
 
 function groupTimeRuleRejectMsg(card, dateYmd, timeSlot) {
   if (!card || !dateYmd) return ''
-  const from = String(card.valid_from || '').slice(0, 10)
-  const to = String(card.valid_to || '').slice(0, 10)
+  const from = fmtDate(card.valid_from) || ''
+  const to = fmtDate(card.valid_to) || ''
   if (from && dateYmd < from) return '这张卡还没到生效日期'
   if (to && dateYmd > to) return '所选日期超出这张卡的有效期'
   const timeRule = parseTimeRule(card.time_rule)
@@ -777,7 +777,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261120d'
+const FN_VER = 'userApi-20261120e'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',

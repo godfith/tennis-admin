@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 
-const FN_VER = 'enrollGroup-20261120a'
+const FN_VER = 'enrollGroup-20261120b'
 
 function parseEvent(event) {
   if (event && event.body) {
@@ -78,8 +78,8 @@ function parseRuleObj(v) {
 
 function groupTimeRuleRejectMsg(card, dateYmd, timeSlot) {
   if (!card || !dateYmd) return ''
-  const from = String(card.valid_from || '').slice(0, 10)
-  const to = String(card.valid_to || '').slice(0, 10)
+  const from = fmtDate(card.valid_from) || ''
+  const to = fmtDate(card.valid_to) || ''
   if (from && dateYmd < from) return '这张卡还没到生效日期'
   if (to && dateYmd > to) return '所选日期超出这张卡的有效期'
   const timeRule = parseRuleObj(card.time_rule)
