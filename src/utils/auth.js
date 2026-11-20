@@ -9,6 +9,7 @@ export function getAdminName() {
 export function roleKind() {
   const r = getRole()
   const n = getAdminName()
+  if (['coach', '教练'].includes(r)) return 'coach'
   if (['partner', '联营', '联营人'].includes(r) || n.includes('联营')) return 'partner'
   if (['manager', '店长'].includes(r) || n.includes('店长')) return 'manager'
   if (['service', '客服'].includes(r) || n.includes('客服')) return 'service'
@@ -24,7 +25,7 @@ export function roleKind() {
 }
 
 export function roleLabel() {
-  return { admin: '超级管理员', manager: '店长', front: '店员', service: '客服', partner: '联营人' }[roleKind()] || '管理员'
+  return { admin: '超级管理员', manager: '店长', front: '店员', service: '客服', partner: '联营人', coach: '教练' }[roleKind()] || '管理员'
 }
 
 export const HOME = {
@@ -32,7 +33,8 @@ export const HOME = {
   manager: '/dashboard',
   front: '/bookings',
   service: '/bookings',
-  partner: '/finance'
+  partner: '/finance',
+  coach: '/group-classes'
 }
 
 export const ALLOWED = {
@@ -56,14 +58,16 @@ export const ALLOWED = {
   ],
   front: ['/bookings', '/coach-schedule', '/users'],
   service: ['/bookings', '/users'],
-  partner: ['/finance', '/op-logs']
+  partner: ['/finance', '/op-logs'],
+  coach: ['/group-classes', '/coach-schedule']
 }
 
 export const ROLE_DEFAULT_ACTIONS = {
-  manager: ['book', 'cancelBook', 'enrollGroup', 'issueCard', 'refundCard', 'extendCard'],
+  manager: ['book', 'cancelBook', 'enrollGroup', 'issueCard', 'refundCard', 'extendCard', 'editGroup'],
   front: ['book', 'cancelBook', 'enrollGroup', 'issueCard'],
   service: [],
-  partner: []
+  partner: [],
+  coach: ['editGroup', 'lockOutdoor']
 }
 
 export const PERM_GROUPS = [
@@ -126,6 +130,8 @@ export const PERM_GROUPS = [
     items: [
       { key: 'book', label: '代客订场' },
       { key: 'cancelBook', label: '取消预约' },
+      { key: 'editGroup', label: '发布团课' },
+      { key: 'lockOutdoor', label: '锁自己的外场' },
       { key: 'enrollGroup', label: '团课报名' },
       { key: 'issueCard', label: '发卡' },
       { key: 'refundCard', label: '退卡/删除卡' },
@@ -182,6 +188,7 @@ export function can(action) {
     if (action === 'issueCard' && (custom.includes('issueCard') || custom.includes('/users'))) return true
     if (action === 'gift' && (custom.includes('gift') || custom.includes('/gift'))) return true
     if (action === 'finance' && (custom.includes('finance') || custom.includes('/finance'))) return true
+    if (action === 'editGroup' && (custom.includes('editGroup') || custom.includes('/group-classes'))) return true
     if (action === 'switchVenue') return custom.includes('switchVenue') || allowedVenueIds().length > 1
     return custom.includes(action)
   }
@@ -195,7 +202,8 @@ export function can(action) {
     book: k === 'admin' || k === 'manager' || k === 'front',
     cancelBook: k === 'admin' || k === 'manager' || k === 'front',
     enrollGroup: k === 'admin' || k === 'manager' || k === 'front',
-    editGroup: k === 'admin' || k === 'manager',
+    editGroup: k === 'admin' || k === 'manager' || k === 'coach',
+    lockOutdoor: k === 'coach',
     editCourt: k === 'admin' || k === 'manager',
     editPrice: k === 'admin' || k === 'manager',
     editCoach: k === 'admin' || k === 'manager',
@@ -208,7 +216,7 @@ export function can(action) {
 export function homePath() {
   const custom = getPerms()
   if (custom.length) {
-    const pages = ['/dashboard', '/activity', '/op-logs', '/finance', '/occupancy', '/bookings', '/users', '/cards']
+    const pages = ['/dashboard', '/activity', '/op-logs', '/finance', '/occupancy', '/bookings', '/group-classes', '/coach-schedule', '/users', '/cards']
     for (const p of pages) if (custom.includes(p)) return p
     return custom[0].startsWith('/') ? custom[0] : '/dashboard'
   }
