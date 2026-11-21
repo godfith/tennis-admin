@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>退款申请</h2>
-        <p class="sub">超管确认后才会真正退款。点会员名可打开该用户详情。</p>
+        <p class="sub">超管确认后才会真正退款。点会员名直接查看该用户详情。</p>
       </div>
     </div>
 
@@ -125,11 +125,51 @@
       </el-table>
       <div v-if="!loading && !list.length" class="empty">暂无申请</div>
     </div>
+
+    <el-drawer v-model="userVisible" size="760px" destroy-on-close>
+      <template #header>
+        <div>
+          <div class="drawer-name">{{ userDetail.nickName || userDetail.nick_name || userDetail.user_name || '会员' }}</div>
+          <div class="sub-text">{{ userDetail.phone || '无手机号' }}<span v-if="userDetail.userId"> · {{ userDetail.userId }}</span></div>
+        </div>
+      </template>
+      <div v-loading="userLoading">
+        <div class="metric-row">
+          <div class="metric"><div class="lab">余额</div><div class="num">{{ money(userDetail.balance) }}</div></div>
+          <div class="metric"><div class="lab">积分</div><div class="num">{{ userDetail.points || 0 }}</div></div>
+          <div class="metric"><div class="lab">累计消费</div><div class="num">{{ money(userDetail.totalSpend) }}</div></div>
+          <div class="metric"><div class="lab">有效持卡</div><div class="num">{{ userDetail.cardCount || userCards.length || 0 }}</div></div>
+        </div>
+        <el-tabs>
+          <el-tab-pane :label="'持卡（' + userCards.length + '）'">
+            <el-table :data="userCards" size="small" stripe max-height="360">
+              <el-table-column prop="cardName" label="卡" min-width="160" show-overflow-tooltip />
+              <el-table-column label="次数" width="90">
+                <template #default="{ row }">{{ row.remainingTimes ?? '-' }} / {{ row.totalTimes ?? '-' }}</template>
+              </el-table-column>
+              <el-table-column prop="status" label="状态" width="80" />
+              <el-table-column prop="validTo" label="有效期" width="110" />
+              <el-table-column prop="venueName" label="场馆" min-width="120" show-overflow-tooltip />
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane :label="'预约（' + userBookings.length + '）'">
+            <el-table :data="userBookings" size="small" stripe max-height="360">
+              <el-table-column prop="date" label="日期" width="110" />
+              <el-table-column prop="time" label="时段" width="110" />
+              <el-table-column prop="court" label="场地" min-width="120" show-overflow-tooltip />
+              <el-table-column prop="status" label="状态" width="80" />
+              <el-table-column label="金额" width="80">
+                <template #default="{ row }">{{ money(row.amount) }}</template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+    </el-drawer>
   </div>
 </template>
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { roleKind } from '../utils/auth.js'
 import { operatorFields } from '../utils/operator.js'
@@ -246,8 +286,6 @@ async function fetchList() {
   }
 }
 
-const router = useRouter()
-
 function money(v) {
   return '¥' + Number(v || 0).toFixed(2)
 }
@@ -265,10 +303,38 @@ function customerText(row) {
   return phone ? (name + '（' + phone + '）') : name
 }
 
-function goUser(row) {
-  const q = String(row.user_phone || row.initiatorPhone || row.user_id || row.userId || '').trim()
-  if (!q) { ElMessage.warning('该申请没有可用的用户标识'); return }
-  router.push({ path: '/users', query: { q, open: '1', from: 'refunds' } })
+const userVisible = ref(false)
+const userLoading = ref(false)
+const userDetail = ref({})
+const userCards = ref([])
+const userBookings = ref([])
+
+async function goUser(row) {
+  const phone = String(row.user_phone || row.initiatorPhone || '').replace(/\D/g, '').slice(-11)
+  let userId = Number(row.user_id || row.userId || 0)
+  userVisible.value = true
+  userLoading.value = true
+  userDetail.value = { nickName: row.user_name || row.user_nick || '会员', phone }
+  userCards.value = []
+  userBookings.value = []
+  try {
+    if (!userId && phone) {
+      const found = await post('/adminGetUsers', { keyword: phone, pageSize: 20 })
+      const list = (found && (found.list || found.users)) || []
+      const hit = list.find((u) => String(u.phone || '').replace(/\D/g, '').slice(-11) === phone) || list[0]
+      userId = Number((hit && (hit._id || hit.id || hit.user_id)) || 0)
+    }
+    if (!userId) { ElMessage.warning('找不到该用户'); return }
+    const r = await post('/adminGetUsers', { action: 'detail', userId })
+    if (!r.ok) { ElMessage.error(r.msg || '加载详情失败'); return }
+    userDetail.value = r.user || userDetail.value
+    userCards.value = r.cards || []
+    userBookings.value = r.bookings || []
+  } catch (e) {
+    ElMessage.error(e.message || '加载详情失败')
+  } finally {
+    userLoading.value = false
+  }
 }
 
 async function confirm(row) {
@@ -366,4 +432,9 @@ h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
 .ops { display: flex; gap: 6px; align-items: center; }
 .hint { color: #999; font-size: 12px; }
 .empty { text-align: center; color: #999; padding: 24px 0; }
+.drawer-name { font-size: 18px; font-weight: 600; color: #1a5c3a; }
+.metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.metric { background: #f7f8f6; border-radius: 8px; padding: 10px 12px; }
+.metric .lab { color: #909399; font-size: 12px; }
+.metric .num { margin-top: 4px; font-size: 18px; font-weight: 600; color: #303133; }
 </style>
