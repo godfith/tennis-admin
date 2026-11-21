@@ -778,7 +778,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261121a'
+const FN_VER = 'userApi-20261121b'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -1605,7 +1605,17 @@ exports.main = async (rawEvent) => {
           return { ok: false, msg: '无权取消' }
         }
         const approvedId = event.approvedRequestId || (event.data && event.data.approvedRequestId)
+        if (!approvedId) {
+          if (!refundMeta.canMiniProgramCancel(b)) {
+            await conn.rollback()
+            return { ok: false, msg: '预约开始前6小时内不可取消。如需退款，请到前台办理。', fnVer: FN_VER }
+          }
+        }
         const needMoney = await refundMeta.bookingHasMoneyRefund(conn, b)
+        if (needMoney && !approvedId && !refundMeta.canMiniProgramRefund(b)) {
+          await conn.rollback()
+          return { ok: false, needFrontDesk: true, msg: '未提前1天取消，不能在小程序退款。请到前台办理退款。', fnVer: FN_VER }
+        }
         if (needMoney && !approvedId) {
           const exist = await refundMeta.findPending(conn, { bookingId: id })
           if (exist) {

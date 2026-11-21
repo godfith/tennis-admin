@@ -98,6 +98,7 @@ function refundStatusLabel(st) {
   if (st === 'pending') return '待确认'
   if (st === 'refunding') return '退款中'
   if (st === 'confirmed') return '已确认'
+  if (st === 'withdrawn') return '已撤回'
   return st || '-'
 }
 

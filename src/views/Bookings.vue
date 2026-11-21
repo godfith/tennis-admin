@@ -377,16 +377,29 @@
           </div>
         </el-form-item>
       </el-form>
+      <p v-if="pendingRefund" class="hint pending-refund-tip">已提交退款申请（{{ pendingRefund.typeLabel || '退款' }}），等待管理员确认。点错了可以撤回。</p>
       <template #footer>
         <el-button v-if="current && isLockBooking(current)" type="primary" @click="lockToBook">转为预约</el-button>
         <el-button v-if="canCancelBook && current && isLockBooking(current)" type="warning" @click="cancelBook">解锁</el-button>
-        <el-button v-if="canRefundCashOnly" type="danger" plain :loading="saving" @click="refundCashKeepCard">只退款</el-button>
-        <el-button v-if="canRefundCardOnly" type="warning" plain :loading="saving" @click="refundCardKeepCash">只退卡</el-button>
-        <el-button v-if="canCancelBook && current && !isLockBooking(current)" type="warning" @click="cancelBook">取消预约</el-button>
+        <el-button v-if="canRefundCashOnly && !pendingRefund" type="danger" plain :loading="saving" @click="refundCashKeepCard">只退款</el-button>
+        <el-button v-if="canRefundCardOnly && !pendingRefund" type="warning" plain :loading="saving" @click="refundCardKeepCash">只退卡</el-button>
+        <el-button v-if="canCancelBook && current && !isLockBooking(current) && pendingRefund" type="info" :loading="saving" @click="withdrawRefund">撤回退款申请</el-button>
+        <el-button v-if="canCancelBook && current && !isLockBooking(current) && !pendingRefund" type="warning" @click="cancelBook">取消预约</el-button>
         <el-button v-if="current && !isLockBooking(current) && !isBookingDone(current)" type="primary" :loading="saving" @click="saveDetail">保存修改</el-button>
         <el-button v-if="current && !isLockBooking(current) && isBookingDone(current)" type="primary" :loading="saving" @click="saveDetail">保存金额</el-button>
         <span v-if="current && isBookingDone(current)" class="hint">已开始/已结束：场地时段不能改，可改收款金额</span>
         <el-button @click="detailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="cancelChoiceVisible" title="取消预约" width="440px">
+      <p>请选择处理方式：</p>
+      <p>提交退款申请后，要等管理员在「退款申请」确认才会退款并取消预约。如果点错了，可在预约详情里撤回申请。</p>
+      <p>只取消预约会立即取消，不退款。前台办理的退款也都会进入审批。</p>
+      <template #footer>
+        <el-button @click="cancelChoiceVisible = false">返回</el-button>
+        <el-button type="warning" :loading="saving" @click="doCancelBook(true)">只取消预约（不退款）</el-button>
+        <el-button type="danger" :loading="saving" @click="doCancelBook(false)">提交退款申请</el-button>
       </template>
     </el-dialog>
 
@@ -513,6 +526,8 @@ const bookMode = ref('book')
 const bookVisible = ref(false)
 const groupVisible = ref(false)
 const detailVisible = ref(false)
+const cancelChoiceVisible = ref(false)
+const pendingRefund = ref(null)
 const editField = ref('')
 const editForm = ref({ court: '', date: '', time: '', cardId: '', cardName: '', amount: 0, remark: '', coachId: '', issueTpl: '', payMeituan: 0, payDouyin: 0, payOffline: 0, issuePrice: 0 })
 const editNeedCoach = ref(false)
@@ -1010,6 +1025,7 @@ function onCellClick(courtName, time) {
     if (editNeedCoach.value) loadCoaches()
     loadTemplates()
     detailVisible.value = true
+    loadPendingRefund(b._id || b.id)
     return
   }
   if (!canBook) {
@@ -1625,30 +1641,114 @@ async function submitGroupEnroll() {
   }
 }
 
+function bookingNeedsMoneyRefund(b) {
+  if (!b) return false
+  if (Number(b.amount || 0) > 0) return true
+  if (b.payMethod === '小程序支付' || b.pay_method === '小程序支付') return true
+  if (b.payOrderId || b.pay_order_id) return true
+  return false
+}
+
+async function loadPendingRefund(bookingId) {
+  pendingRefund.value = null
+  if (!bookingId) return
+  try {
+    const r = await post('/adminSaveBooking', { action: 'getPendingRefund', id: bookingId })
+    pendingRefund.value = (r && r.ok && r.request) ? r.request : null
+  } catch (e) {
+    pendingRefund.value = null
+  }
+}
+
+async function withdrawRefund() {
+  if (!current.value?._id || !pendingRefund.value) return
+  try {
+    await ElMessageBox.confirm('确定撤回这笔退款申请？撤回后预约仍保留，可以重新选择退款或只取消。', '撤回退款申请', { type: 'warning', confirmButtonText: '撤回申请' })
+    saving.value = true
+    const result = await post('/adminSaveBooking', {
+      action: 'withdraw_refund_request',
+      id: current.value._id,
+      requestId: pendingRefund.value.id,
+      data: { operatorName: currentOperatorLabel() }
+    })
+    if (!result.ok) {
+      ElMessage.error(result.msg || '撤回失败')
+      return
+    }
+    ElMessage.success(result.msg || '已撤回退款申请')
+    pendingRefund.value = null
+    loadAll()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message || '撤回失败')
+  } finally {
+    saving.value = false
+  }
+}
+
 async function cancelBook() {
   if (!current.value?._id) return
+  if (isLockBooking(current.value)) {
+    try {
+      await ElMessageBox.confirm('确定解锁该时段？', '取消预约', { type: 'warning', confirmButtonText: '确认取消' })
+      await doCancelBook(false)
+    } catch (e) {
+      if (e !== 'cancel') ElMessage.error(e.message || '失败')
+    }
+    return
+  }
+  if (bookingNeedsMoneyRefund(current.value)) {
+    cancelChoiceVisible.value = true
+    return
+  }
   try {
     await ElMessageBox.confirm(
-      isLockBooking(current.value)
-        ? '确定解锁该时段？'
-        : ('确定取消该预约？' + (Number(current.value.amount) > 0 || current.value.payMethod === '小程序支付' ? '如需退款，会先提交到「退款申请」，管理员确认后才会退款并取消。' : '') + (current.value.cardId ? '用卡将退回 1 次。' : '')),
+      '确定取消该预约？' + (current.value.cardId ? '用卡将退回 1 次。' : ''),
       '取消预约',
       { type: 'warning', confirmButtonText: '确认取消' }
     )
+    await doCancelBook(false)
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message || '失败')
+  }
+}
+
+async function doCancelBook(cancelOnly) {
+  if (!current.value?._id) return
+  saving.value = true
+  try {
     const result = await post('/adminSaveBooking', {
       action: 'cancel',
       id: current.value._id,
-      data: { operatorName: localStorage.getItem('admin_name') || '管理员' }
+      cancelOnly: !!cancelOnly,
+      data: {
+        operatorName: currentOperatorLabel(),
+        cancelOnly: !!cancelOnly
+      }
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '取消失败')
       return
     }
-    ElMessage.success(isLockBooking(current.value) ? '已解锁' : (result.pending ? (result.msg || '已提交退款申请，等待管理员确认') : '已取消'))
+    cancelChoiceVisible.value = false
+    if (isLockBooking(current.value)) {
+      ElMessage.success('已解锁')
+      detailVisible.value = false
+      loadAll()
+      return
+    }
+    if (result.pending) {
+      ElMessage.success(result.msg || '已提交退款申请，等待管理员确认')
+      await loadPendingRefund(current.value._id)
+      loadAll()
+      return
+    }
+    ElMessage.success(cancelOnly ? '已取消预约，未退款' : '已取消')
     detailVisible.value = false
     loadAll()
   } catch (e) {
-    if (e !== 'cancel') ElMessage.error(e.message || '失败')
+    ElMessage.error(e.message || '失败')
+  } finally {
+    saving.value = false
   }
 }
 
@@ -1924,6 +2024,7 @@ h2 { margin: 0; font-size: 20px; }
 .row-edit { display: flex; align-items: center; gap: 8px; width: 100%; }
 .phone-text { user-select: text; margin-right: 8px; }
 .hint { color: #e6a23c; font-size: 13px; margin-right: 8px; }
+.pending-refund-tip { margin: 8px 0 0; line-height: 1.5; }
 .slot.group { background: #fce4ec; color: #c2185b; }
 .slot.group:hover { background: #f8bbd0; }
 .booked-user {
