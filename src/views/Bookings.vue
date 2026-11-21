@@ -415,7 +415,7 @@
               <el-option v-for="c in coachList" :key="c._id" :label="c.name" :value="c._id" />
             </el-select>
           </el-form-item>
-          <div class="card-tip">发卡后这张卡次数 −1 挂到本场，原现金记退款。</div>
+          <div class="card-tip">提交后进入「退款申请」审批，管理员确认后才会退款，并把新卡扣 1 次挂到本场。</div>
         </template>
         <template v-else>
           <el-form-item label="原用卡">{{ current.cardName || current.card_name || '-' }}</el-form-item>
@@ -1362,7 +1362,7 @@ async function submitConvert() {
         }
       })
       if (!result.ok) { ElMessage.error(result.msg || '操作失败'); return }
-      ElMessage.success('已退原款并发卡扣次')
+      ElMessage.success(result.pending ? (result.msg || '已提交退款申请，等待管理员确认') : '已退原款并发卡扣次')
       convertVisible.value = false
       detailVisible.value = false
       loadAll()
@@ -1631,7 +1631,7 @@ async function cancelBook() {
     await ElMessageBox.confirm(
       isLockBooking(current.value)
         ? '确定解锁该时段？'
-        : ('确定取消该预约？将退本场现金' + (Number(current.value.amount) > 0 ? ' ¥' + Number(current.value.amount).toFixed(2) : '') + (current.value.cardId ? '，并退回用掉的 1 次。卖卡不自动退。' : '。')),
+        : ('确定取消该预约？' + (Number(current.value.amount) > 0 || current.value.payMethod === '小程序支付' ? '如需退款，会先提交到「退款申请」，管理员确认后才会退款并取消。' : '') + (current.value.cardId ? '用卡将退回 1 次。' : '')),
       '取消预约',
       { type: 'warning', confirmButtonText: '确认取消' }
     )
@@ -1644,7 +1644,7 @@ async function cancelBook() {
       ElMessage.error(result.msg || '取消失败')
       return
     }
-    ElMessage.success(isLockBooking(current.value) ? '已解锁' : '已取消')
+    ElMessage.success(isLockBooking(current.value) ? '已解锁' : (result.pending ? (result.msg || '已提交退款申请，等待管理员确认') : '已取消'))
     detailVisible.value = false
     loadAll()
   } catch (e) {

@@ -11,6 +11,7 @@ const mall = require('./cardMall')
 const cardRefund = require('./cardRefund')
 const bannerLink = require('./bannerLink')
 const adminRole = require('./adminRole')
+const refundMeta = require('./refundRequestMeta')
 let cloud = null
 try {
   cloud = require('wx-server-sdk')
@@ -777,7 +778,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261120e'
+const FN_VER = 'userApi-20261121a'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -1602,6 +1603,39 @@ exports.main = async (rawEvent) => {
         if (openid && b.openid && b.openid !== openid) {
           await conn.rollback()
           return { ok: false, msg: '无权取消' }
+        }
+        const approvedId = event.approvedRequestId || (event.data && event.data.approvedRequestId)
+        const needMoney = await refundMeta.bookingHasMoneyRefund(conn, b)
+        if (needMoney && !approvedId) {
+          const exist = await refundMeta.findPending(conn, { bookingId: id })
+          if (exist) {
+            await conn.rollback()
+            return { ok: true, pending: true, already: true, requestId: String(exist.id), msg: '已提交退款申请，请等待管理员确认后才会退款并取消预约', fnVer: FN_VER }
+          }
+          const amt = refundMeta.money(b.amount)
+          const requestId = await refundMeta.insertRequest(conn, {
+            cardId: b.card_id || 0,
+            userId: b.user_id,
+            openid: b.openid || openid || '',
+            payOrderId: b.pay_order_id || null,
+            paidAmount: amt,
+            refundAmount: amt,
+            summary: '用户取消预约退款 ' + (b.court || '') + ' ' + (b.time || ''),
+            meta: {
+              type: 'booking_cancel',
+              bookingId: id,
+              initiatorName: b.user_name || '会员',
+              initiatorPhone: b.phone || event.phone || '',
+              initiatorSource: 'miniprogram',
+              summary: '用户取消预约退款 ' + (b.court || '') + ' ' + (b.time || '')
+            }
+          })
+          await conn.commit()
+          return { ok: true, pending: true, requestId: String(requestId), msg: '已提交退款申请，请等待管理员确认后才会退款并取消预约', fnVer: FN_VER }
+        }
+        if (needMoney && approvedId) {
+          const chk = await refundMeta.assertApprovedRequest(conn, approvedId, 'booking_cancel', id)
+          if (!chk.ok) { await conn.rollback(); return { ok: false, msg: chk.msg, fnVer: FN_VER } }
         }
         // 微信支付订场：先退款（幂等），失败则整单不取消
         let payOrder = null

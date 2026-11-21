@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h2>购卡退款申请</h2>
+      <h2>退款申请</h2>
       <div>
         <el-radio-group v-model="status" size="small" @change="fetchList">
           <el-radio-button value="pending">待确认</el-radio-button>
@@ -12,10 +12,15 @@
         <el-button style="margin-left:8px" @click="fetchList">刷新</el-button>
       </div>
     </div>
-    <p class="tip">小程序只能提交申请，不会自己退成功。前台在群里报备后，由超级管理员在这里确认，系统按「剩余次数 / 总次数 × 购卡实付」原路退回微信，并作废该卡。已用次数不退；未上的课会先取消再折算。</p>
+    <p class="tip">所有退款都必须先出现在这里，由超级管理员确认后才会退。包括：小程序购卡退款、前台「只退款·改发卡」、后台退卡，以及取消预约时要退的钱。购卡退款按剩余次数折算后原路退回微信；未上的课会先取消再折算。</p>
     <el-table :data="list" stripe border v-loading="loading">
       <el-table-column prop="id" label="申请号" width="90" />
-      <el-table-column prop="card_name" label="卡" min-width="160" />
+      <el-table-column label="类型" width="140">
+        <template #default="{ row }">{{ row.requestTypeLabel || refundTypeLabel(row) }}</template>
+      </el-table-column>
+      <el-table-column prop="card_name" label="卡 / 预约" min-width="160">
+        <template #default="{ row }">{{ row.card_name || row.summary || '-' }}</template>
+      </el-table-column>
       <el-table-column prop="user_name" label="会员" width="110" />
       <el-table-column label="发起人" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">{{ row.initiatorText || refundInitiator(row) }}</template>
@@ -73,6 +78,15 @@ const loading = ref(false)
 const status = ref('pending')
 const canConfirm = computed(() => roleKind() === 'admin')
 
+function refundTypeLabel(row) {
+  const t = row.requestType || row.request_type || ''
+  if (t === 'booking_cash_issue') return '只退款·改发卡'
+  if (t === 'booking_cancel') return '取消预约退款'
+  if (t === 'admin_card') return '退卡'
+  if (t === 'admin_card_delete') return '删除并退卡'
+  return '购卡退款'
+}
+
 function refundInitiator(row) {
   const name = row.user_name || row.user_nick || '会员'
   const phone = row.initiatorPhone || row.user_phone || ''
@@ -104,7 +118,9 @@ async function fetchList() {
 async function confirm(row) {
   if (!canConfirm.value) { ElMessage.warning('只有超级管理员可以确认退款'); return }
   await ElMessageBox.confirm(
-    '确认后退款将原路退回微信，并作废「' + (row.card_name || '') + '」。未上课的报名会先取消再按剩余次数折算。确定继续？',
+    '确认后才会真正退款。类型：' + (row.requestTypeLabel || refundTypeLabel(row)) + '。' +
+    (row.summary || row.card_name || '') +
+    '。确定继续？',
     '确认退款',
     { type: 'warning', confirmButtonText: '确认退款' }
   )
