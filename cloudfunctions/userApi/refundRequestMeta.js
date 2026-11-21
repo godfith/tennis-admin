@@ -304,7 +304,12 @@ function httpPostFn(name, payload, timeoutMs) {
       port: u.port || 443,
       path: u.pathname,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'GoatTennisAdmin/1.0',
+        'Content-Length': Buffer.byteLength(data)
+      },
       timeout: timeoutMs || 45000
     }, (res) => {
       const chunks = []

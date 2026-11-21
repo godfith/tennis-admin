@@ -4,7 +4,7 @@ const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
 
-const FN_VER = 'refundCard-20261121f'
+const FN_VER = 'refundCard-20261121g'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
