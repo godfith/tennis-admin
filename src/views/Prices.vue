@@ -3,15 +3,25 @@
     <div class="page-header">
       <div>
         <h2>场地价格</h2>
-        <p class="sub">按星期配置各场地各时段价格，支持小数（如 0.01）与多选行列批量填写</p>
+        <p class="sub">先筛选场地，再按星期和时间段设置价格。只保存当前场馆选中的场地，不会影响其他场馆。</p>
       </div>
       <div class="toolbar">
         <el-button :loading="loading" @click="loadAll">刷新</el-button>
-        <el-button type="primary" :loading="saving" @click="save">保存价格</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!canSave" @click="save">保存价格</el-button>
       </div>
     </div>
 
     <div class="card filters">
+      <div class="filter-row">
+        <span class="label">筛选场地</span>
+        <el-checkbox-group v-model="selectedCourtNames" class="court-checks">
+          <el-checkbox v-for="c in courts" :key="c.name" :value="c.name">{{ c.name }}</el-checkbox>
+        </el-checkbox-group>
+        <el-button-group>
+          <el-button size="small" @click="selectAllCourts">全选</el-button>
+          <el-button size="small" @click="selectedCourtNames = []">清空</el-button>
+        </el-button-group>
+      </div>
       <div class="filter-row">
         <span class="label">保存到星期</span>
         <el-checkbox-group v-model="applyWeekdays">
@@ -40,6 +50,7 @@
           <el-radio-button :value="6">六</el-radio-button>
           <el-radio-button :value="7">日</el-radio-button>
         </el-radio-group>
+        <span class="hint">切换预览只加载该星期已保存的价格，不会自动保存。</span>
       </div>
     </div>
 
@@ -47,18 +58,18 @@
       <span class="batch-label">批量填价</span>
       <el-input-number v-model="batchPrice" :min="0" :precision="2" :step="0.01" size="default" />
       <span class="unit">元</span>
-      <el-button type="success" plain :disabled="!selectedCols.length" @click="fillSelectedCols">
-        应用到选中列 ({{ selectedCols.length }})
+      <el-button type="success" plain :disabled="!selectedCols.length || !visibleCourts.length" @click="fillSelectedCols">
+        应用到选中时段 ({{ selectedCols.length }})
       </el-button>
       <el-button type="success" plain :disabled="!selectedRows.length" @click="fillSelectedRows">
-        应用到选中行 ({{ selectedRows.length }})
+        应用到选中场地 ({{ selectedRows.length }})
       </el-button>
-      <el-button type="warning" plain @click="fillAll">全部格子</el-button>
+      <el-button type="warning" plain :disabled="!visibleCourts.length" @click="fillAll">当前筛选全部</el-button>
       <el-button link @click="clearSelection">清除选择</el-button>
     </div>
 
     <div class="card grid-card" v-loading="loading">
-      <div class="table-scroll" v-if="courts.length">
+      <div class="table-scroll" v-if="visibleCourts.length">
         <table class="price-table">
           <thead>
             <tr>
@@ -87,7 +98,7 @@
           </thead>
           <tbody>
             <tr
-              v-for="c in courts"
+              v-for="c in visibleCourts"
               :key="c.name"
               :class="{ 'row-selected': selectedRows.includes(c.name) }"
             >
@@ -120,7 +131,8 @@
           </tbody>
         </table>
       </div>
-      <div v-else class="empty">请先在「场地管理」添加场地，并在顶部选择场馆</div>
+      <div v-else-if="!loading && courts.length" class="empty">请先勾选要设置的场地</div>
+      <div v-else-if="!loading" class="empty">请先在「场地管理」添加场地，并在顶部选择场馆</div>
     </div>
   </div>
 </template>
@@ -146,6 +158,7 @@ const FALLBACK_SLOTS = [
 const timeSlots = ref(FALLBACK_SLOTS.slice())
 
 const courts = ref([])
+const selectedCourtNames = ref([])
 const matrix = reactive({})
 const loading = ref(false)
 const saving = ref(false)
@@ -154,11 +167,23 @@ const applyWeekdays = ref([1, 2, 3, 4, 5])
 const batchPrice = ref(0)
 const selectedCols = ref([])
 const selectedRows = ref([])
+const loadedVenueId = ref('')
 
+const visibleCourts = computed(() =>
+  courts.value.filter((c) => selectedCourtNames.value.includes(c.name))
+)
 const allRowsSelected = computed(
-  () => courts.value.length > 0 && selectedRows.value.length === courts.value.length
+  () => visibleCourts.value.length > 0 && selectedRows.value.length === visibleCourts.value.length
 )
 const someRowsSelected = computed(() => selectedRows.value.length > 0)
+const canSave = computed(
+  () =>
+    !loading.value &&
+    !!loadedVenueId.value &&
+    loadedVenueId.value === venueId() &&
+    selectedCourtNames.value.length > 0 &&
+    applyWeekdays.value.length > 0
+)
 
 const base = import.meta.env.DEV
   ? '/api'
@@ -188,8 +213,8 @@ function money(v) {
   return Math.round(n * 100) / 100
 }
 
-function normCourt(name) {
-  return String(name || '').trim().replace(/^发球机/u, '').replace(/场$/u, '')
+function clearMatrix() {
+  for (const k of Object.keys(matrix)) delete matrix[k]
 }
 
 function ensureMatrix(courtNames) {
@@ -199,6 +224,10 @@ function ensureMatrix(courtNames) {
       if (matrix[name][t] == null) matrix[name][t] = 0
     })
   })
+}
+
+function selectAllCourts() {
+  selectedCourtNames.value = courts.value.map((c) => c.name)
 }
 
 function toggleCol(t, checked) {
@@ -218,7 +247,7 @@ function toggleRow(name, checked) {
 }
 
 function toggleAllRows(checked) {
-  selectedRows.value = checked ? courts.value.map((c) => c.name) : []
+  selectedRows.value = checked ? visibleCourts.value.map((c) => c.name) : []
 }
 
 function clearSelection() {
@@ -229,37 +258,41 @@ function clearSelection() {
 function fillSelectedCols() {
   const p = money(batchPrice.value)
   selectedCols.value.forEach((t) => {
-    courts.value.forEach((c) => {
+    visibleCourts.value.forEach((c) => {
+      if (!matrix[c.name]) matrix[c.name] = {}
       matrix[c.name][t] = p
     })
   })
-  ElMessage.success(`已将选中 ${selectedCols.value.length} 列设为 ${p} 元`)
+  ElMessage.success(`已将选中 ${selectedCols.value.length} 个时段设为 ${p} 元`)
 }
 
 function fillSelectedRows() {
   const p = money(batchPrice.value)
   selectedRows.value.forEach((name) => {
+    if (!matrix[name]) matrix[name] = {}
     timeSlots.value.forEach((t) => {
       matrix[name][t] = p
     })
   })
-  ElMessage.success(`已将选中 ${selectedRows.value.length} 行设为 ${p} 元`)
+  ElMessage.success(`已将选中 ${selectedRows.value.length} 个场地设为 ${p} 元`)
 }
 
 function fillAll() {
   const p = money(batchPrice.value)
-  courts.value.forEach((c) => {
+  visibleCourts.value.forEach((c) => {
+    if (!matrix[c.name]) matrix[c.name] = {}
     timeSlots.value.forEach((t) => {
       matrix[c.name][t] = p
     })
   })
-  ElMessage.success(`已全部设为 ${p} 元`)
+  ElMessage.success(`已将当前筛选全部设为 ${p} 元`)
 }
 
 async function loadCourts() {
   const vid = venueId()
   if (!vid) {
     courts.value = []
+    selectedCourtNames.value = []
     return
   }
   const result = await post('/adminGetCourts', { venueId: vid })
@@ -271,12 +304,16 @@ async function loadCourts() {
     name: c.name,
     _id: c._id
   }))
+  selectedCourtNames.value = courts.value.map((c) => c.name)
   ensureMatrix(courts.value.map((c) => c.name))
 }
 
 async function loadPrices() {
   const vid = venueId()
-  if (!vid || !courts.value.length) return
+  if (!vid || !courts.value.length) {
+    loadedVenueId.value = ''
+    return
+  }
   loading.value = true
   try {
     const result = await post('/adminGetCourtPrices', {
@@ -285,8 +322,11 @@ async function loadPrices() {
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '加载价格失败')
+      loadedVenueId.value = ''
       return
     }
+    // 只保留当前场馆场地的数据，避免串馆
+    clearMatrix()
     ensureMatrix(courts.value.map((c) => c.name))
     courts.value.forEach((c) => {
       timeSlots.value.forEach((t) => {
@@ -294,17 +334,15 @@ async function loadPrices() {
       })
     })
     ;(result.list || []).forEach((row) => {
-      let target = row.court
-      if (!matrix[target]) {
-        const n = normCourt(row.court)
-        target = Object.keys(matrix).find((k) => normCourt(k) === n) || ''
-      }
-      if (target && matrix[target] && timeSlots.value.includes(row.timeSlot)) {
+      const target = row.court
+      if (matrix[target] && timeSlots.value.includes(row.timeSlot)) {
         matrix[target][row.timeSlot] = money(row.price)
       }
     })
+    loadedVenueId.value = vid
   } catch (e) {
     ElMessage.error(e.message || '网络错误')
+    loadedVenueId.value = ''
   } finally {
     loading.value = false
   }
@@ -331,6 +369,9 @@ async function loadHours() {
 
 async function loadAll() {
   loading.value = true
+  loadedVenueId.value = ''
+  clearMatrix()
+  clearSelection()
   try {
     await loadHours()
     await loadCourts()
@@ -346,20 +387,32 @@ async function save() {
     ElMessage.warning('请先选择场馆')
     return
   }
+  if (loadedVenueId.value !== vid) {
+    ElMessage.warning('场馆已切换或数据未加载完成，请先刷新后再保存')
+    return
+  }
+  if (!selectedCourtNames.value.length) {
+    ElMessage.warning('请先勾选要设置的场地')
+    return
+  }
   if (!applyWeekdays.value.length) {
     ElMessage.warning('请勾选要保存到的星期')
     return
   }
   const items = []
-  courts.value.forEach((c) => {
+  visibleCourts.value.forEach((c) => {
     timeSlots.value.forEach((t) => {
       items.push({
         court: c.name,
         timeSlot: t,
-        price: money(matrix[c.name][t])
+        price: money(matrix[c.name] && matrix[c.name][t])
       })
     })
   })
+  if (!items.length) {
+    ElMessage.warning('没有可保存的价格')
+    return
+  }
   saving.value = true
   try {
     const result = await post('/adminSaveCourtPrices', {
@@ -371,7 +424,7 @@ async function save() {
       ElMessage.error(result.msg || '保存失败')
       return
     }
-    ElMessage.success('已保存到所选星期')
+    ElMessage.success('已保存到所选场地和星期（仅当前场馆）')
     if (applyWeekdays.value.includes(previewWeekday.value)) {
       await loadPrices()
     }
@@ -383,7 +436,11 @@ async function save() {
 }
 
 function onVenueChanged() {
-  clearSelection()
+  clearMatrix()
+  selectedCourtNames.value = []
+  selectedCols.value = []
+  selectedRows.value = []
+  loadedVenueId.value = ''
   loadAll()
 }
 
@@ -445,6 +502,15 @@ h2 {
   color: #606266;
   font-size: 13px;
   flex-shrink: 0;
+}
+.court-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.hint {
+  color: #909399;
+  font-size: 12px;
 }
 .batch-bar {
   display: flex;
