@@ -83,10 +83,18 @@ import { roleKind } from '../utils/auth.js'
 import { operatorFields } from '../utils/operator.js'
 
 const base = import.meta.env.DEV ? '/api' : 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
+
+// CloudBase HTTP 网关强制要求 Accept + User-Agent，缺了就返回「Http头缺少Accept或User-Agent」
+const API_HEADERS = {
+  'Content-Type': 'application/json',
+  Accept: 'application/json, */*;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (compatible; GoatTennisAdmin/1.0)'
+}
+
 async function post(path, body = {}) {
   const res = await fetch(base + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: API_HEADERS,
     body: JSON.stringify(Object.assign({}, operatorFields(), body))
   })
   const data = await res.json()
