@@ -292,24 +292,28 @@ function isLockBooking(b) {
 
 
 const FN_HTTP_BASE = process.env.CLOUD_HTTP_BASE || 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
+const TCB_ENV_ID = process.env.TCB_ENV || process.env.SCF_NAMESPACE || 'cloud1-d3g0pb1qk028e3585-d862bc2-1312769671'
+const HTTP_HEADERS = {
+  'Content-Type': 'application/json',
+  'Accept': 'application/json, */*;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (compatible; GoatTennisAdmin/1.0)'
+}
 
-function httpPostFn(name, payload, timeoutMs) {
+function isGwHeaderErr(errOrRes) {
+  const msg = String((errOrRes && (errOrRes.message || errOrRes.msg)) || errOrRes || '')
+  return msg.indexOf('Http头缺少') >= 0 || (msg.indexOf('Accept') >= 0 && msg.indexOf('User-Agent') >= 0)
+}
+
+function httpsPostJson(hostname, path, headers, body, timeoutMs) {
   const https = require('https')
-  const { URL } = require('url')
-  const u = new URL(String(FN_HTTP_BASE).replace(/\/$/, '') + '/' + name)
-  const data = JSON.stringify(payload || {})
+  const data = typeof body === 'string' ? body : JSON.stringify(body || {})
   return new Promise((resolve, reject) => {
     const req = https.request({
-      hostname: u.hostname,
-      port: u.port || 443,
-      path: u.pathname,
+      hostname,
+      port: 443,
+      path,
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'User-Agent': 'GoatTennisAdmin/1.0',
-        'Content-Length': Buffer.byteLength(data)
-      },
+      headers: Object.assign({}, headers, { 'Content-Length': Buffer.byteLength(data) }),
       timeout: timeoutMs || 45000
     }, (res) => {
       const chunks = []
@@ -318,12 +322,16 @@ function httpPostFn(name, payload, timeoutMs) {
         const raw = Buffer.concat(chunks).toString('utf8')
         try {
           const j = JSON.parse(raw)
-          resolve(j && j.body ? (typeof j.body === 'string' ? JSON.parse(j.body) : j.body) : j)
+          resolve({ status: res.statusCode, json: j, raw })
         } catch (e) {
           reject(new Error((raw || '').slice(0, 200) || '接口返回无效'))
         }
       })
     })
+    // SCF outbound proxies sometimes drop constructor headers; set again explicitly
+    Object.keys(headers || {}).forEach((k) => req.setHeader(k, headers[k]))
+    req.setHeader('Accept', headers.Accept || headers.accept || 'application/json, */*;q=0.8')
+    req.setHeader('User-Agent', headers['User-Agent'] || headers['user-agent'] || 'Mozilla/5.0 (compatible; GoatTennisAdmin/1.0)')
     req.on('error', reject)
     req.on('timeout', () => { req.destroy(); reject(new Error('调用超时')) })
     req.write(data)
@@ -331,11 +339,108 @@ function httpPostFn(name, payload, timeoutMs) {
   })
 }
 
+function sha256hex(s) {
+  const crypto = require('crypto')
+  return crypto.createHash('sha256').update(s, 'utf8').digest('hex')
+}
+
+function hmacBuf(key, s) {
+  const crypto = require('crypto')
+  return crypto.createHmac('sha256', key).update(s, 'utf8').digest()
+}
+
+async function tcbInvokeFn(name, payload, timeoutMs) {
+  const secretId = process.env.TENCENTCLOUD_SECRETID || process.env.TCB_SECRETID || ''
+  const secretKey = process.env.TENCENTCLOUD_SECRETKEY || process.env.TCB_SECRETKEY || ''
+  const token = process.env.TENCENTCLOUD_SESSIONTOKEN || process.env.TCB_SESSIONTOKEN || ''
+  if (!secretId || !secretKey) throw new Error('缺少云开发调用凭证')
+  const region = process.env.TENCENTCLOUD_REGION || 'ap-shanghai'
+  const host = 'tcb.' + region + '.tencentcloudapi.com'
+  const action = 'InvokeCloudFunction'
+  const version = '2018-06-08'
+  const service = 'tcb'
+  const payloadStr = JSON.stringify({
+    EnvId: String(TCB_ENV_ID),
+    FunctionName: String(name),
+    RequestPayload: JSON.stringify(payload || {})
+  })
+  const timestamp = Math.floor(Date.now() / 1000)
+  const date = new Date(timestamp * 1000).toISOString().slice(0, 10)
+  const contentType = 'application/json; charset=utf-8'
+  const canonicalHeaders =
+    'content-type:' + contentType + '\n' +
+    'host:' + host + '\n' +
+    'x-tc-action:' + action.toLowerCase() + '\n'
+  const signedHeaders = 'content-type;host;x-tc-action'
+  const canonicalRequest = [
+    'POST', '/', '', canonicalHeaders, signedHeaders, sha256hex(payloadStr)
+  ].join('\n')
+  const credentialScope = date + '/' + service + '/tc3_request'
+  const stringToSign = ['TC3-HMAC-SHA256', String(timestamp), credentialScope, sha256hex(canonicalRequest)].join('\n')
+  const secretDate = hmacBuf('TC3' + secretKey, date)
+  const secretService = hmacBuf(secretDate, service)
+  const secretSigning = hmacBuf(secretService, 'tc3_request')
+  const signature = require('crypto').createHmac('sha256', secretSigning).update(stringToSign, 'utf8').digest('hex')
+  const authorization =
+    'TC3-HMAC-SHA256 Credential=' + secretId + '/' + credentialScope +
+    ', SignedHeaders=' + signedHeaders + ', Signature=' + signature
+  const headers = {
+    'Content-Type': contentType,
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (compatible; GoatTennisAdmin/1.0)',
+    Host: host,
+    'X-TC-Action': action,
+    'X-TC-Version': version,
+    'X-TC-Timestamp': String(timestamp),
+    'X-TC-Region': region,
+    Authorization: authorization
+  }
+  if (token) headers['X-TC-Token'] = token
+  const out = await httpsPostJson(host, '/', headers, payloadStr, timeoutMs || 45000)
+  const resp = out.json && out.json.Response
+  if (!resp) throw new Error('云函数调用无响应')
+  if (resp.Error) throw new Error(resp.Error.Message || resp.Error.Code || '云函数调用失败')
+  let result = resp.Result
+  if (typeof result === 'string') {
+    try { result = JSON.parse(result) } catch (e) {}
+  }
+  if (result && result.body) {
+    if (typeof result.body === 'string') {
+      try { result = JSON.parse(result.body) } catch (e) {}
+    } else if (typeof result.body === 'object') {
+      result = result.body
+    }
+  }
+  return result
+}
+
+function unwrapFnBody(j) {
+  if (j && j.body) return typeof j.body === 'string' ? JSON.parse(j.body) : j.body
+  return j
+}
+
+function httpPostFn(name, payload, timeoutMs) {
+  const { URL } = require('url')
+  const u = new URL(String(FN_HTTP_BASE).replace(/\/$/, '') + '/' + name)
+  return httpsPostJson(u.hostname, u.pathname, HTTP_HEADERS, payload || {}, timeoutMs).then((out) => unwrapFnBody(out.json))
+}
+
 async function callCloudFn(cloud, name, payload) {
+  // Prefer official CloudBase Invoke (does not go through the HTTP access gateway).
+  try {
+    const r = await tcbInvokeFn(name, payload)
+    if (r && !isGwHeaderErr(r)) return r
+  } catch (e) {
+    if (isGwHeaderErr(e)) {
+      // fall through
+    } else if (!process.env.TENCENTCLOUD_SECRETID && !process.env.TCB_SECRETID) {
+      // no creds outside SCF; try other paths
+    }
+  }
   if (cloud && cloud.callFunction) {
     try {
       const res = await cloud.callFunction({ name, data: payload || {} })
-      if (res && res.result) return res.result
+      if (res && res.result && !isGwHeaderErr(res.result)) return res.result
     } catch (e) {}
   }
   return httpPostFn(name, payload)
