@@ -4,7 +4,7 @@ const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
 
-const FN_VER = 'refundCard-20261121d'
+const FN_VER = 'refundCard-20261121e'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -38,6 +38,22 @@ async function refundCardPayViaPay(payload) {
     const res = await cloud.callFunction({
       name: 'pay',
       data: Object.assign({ action: 'refundCardPay', skipLedger: true }, payload || {})
+    })
+    return (res && res.result) || { ok: false, msg: '退款无响应' }
+  } catch (e) {
+    return { ok: false, msg: (e && e.message) || '退款调用失败' }
+  }
+}
+
+async function refundCourtPayViaPay(payload) {
+  const cloud = getCloud()
+  if (!cloud || !cloud.callFunction) {
+    return { ok: false, msg: '退款服务不可用（请安装/配置 wx-server-sdk，或在 pay 云函数手动退款）' }
+  }
+  try {
+    const res = await cloud.callFunction({
+      name: 'pay',
+      data: Object.assign({ action: 'refundCourtPay' }, payload || {})
     })
     return (res && res.result) || { ok: false, msg: '退款无响应' }
   } catch (e) {
@@ -346,6 +362,38 @@ async function confirmNonMall(request, meta, operatorName, conn) {
       approvedRequestId: request.id,
       data: { operatorName }
     })
+  } else if (meta.type === 'booking_wx_refund') {
+    const payOrderId = request.pay_order_id
+    if (!payOrderId && !meta.bookingId) {
+      exec = { ok: false, msg: '缺少支付单，无法补退微信' }
+    } else {
+      exec = await refundCourtPayViaPay({
+        payOrderId,
+        bookingId: meta.bookingId,
+        reason: '补退微信·' + operatorName,
+        skipLedger: true
+      })
+      if (exec && exec.ok) {
+        exec.refundAmount = request.refund_amount
+        try {
+          await pool.query(
+            `INSERT INTO activity_logs
+              (type, user_name, operator_name, phone, detail, venue_id, venue_name, amount, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+            [
+              'booking_refund',
+              '',
+              operatorName,
+              '',
+              '补退微信 ' + (request.refund_amount != null ? request.refund_amount : '') + '元 预约#' + (meta.bookingId || ''),
+              meta.venueId || '',
+              meta.venueName || '',
+              request.refund_amount || 0
+            ]
+          )
+        } catch (e) {}
+      }
+    }
   } else if (meta.type === 'admin_card' || meta.type === 'admin_card_delete') {
     const cardId = request.card_id
     const [cards] = await pool.query('SELECT * FROM member_cards WHERE id=? LIMIT 1', [cardId])

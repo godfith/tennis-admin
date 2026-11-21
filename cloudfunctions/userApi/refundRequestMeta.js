@@ -16,7 +16,8 @@ function typeLabel(type) {
     booking_cash_issue: '只退款·改发卡',
     booking_cancel: '取消预约退款',
     admin_card: '退卡',
-    admin_card_delete: '删除并退卡'
+    admin_card_delete: '删除并退卡',
+    booking_wx_refund: '补退微信'
   }
   return map[type] || type || '购卡退款'
 }
