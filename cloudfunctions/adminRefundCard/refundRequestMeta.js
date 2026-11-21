@@ -427,24 +427,26 @@ function httpPostFn(name, payload, timeoutMs) {
 }
 
 async function callCloudFn(cloud, name, payload) {
-  // Prefer official CloudBase Invoke (does not go through the HTTP access gateway).
-  try {
-    const r = await tcbInvokeFn(name, payload)
-    if (r && !isGwHeaderErr(r)) return r
-  } catch (e) {
-    if (isGwHeaderErr(e)) {
-      // fall through
-    } else if (!process.env.TENCENTCLOUD_SECRETID && !process.env.TCB_SECRETID) {
-      // no creds outside SCF; try other paths
-    }
-  }
+  // Prefer in-process SDK invoke. HTTP gateway strips Accept/User-Agent.
   if (cloud && cloud.callFunction) {
     try {
       const res = await cloud.callFunction({ name, data: payload || {} })
       if (res && res.result && !isGwHeaderErr(res.result)) return res.result
     } catch (e) {}
   }
-  return httpPostFn(name, payload)
+  try {
+    const r = await tcbInvokeFn(name, payload)
+    if (r && !isGwHeaderErr(r)) return r
+  } catch (e) {
+    if (!isGwHeaderErr(e) && (process.env.TENCENTCLOUD_SECRETID || process.env.TCB_SECRETID)) {
+      // invoke failed for another reason; still try HTTP as last resort
+    }
+  }
+  const httpRes = await httpPostFn(name, payload)
+  if (isGwHeaderErr(httpRes)) {
+    throw new Error('云函数互调被网关拦截（缺少 Accept/User-Agent）。请重新上传 adminRefundCard，并确认已安装 wx-server-sdk')
+  }
+  return httpRes
 }
 
 module.exports = {

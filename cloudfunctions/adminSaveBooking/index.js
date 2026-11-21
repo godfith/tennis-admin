@@ -16,15 +16,24 @@ function getCloud() {
   return __cloud
 }
 async function refundCourtPayViaPay(payload) {
+  // Refund WeChat inside this function. Do not call pay over the HTTP gateway
+  // (CloudBase strips Accept/User-Agent on function-to-function HTTP).
+  let conn
   try {
-    const data = await refundMeta.callCloudFn(
-      getCloud(),
-      'pay',
-      Object.assign({ action: 'refundCourtPay' }, payload || {})
-    )
-    return data || { ok: false, msg: '退款无响应' }
+    const wxPayRefund = require('./wxPayRefund')
+    conn = await pool.getConnection()
+    const o = await wxPayRefund.loadPayOrder(conn, payload || {})
+    if (!o) return { ok: false, msg: '支付订单不存在' }
+    return await wxPayRefund.refundPaidOrder(conn, o, {
+      reason: (payload && payload.reason) || '取消订场退款',
+      bookingId: (payload && payload.bookingId) || o.booking_id,
+      skipLedger: !payload || payload.skipLedger === true,
+      outRefundNo: (payload && (payload.outRefundNo || payload.out_refund_no)) || ''
+    })
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
+  } finally {
+    if (conn) conn.release()
   }
 }
 
@@ -2442,7 +2451,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261121e'
+const FN_VER = 'saveBooking-20261121f'
 
 function parseRuleObj(v) {
   if (!v) return null

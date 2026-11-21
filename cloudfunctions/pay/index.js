@@ -20,7 +20,7 @@ const pool = mysql.createPool({
 
 const mall = require('./cardMall')
 const cardPayFulfill = require('./cardPayFulfill')
-const PAY_FN_VER = 'pay-20261121a'
+const PAY_FN_VER = 'pay-20261121b'
 const PENDING_TTL_MIN = 30
 const BUSY_SQL = "('booked','locked','pending_pay')"
 
@@ -777,9 +777,15 @@ function outTradeNo() {
 }
 
 function requestJson(method, hostname, path, headers, body) {
+  const hdrs = Object.assign({
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (compatible; GoatTennisAdmin/1.0)'
+  }, headers || {})
+  if (!hdrs.Accept && !hdrs.accept) hdrs.Accept = 'application/json'
+  if (!hdrs['User-Agent'] && !hdrs['user-agent']) hdrs['User-Agent'] = 'Mozilla/5.0 (compatible; GoatTennisAdmin/1.0)'
   return new Promise((resolve, reject) => {
     const req = https.request(
-      { hostname, path, method, headers },
+      { hostname, path, method, headers: hdrs },
       (res) => {
         let raw = ''
         res.on('data', (c) => (raw += c))
@@ -794,6 +800,8 @@ function requestJson(method, hostname, path, headers, body) {
         })
       }
     )
+    req.setHeader('Accept', hdrs.Accept || hdrs.accept || 'application/json')
+    req.setHeader('User-Agent', hdrs['User-Agent'] || hdrs['user-agent'] || 'Mozilla/5.0 (compatible; GoatTennisAdmin/1.0)')
     req.on('error', reject)
     if (body) req.write(body)
     req.end()
