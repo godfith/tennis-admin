@@ -42,10 +42,10 @@
         <template #default="{ row }">{{ row.initiatorText || refundInitiator(row) }}</template>
       </el-table-column>
       <el-table-column label="确认人" width="130" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.operator_name || (row.status === 'pending' ? '待确认' : '-') }}</template>
+        <template #default="{ row }">{{ row.status === 'pending' ? '待确认' : (row.operator_name || '-') }}</template>
       </el-table-column>
       <el-table-column label="次数" width="110">
-        <template #default="{ row }">{{ row.remaining_times }} / {{ row.total_times }}</template>
+        <template #default="{ row }">{{ (row.remaining_times == null && row.total_times == null) ? '-' : ((row.remaining_times ?? '-') + ' / ' + (row.total_times ?? '-')) }}</template>
       </el-table-column>
       <el-table-column label="实付 / 预估退" width="150">
         <template #default="{ row }">
@@ -56,8 +56,12 @@
       <el-table-column label="状态" width="100">
         <template #default="{ row }">{{ refundStatusLabel(row.status) }}</template>
       </el-table-column>
-      <el-table-column prop="requested_at" label="申请时间" width="170" />
-      <el-table-column prop="reason" label="说明" min-width="140" show-overflow-tooltip />
+      <el-table-column label="申请时间" width="170">
+        <template #default="{ row }">{{ fmtDateTime(row.requested_at) }}</template>
+      </el-table-column>
+      <el-table-column label="说明" min-width="200" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.summary || prettyReason(row.reason) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button
@@ -102,7 +106,25 @@ function refundTypeLabel(row) {
   if (t === 'booking_cancel') return '取消预约退款'
   if (t === 'admin_card') return '退卡'
   if (t === 'admin_card_delete') return '删除并退卡'
+  if (t === 'booking_wx_refund') return '补退微信'
   return '购卡退款'
+}
+
+function fmtDateTime(v) {
+  if (!v) return '-'
+  const s = String(v)
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/)
+  if (m) return m[1] + ' ' + m[2]
+  return s
+}
+
+function prettyReason(reason) {
+  const s = String(reason || '')
+  if (!s) return '-'
+  const m = s.match(/(?:^|\|)sum=([^|]*)/)
+  if (m && m[1]) return m[1]
+  if (s.indexOf('BKREF|') === 0) return ''
+  return s
 }
 
 function refundInitiator(row) {

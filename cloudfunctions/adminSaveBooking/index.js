@@ -16,16 +16,13 @@ function getCloud() {
   return __cloud
 }
 async function refundCourtPayViaPay(payload) {
-  const cloud = getCloud()
-  if (!cloud || !cloud.callFunction) {
-    return { ok: false, msg: '退款服务不可用（请安装/配置 wx-server-sdk，或在 pay 云函数手动退款）' }
-  }
   try {
-    const res = await cloud.callFunction({
-      name: 'pay',
-      data: Object.assign({ action: 'refundCourtPay' }, payload || {})
-    })
-    return (res && res.result) || { ok: false, msg: '退款无响应' }
+    const data = await refundMeta.callCloudFn(
+      getCloud(),
+      'pay',
+      Object.assign({ action: 'refundCourtPay' }, payload || {})
+    )
+    return data || { ok: false, msg: '退款无响应' }
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
   }
@@ -2445,7 +2442,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261121c'
+const FN_VER = 'saveBooking-20261121d'
 
 function parseRuleObj(v) {
   if (!v) return null

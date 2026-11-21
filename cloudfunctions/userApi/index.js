@@ -28,30 +28,26 @@ const pool = mysql.createPool({
   connectTimeout: 10000
 })
 async function refundCourtPayViaPay(payload) {
-  if (!cloud || !cloud.callFunction) {
-    return { ok: false, msg: '退款服务不可用（请安装/配置 wx-server-sdk，或在 pay 云函数手动退款）' }
-  }
   try {
-    const res = await cloud.callFunction({
-      name: 'pay',
-      data: Object.assign({ action: 'refundCourtPay' }, payload || {})
-    })
-    return (res && res.result) || { ok: false, msg: '退款无响应' }
+    const data = await refundMeta.callCloudFn(
+      cloud,
+      'pay',
+      Object.assign({ action: 'refundCourtPay' }, payload || {})
+    )
+    return data || { ok: false, msg: '退款无响应' }
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
   }
 }
 
 async function refundCardPayViaPay(payload) {
-  if (!cloud || !cloud.callFunction) {
-    return { ok: false, msg: '退款服务不可用，请稍后重试' }
-  }
   try {
-    const res = await cloud.callFunction({
-      name: 'pay',
-      data: Object.assign({ action: 'refundCardPay', skipLedger: true }, payload || {})
-    })
-    return (res && res.result) || { ok: false, msg: '退款无响应' }
+    const data = await refundMeta.callCloudFn(
+      cloud,
+      'pay',
+      Object.assign({ action: 'refundCardPay', skipLedger: true }, payload || {})
+    )
+    return data || { ok: false, msg: '退款无响应' }
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
   }
@@ -778,7 +774,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261121c'
+const FN_VER = 'userApi-20261121d'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
