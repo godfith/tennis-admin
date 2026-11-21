@@ -2,8 +2,9 @@ const mysql = require('mysql2/promise')
 const mall = require('./cardMall')
 const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
+const refundMeta = require('./refundRequestMeta')
 
-const FN_VER = 'refundCard-20261121a'
+const FN_VER = 'refundCard-20261121b'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -248,13 +249,116 @@ async function listRequests(body) {
   }
   sql += ' ORDER BY r.id DESC LIMIT 200'
   const [rows] = await pool.query(sql, params)
-  const list = (rows || []).map((r) => Object.assign({}, r, {
-    initiatorName: r.user_name || r.user_nick || '会员',
-    initiatorPhone: r.user_phone || '',
-    initiatorSource: 'miniprogram',
-    initiatorText: initiatorText(r)
-  }))
+  const list = (rows || []).map((r) => {
+    const meta = refundMeta.parseMeta(r)
+    const name = r.user_name || r.user_nick || meta.initiatorName || '会员'
+    return Object.assign({}, r, {
+      user_name: r.user_name || r.user_nick || name,
+      requestType: meta.type || 'mall_card',
+      requestTypeLabel: refundMeta.typeLabel(meta.type || 'mall_card'),
+      initiatorName: meta.initiatorName || name,
+      initiatorPhone: meta.initiatorPhone || r.user_phone || '',
+      initiatorSource: meta.initiatorSource,
+      initiatorText: refundMeta.initiatorText(meta, r),
+      summary: meta.summary || r.reason || ''
+    })
+  })
   return { ok: true, list, fnVer: FN_VER }
+}
+
+
+async function callSaveBooking(payload) {
+  const cloud = getCloud()
+  if (!cloud || !cloud.callFunction) {
+    return { ok: false, msg: '无法调用订场服务，请稍后重试' }
+  }
+  try {
+    const res = await cloud.callFunction({
+      name: 'adminSaveBooking',
+      data: payload
+    })
+    return (res && res.result) || { ok: false, msg: '订场服务无响应' }
+  } catch (e) {
+    return { ok: false, msg: (e && e.message) || '调用订场服务失败' }
+  }
+}
+
+async function confirmNonMall(request, meta, operatorName, conn) {
+  await conn.query(
+    `UPDATE card_refund_requests SET status='refunding', operator_name=?, updated_at=NOW() WHERE id=?`,
+    [operatorName, request.id]
+  )
+  await conn.commit()
+
+  let exec = { ok: false, msg: '未知退款类型' }
+  if (meta.type === 'booking_cash_issue') {
+    exec = await callSaveBooking({
+      action: 'refund_cash_keep_card',
+      id: meta.bookingId,
+      approvedRequestId: request.id,
+      data: {
+        issueTemplateId: meta.issueTemplateId,
+        issuePrice: meta.issuePrice,
+        payMeituan: meta.payMeituan,
+        payDouyin: meta.payDouyin,
+        payOffline: meta.payOffline,
+        coachId: meta.coachId,
+        coachName: meta.coachName,
+        operatorName
+      }
+    })
+  } else if (meta.type === 'booking_cancel') {
+    exec = await callSaveBooking({
+      action: 'cancel',
+      id: meta.bookingId,
+      approvedRequestId: request.id,
+      data: { operatorName }
+    })
+  } else if (meta.type === 'admin_card' || meta.type === 'admin_card_delete') {
+    const cardId = request.card_id
+    const [cards] = await pool.query('SELECT * FROM member_cards WHERE id=? LIMIT 1', [cardId])
+    const card = cards[0]
+    if (!card) exec = { ok: false, msg: '会员卡不存在' }
+    else if (card.status === 'refunded' && meta.type !== 'admin_card_delete') exec = { ok: true, already: true }
+    else {
+      const amt = refundMeta.money(request.refund_amount != null ? request.refund_amount : refundAmount(card))
+      if (card.status !== 'refunded' && card.status !== 'deleted') {
+        await writeRefund(card, amt, operatorName)
+      }
+      if (meta.type === 'admin_card_delete') {
+        await pool.query(`UPDATE member_cards SET status='deleted', updated_at=NOW() WHERE id=?`, [cardId])
+      }
+      exec = { ok: true, refundAmount: amt }
+    }
+  }
+
+  if (!exec || !exec.ok) {
+    try {
+      await pool.query(
+        `UPDATE card_refund_requests SET status='pending', updated_at=NOW() WHERE id=? AND status='refunding'`,
+        [request.id]
+      )
+    } catch (e) {}
+    return {
+      ok: false,
+      msg: (exec && exec.msg) || '确认退款失败，申请已退回待确认，请重试',
+      fnVer: FN_VER
+    }
+  }
+
+  try {
+    await pool.query(
+      `UPDATE card_refund_requests SET status='confirmed', confirmed_at=IFNULL(confirmed_at,NOW()), operator_name=?, updated_at=NOW() WHERE id=?`,
+      [operatorName, request.id]
+    )
+  } catch (e) {}
+  return {
+    ok: true,
+    already: !!exec.already,
+    refundAmount: exec.refundAmount != null ? exec.refundAmount : request.refund_amount,
+    msg: exec.already ? '已处理' : '已确认退款',
+    fnVer: FN_VER
+  }
 }
 
 async function confirmRequest(body, ctx) {
@@ -291,6 +395,12 @@ async function confirmRequest(body, ctx) {
     if (request.status !== 'pending' && request.status !== 'refunding') {
       await conn.rollback()
       return { ok: false, msg: '该申请当前状态不可确认', status: request.status, fnVer: FN_VER }
+    }
+    const meta = refundMeta.parseMeta(request)
+    if (meta.type && meta.type !== 'mall_card') {
+      const out = await confirmNonMall(request, meta, operatorName, conn)
+      try { conn.release() } catch (e) {}
+      return out
     }
     const [cards] = await conn.query('SELECT * FROM member_cards WHERE id=? FOR UPDATE', [request.card_id])
     card = cards[0]
@@ -491,45 +601,55 @@ exports.main = async (event) => {
     if (!card) return { ok: false, msg: '会员卡不存在', fnVer: FN_VER }
     if (card.status === 'deleted') return { ok: false, msg: '这张卡已经删了', fnVer: FN_VER }
 
-    if (mall.hasPayOrder(card) && (action === 'refund' || action === 'delete')) {
+    if (action === 'delete' && (card.status === 'refunded' || card.status === 'deleted')) {
+      await pool.query(`UPDATE member_cards SET status='deleted', updated_at=NOW() WHERE id=?`, [cardId])
+      return { ok: true, deleted: true, refundAmount: 0, fnVer: FN_VER }
+    }
+
+    if (action === 'refund' || action === 'delete' || action === 'createRequest') {
+      const exist = await refundMeta.findPending(pool, { cardId: card.id })
+      if (exist) {
+        return {
+          ok: true,
+          pending: true,
+          already: true,
+          requestId: exist.id,
+          msg: '已提交退款申请，等待管理员确认',
+          fnVer: FN_VER
+        }
+      }
+      const isMall = mall.hasPayOrder(card)
+      const type = isMall ? 'mall_card' : (action === 'delete' ? 'admin_card_delete' : 'admin_card')
+      const amt = refundAmount(card)
+      const requestId = await refundMeta.insertRequest(pool, {
+        cardId: card.id,
+        userId: card.user_id,
+        openid: card.openid || '',
+        payOrderId: mall.parsePayOrderIdFromCard(card) || card.pay_order_id || null,
+        remainingTimes: Number(card.remaining_times) || 0,
+        totalTimes: Number(card.total_times) || 0,
+        paidAmount: mall.paidAmountOfCard ? mall.paidAmountOfCard(card) : (card.paid_amount || card.price || amt),
+        refundAmount: amt,
+        summary: (action === 'delete' ? '删除并退卡「' : '退卡「') + (card.card_name || '') + '」' + amt + '元',
+        meta: {
+          type,
+          initiatorName: operatorName,
+          initiatorPhone: body.operatorPhone || '',
+          initiatorSource: 'admin',
+          summary: (action === 'delete' ? '删除并退卡「' : '退卡「') + (card.card_name || '') + '」' + amt + '元'
+        }
+      })
       return {
-        ok: false,
-        msg: '该卡为线上微信支付购买，请在「购卡退款申请」中由超级管理员确认后退回微信，不能走前台退卡记账',
+        ok: true,
+        pending: true,
+        requestId,
+        refundAmount: amt,
+        msg: '已提交退款申请，等待管理员在「退款申请」确认后才会退款',
         fnVer: FN_VER
       }
     }
 
-    if (action === 'delete') {
-      let amt = 0
-      if (card.status !== 'refunded') {
-        amt = refundAmount(card)
-        await writeRefund(card, amt, operatorName)
-      }
-      await pool.query(`UPDATE member_cards SET status='deleted', updated_at=NOW() WHERE id=?`, [cardId])
-      try {
-        await pool.query(
-          `INSERT INTO activity_logs
-            (type, user_name, operator_name, phone, detail, venue_id, venue_name, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-          [
-            'card_delete',
-            card.user_name || '',
-            operatorName,
-            '',
-            '删除卡 ' + (card.card_name || '') + (amt ? ' 并退款' + amt + '元' : ''),
-            card.venue_id || '',
-            card.venue_name || ''
-          ]
-        )
-      } catch (e) {}
-      return { ok: true, deleted: true, refundAmount: amt, fnVer: FN_VER }
-    }
-
-    if (card.status === 'refunded') return { ok: false, msg: '已退卡', fnVer: FN_VER }
-
-    const amt = refundAmount(card)
-    await writeRefund(card, amt, operatorName)
-    return { ok: true, refundAmount: amt, fnVer: FN_VER }
+    return { ok: false, msg: '未知操作', fnVer: FN_VER }
   } catch (e) {
     console.error(e)
     return { ok: false, msg: e.message || '退卡失败', fnVer: FN_VER }

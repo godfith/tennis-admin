@@ -3,6 +3,7 @@ const courtTypeRule = require('./courtTypeRule')
 const cardActivateHelper = require('./cardActivateHelper')
 const coachPerm = require('./coachPerm')
 const coachBind = require('./coachBind')
+const refundMeta = require('./refundRequestMeta')
 let __cloud = null
 function getCloud() {
   if (__cloud) return __cloud
@@ -2443,7 +2444,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261120c'
+const FN_VER = 'saveBooking-20261121a'
 
 function parseRuleObj(v) {
   if (!v) return null
@@ -2689,6 +2690,42 @@ exports.main = async (event) => {
           msg: '客人仍在支付中（pending_pay），请稍候或先在支付单里关闭',
           pendingPay: true,
           fnVer: FN_VER
+        }
+      }
+
+      if (!refundMeta.isLockBooking(b)) {
+        const approvedId = body.approvedRequestId || (data && data.approvedRequestId)
+        const needMoney = await refundMeta.bookingHasMoneyRefund(conn, b)
+        if (needMoney && !approvedId) {
+          const exist = await refundMeta.findPending(conn, { bookingId: id })
+          if (exist) {
+            await conn.rollback()
+            return { ok: true, pending: true, already: true, requestId: exist.id, msg: '已提交退款申请，等待管理员确认', fnVer: FN_VER }
+          }
+          const amt = refundMeta.money(b.amount)
+          const requestId = await refundMeta.insertRequest(conn, {
+            cardId: b.card_id || 0,
+            userId: b.user_id,
+            openid: b.openid || '',
+            payOrderId: b.pay_order_id || null,
+            paidAmount: amt,
+            refundAmount: amt,
+            summary: '取消预约退款 ' + (b.court || '') + ' ' + (b.date || '') + ' ' + (b.time || ''),
+            meta: {
+              type: 'booking_cancel',
+              bookingId: id,
+              initiatorName: (data && data.operatorName) || '管理员',
+              initiatorPhone: (data && data.operatorPhone) || '',
+              initiatorSource: 'admin',
+              summary: '取消预约退款 ' + (b.court || '') + ' ' + (b.date || '') + ' ' + (b.time || '')
+            }
+          })
+          await conn.commit()
+          return { ok: true, pending: true, requestId, msg: '已提交退款申请，等待管理员在「退款申请」确认后才会退款并取消预约', fnVer: FN_VER }
+        }
+        if (needMoney && approvedId) {
+          const chk = await refundMeta.assertApprovedRequest(conn, approvedId, 'booking_cancel', id)
+          if (!chk.ok) { await conn.rollback(); return { ok: false, msg: chk.msg, fnVer: FN_VER } }
         }
       }
 
@@ -3638,6 +3675,70 @@ exports.main = async (event) => {
         const amt = money(b.amount)
         if (amt <= 0) { await conn.rollback(); return { ok: false, msg: '这笔预约没有可退现金', fnVer: FN_VER } }
         if (!(data && data.issueTemplateId)) { await conn.rollback(); return { ok: false, msg: '请选择要发的卡', fnVer: FN_VER } }
+        const approvedId = body.approvedRequestId || (data && data.approvedRequestId)
+        if (!approvedId) {
+          const exist = await refundMeta.findPending(conn, { bookingId: id })
+          if (exist) {
+            await conn.rollback()
+            return { ok: true, pending: true, already: true, requestId: exist.id, msg: '已提交退款申请，等待管理员确认', fnVer: FN_VER }
+          }
+          const [tplCheck] = await conn.query('SELECT id, name FROM card_templates WHERE id=? LIMIT 1', [data.issueTemplateId])
+          const tpl0 = tplCheck[0]
+          if (!tpl0) { await conn.rollback(); return { ok: false, msg: '发卡模板不存在', fnVer: FN_VER } }
+          const issuePrice0 = money(data.issuePrice)
+          const requestId = await refundMeta.insertRequest(conn, {
+            cardId: b.card_id || 0,
+            userId: b.user_id,
+            openid: b.openid || '',
+            payOrderId: b.pay_order_id || null,
+            paidAmount: amt,
+            refundAmount: amt,
+            summary: '只退款' + amt + '元 改发卡「' + (tpl0.name || '') + '」 ' + (b.court || '') + ' ' + (b.time || ''),
+            meta: {
+              type: 'booking_cash_issue',
+              bookingId: id,
+              issueTemplateId: data.issueTemplateId,
+              issuePrice: issuePrice0,
+              payMeituan: Number(data.payMeituan) || 0,
+              payDouyin: Number(data.payDouyin) || 0,
+              payOffline: Number(data.payOffline) || 0,
+              coachId: data.coachId || '',
+              coachName: data.coachName || '',
+              initiatorName: op,
+              initiatorPhone: (data && data.operatorPhone) || '',
+              initiatorSource: 'admin',
+              summary: '只退款' + amt + '元 改发卡「' + (tpl0.name || '') + '」 ' + (b.court || '') + ' ' + (b.time || '')
+            }
+          })
+          await conn.commit()
+          return { ok: true, pending: true, requestId, msg: '已提交退款申请，等待管理员在「退款申请」确认后才会退款并发卡', fnVer: FN_VER }
+        }
+        const chk = await refundMeta.assertApprovedRequest(conn, approvedId, 'booking_cash_issue', id)
+        if (!chk.ok) { await conn.rollback(); return { ok: false, msg: chk.msg, fnVer: FN_VER } }
+        if (b.pay_order_id) {
+          const [pos] = await conn.query('SELECT * FROM pay_orders WHERE id=? LIMIT 1', [b.pay_order_id])
+          const payOrder = pos[0] || null
+          if (payOrder && payOrder.status === 'paid') {
+            await conn.commit()
+            const refundRes = await refundCourtPayViaPay({
+              payOrderId: payOrder.id,
+              outTradeNo: payOrder.out_trade_no,
+              bookingId: b.id,
+              reason: '只退款改发卡退款·' + op
+            })
+            if (!refundRes || !refundRes.ok) {
+              return {
+                ok: false,
+                msg: (refundRes && refundRes.msg) || '微信退款失败，未改发卡',
+                fnVer: FN_VER
+              }
+            }
+            await conn.beginTransaction()
+            const [rows2] = await conn.query('SELECT * FROM bookings WHERE id=? FOR UPDATE', [id])
+            if (!rows2[0]) { await conn.rollback(); return { ok: false, msg: '预约不存在', fnVer: FN_VER } }
+            Object.assign(b, rows2[0])
+          }
+        }
         if (b.card_id) {
           const [oldRows] = await conn.query('SELECT * FROM member_cards WHERE id=? FOR UPDATE', [b.card_id])
           const old = oldRows[0]
