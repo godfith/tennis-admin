@@ -36,6 +36,8 @@ function encodeMeta(meta) {
     init: String(m.initiatorName || '').replace(/\|/g, '/'),
     iph: m.initiatorPhone || '',
     src: m.initiatorSource || '',
+    vid: m.venueId || '',
+    vn: String(m.venueName || '').replace(/\|/g, '/'),
     sum: String(m.summary || '').replace(/\|/g, '/')
   }
   Object.keys(fields).forEach((k) => {
@@ -84,6 +86,8 @@ function parseMeta(row) {
     initiatorName,
     initiatorPhone,
     initiatorSource,
+    venueId: (row && row.venue_id) || encoded.vid || payload.venueId || '',
+    venueName: (row && row.venue_name) || encoded.vn || payload.venueName || '',
     summary: encoded.sum || payload.summary || (reason.indexOf('BKREF|') === 0 ? '' : reason)
   }
 }
@@ -168,6 +172,27 @@ async function insertRequest(conn, rec) {
     reason
   ]
   try {
+    const venueId = rec.venueId || meta.venueId || ''
+    const venueName = rec.venueName || meta.venueName || ''
+    try {
+      const [ins] = await conn.query(
+        'INSERT INTO card_refund_requests (' + baseCols + ', request_type, booking_id, initiator_name, initiator_phone, initiator_source, payload_json, venue_id, venue_name) VALUES (' + baseVals + ', ?, ?, ?, ?, ?, ?, ?, ?)',
+        baseParams.concat([
+          meta.type || 'mall_card',
+          meta.bookingId || null,
+          meta.initiatorName || '',
+          meta.initiatorPhone || '',
+          meta.initiatorSource || 'admin',
+          JSON.stringify(meta),
+          venueId || null,
+          venueName || null
+        ])
+      )
+      return ins.insertId
+    } catch (e0) {
+      const m0 = String((e0 && e0.message) || '')
+      if (m0.indexOf('Unknown column') < 0 || (m0.indexOf('venue_id') < 0 && m0.indexOf('venue_name') < 0)) throw e0
+    }
     const [ins] = await conn.query(
       'INSERT INTO card_refund_requests (' + baseCols + ', request_type, booking_id, initiator_name, initiator_phone, initiator_source, payload_json) VALUES (' + baseVals + ', ?, ?, ?, ?, ?, ?)',
       baseParams.concat([
@@ -187,7 +212,8 @@ async function insertRequest(conn, rec) {
       msg.indexOf('request_type') < 0 &&
       msg.indexOf('payload_json') < 0 &&
       msg.indexOf('booking_id') < 0 &&
-      msg.indexOf('initiator_') < 0
+      msg.indexOf('initiator_') < 0 &&
+      msg.indexOf('venue_') < 0
     ) throw e
     const [ins] = await conn.query(
       'INSERT INTO card_refund_requests (' + baseCols + ') VALUES (' + baseVals + ')',

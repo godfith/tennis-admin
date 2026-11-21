@@ -4,7 +4,7 @@ const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
 
-const FN_VER = 'refundCard-20261121c'
+const FN_VER = 'refundCard-20261121d'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -227,31 +227,59 @@ function initiatorText(row) {
 
 async function listRequests(body) {
   const status = body.status || 'pending'
-  let sql = `SELECT r.*, c.card_name, c.user_name, c.status AS card_status,
-                    c.remaining_times AS card_remaining, c.total_times AS card_total,
-                    c.price AS card_price, c.paid_amount, c.pay_order_id AS card_pay_order_id,
-                    u.nick_name AS user_nick, u.phone AS user_phone
-               FROM card_refund_requests r
-               LEFT JOIN member_cards c ON c.id = r.card_id
-               LEFT JOIN users u ON (
+  const venueIds = [].concat(body.venueIds || (body.venueId ? [body.venueId] : []))
+    .map((x) => String(x || '').trim())
+    .filter((x) => x && x !== 'all')
+  const whereStatus = (status && status !== 'all')
+    ? " AND CONVERT(IFNULL(r.status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci"
+    : ''
+  const params = (status && status !== 'all') ? [status] : []
+  const joinUsers = `LEFT JOIN users u ON (
                  (r.user_id IS NOT NULL AND r.user_id <> 0 AND u.id = r.user_id)
                  OR (
                    (r.user_id IS NULL OR r.user_id = 0)
                    AND CONVERT(IFNULL(r.openid,'') USING utf8mb4) COLLATE utf8mb4_general_ci <> CONVERT('' USING utf8mb4) COLLATE utf8mb4_general_ci
                    AND CONVERT(IFNULL(u.openid,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(IFNULL(r.openid,'') USING utf8mb4) COLLATE utf8mb4_general_ci
                  )
-               )
-              WHERE 1=1`
-  const params = []
-  if (status && status !== 'all') {
-    sql += " AND CONVERT(IFNULL(r.status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci"
-    params.push(status)
+               )`
+  const selectBase = `SELECT r.*, c.card_name, c.user_name, c.status AS card_status,
+                    c.remaining_times AS card_remaining, c.total_times AS card_total,
+                    c.price AS card_price, c.paid_amount, c.pay_order_id AS card_pay_order_id,
+                    c.venue_id AS card_venue_id, c.venue_name AS card_venue_name,
+                    u.nick_name AS user_nick, u.phone AS user_phone`
+  let rows
+  try {
+    const [rs] = await pool.query(
+      selectBase + `,
+                    b.venue_id AS booking_venue_id, b.venue_name AS booking_venue_name
+               FROM card_refund_requests r
+               LEFT JOIN member_cards c ON c.id = r.card_id
+               ` + joinUsers + `
+               LEFT JOIN bookings b ON b.id = r.booking_id
+              WHERE 1=1` + whereStatus + `
+              ORDER BY r.id DESC LIMIT 200`,
+      params
+    )
+    rows = rs
+  } catch (e) {
+    const msg = String((e && e.message) || '')
+    if (msg.indexOf('Unknown column') < 0 && msg.indexOf('booking_id') < 0) throw e
+    const [rs] = await pool.query(
+      selectBase + `
+               FROM card_refund_requests r
+               LEFT JOIN member_cards c ON c.id = r.card_id
+               ` + joinUsers + `
+              WHERE 1=1` + whereStatus + `
+              ORDER BY r.id DESC LIMIT 200`,
+      params
+    )
+    rows = rs
   }
-  sql += ' ORDER BY r.id DESC LIMIT 200'
-  const [rows] = await pool.query(sql, params)
   const list = (rows || []).map((r) => {
     const meta = refundMeta.parseMeta(r)
     const name = r.user_name || r.user_nick || meta.initiatorName || '会员'
+    const venueId = r.venue_id || meta.venueId || r.card_venue_id || r.booking_venue_id || ''
+    const venueName = r.venue_name || meta.venueName || r.card_venue_name || r.booking_venue_name || ''
     return Object.assign({}, r, {
       user_name: r.user_name || r.user_nick || name,
       requestType: meta.type || 'mall_card',
@@ -260,12 +288,16 @@ async function listRequests(body) {
       initiatorPhone: meta.initiatorPhone || r.user_phone || '',
       initiatorSource: meta.initiatorSource,
       initiatorText: refundMeta.initiatorText(meta, r),
-      summary: meta.summary || r.reason || ''
+      summary: meta.summary || r.reason || '',
+      venueId,
+      venueName
     })
+  }).filter((r) => {
+    if (!venueIds.length) return true
+    return venueIds.indexOf(String(r.venueId || '')) >= 0
   })
   return { ok: true, list, fnVer: FN_VER }
 }
-
 
 async function callSaveBooking(payload) {
   const cloud = getCloud()
@@ -631,8 +663,12 @@ exports.main = async (event) => {
         paidAmount: mall.paidAmountOfCard ? mall.paidAmountOfCard(card) : (card.paid_amount || card.price || amt),
         refundAmount: amt,
         summary: (action === 'delete' ? '删除并退卡「' : '退卡「') + (card.card_name || '') + '」' + amt + '元',
+        venueId: card.venue_id || '',
+        venueName: card.venue_name || '',
         meta: {
           type,
+          venueId: card.venue_id || '',
+          venueName: card.venue_name || '',
           initiatorName: operatorName,
           initiatorPhone: body.operatorPhone || '',
           initiatorSource: 'admin',
