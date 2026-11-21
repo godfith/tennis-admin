@@ -333,6 +333,9 @@
         <el-form-item v-if="current && isLockBooking(current)" label="锁场人">
           <span>{{ current.operatorName || '未记录' }}</span>
         </el-form-item>
+        <el-form-item v-else-if="current && current.operatorName" label="操作人">
+          <span>{{ current.operatorName }}</span>
+        </el-form-item>
         <el-form-item v-if="current && isBackfill(current)" label="类型">
           <el-tag type="warning">补录</el-tag>
           <span class="price-hint" style="margin-left:8px">客人迟到后补记</span>
@@ -390,6 +393,7 @@
     <el-dialog v-model="convertVisible" :title="convertMode === 'cash' ? '只退款 · 改发卡' : '只退卡 · 改收款'" width="440px">
       <el-form label-width="96px" v-if="current">
         <el-form-item label="客户">{{ current.userName || '-' }}</el-form-item>
+        <el-form-item label="发起人">{{ currentOperatorLabel() }}</el-form-item>
         <template v-if="convertMode === 'cash'">
           <el-form-item label="原收款">¥{{ Number(current.amount || 0).toFixed(2) }}（将退回）</el-form-item>
           <el-form-item label="发放卡券" required>
@@ -624,6 +628,13 @@ function bookingHasCard(b) {
   if (!b) return false
   return !!(b.cardId || b.card_id || b.cardName || b.card_name)
 }
+function currentOperatorLabel() {
+  const name = localStorage.getItem('admin_name') || '管理员'
+  const phone = localStorage.getItem('admin_phone') || ''
+  if (phone && name && phone !== name) return name + '（' + phone + '）'
+  return name
+}
+
 const canRefundCashOnly = computed(() => {
   const b = current.value
   if (!b || isLockBooking(b) || isBookingDone(b)) return false
@@ -1328,7 +1339,7 @@ function onConvertTplChange(id) {
 }
 async function submitConvert() {
   if (!current.value) return
-  const op = localStorage.getItem('admin_name') || '管理员'
+  const op = currentOperatorLabel()
   if (convertMode.value === 'cash') {
     if (!convertForm.value.issueTpl) { ElMessage.warning('请选择要发的卡'); return }
     const tpl = templates.value.find((t) => String(t._id) === String(convertForm.value.issueTpl))

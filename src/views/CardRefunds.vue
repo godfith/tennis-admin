@@ -17,6 +17,12 @@
       <el-table-column prop="id" label="申请号" width="90" />
       <el-table-column prop="card_name" label="卡" min-width="160" />
       <el-table-column prop="user_name" label="会员" width="110" />
+      <el-table-column label="发起人" min-width="200" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.initiatorText || refundInitiator(row) }}</template>
+      </el-table-column>
+      <el-table-column label="确认人" width="130" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.operator_name || (row.status === 'pending' ? '待确认' : '-') }}</template>
+      </el-table-column>
       <el-table-column label="次数" width="110">
         <template #default="{ row }">{{ row.remaining_times }} / {{ row.total_times }}</template>
       </el-table-column>
@@ -26,7 +32,9 @@
           / ¥{{ Number(row.refund_amount || 0).toFixed(2) }}
         </template>
       </el-table-column>
-      <el-table-column prop="status" label="状态" width="100" />
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">{{ refundStatusLabel(row.status) }}</template>
+      </el-table-column>
       <el-table-column prop="requested_at" label="申请时间" width="170" />
       <el-table-column prop="reason" label="说明" min-width="140" show-overflow-tooltip />
       <el-table-column label="操作" width="120" fixed="right">
@@ -64,6 +72,20 @@ const list = ref([])
 const loading = ref(false)
 const status = ref('pending')
 const canConfirm = computed(() => roleKind() === 'admin')
+
+function refundInitiator(row) {
+  const name = row.user_name || row.user_nick || '会员'
+  const phone = row.initiatorPhone || row.user_phone || ''
+  const who = phone ? (name + '（' + phone + '）') : name
+  return who + ' · 小程序'
+}
+
+function refundStatusLabel(st) {
+  if (st === 'pending') return '待确认'
+  if (st === 'refunding') return '退款中'
+  if (st === 'confirmed') return '已确认'
+  return st || '-'
+}
 
 async function fetchList() {
   loading.value = true

@@ -3,7 +3,7 @@ const mall = require('./cardMall')
 const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
 
-const FN_VER = 'refundCard-20261120a'
+const FN_VER = 'refundCard-20261121a'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -217,13 +217,29 @@ async function cancelUntakenEnrollments(conn, card, unused, operatorName) {
   return restored
 }
 
+function initiatorText(row) {
+  const name = row.user_name || row.user_nick || '会员'
+  const phone = row.user_phone || ''
+  const who = phone ? (name + '（' + phone + '）') : name
+  return who + ' · 小程序'
+}
+
 async function listRequests(body) {
   const status = body.status || 'pending'
   let sql = `SELECT r.*, c.card_name, c.user_name, c.status AS card_status,
                     c.remaining_times AS card_remaining, c.total_times AS card_total,
-                    c.price AS card_price, c.paid_amount, c.pay_order_id AS card_pay_order_id
+                    c.price AS card_price, c.paid_amount, c.pay_order_id AS card_pay_order_id,
+                    u.nick_name AS user_nick, u.phone AS user_phone
                FROM card_refund_requests r
                LEFT JOIN member_cards c ON c.id = r.card_id
+               LEFT JOIN users u ON (
+                 (r.user_id IS NOT NULL AND u.id = r.user_id)
+                 OR (
+                   (r.user_id IS NULL OR r.user_id = 0)
+                   AND IFNULL(r.openid,'') <> ''
+                   AND u.openid = r.openid
+                 )
+               )
               WHERE 1=1`
   const params = []
   if (status && status !== 'all') {
@@ -232,7 +248,13 @@ async function listRequests(body) {
   }
   sql += ' ORDER BY r.id DESC LIMIT 200'
   const [rows] = await pool.query(sql, params)
-  return { ok: true, list: rows || [], fnVer: FN_VER }
+  const list = (rows || []).map((r) => Object.assign({}, r, {
+    initiatorName: r.user_name || r.user_nick || '会员',
+    initiatorPhone: r.user_phone || '',
+    initiatorSource: 'miniprogram',
+    initiatorText: initiatorText(r)
+  }))
+  return { ok: true, list, fnVer: FN_VER }
 }
 
 async function confirmRequest(body, ctx) {
