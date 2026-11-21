@@ -1,112 +1,130 @@
 <template>
   <div class="page">
     <div class="page-header">
-      <h2>退款申请</h2>
       <div>
-        <el-radio-group v-model="status" size="small" @change="fetchList">
-          <el-radio-button value="pending">待确认</el-radio-button>
-          <el-radio-button value="refunding">退款中</el-radio-button>
-          <el-radio-button value="confirmed">已确认</el-radio-button>
-          <el-radio-button value="rejected">已拒绝</el-radio-button>
-          <el-radio-button value="all">全部</el-radio-button>
-        </el-radio-group>
-        <el-select
-          v-model="venueIds"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          clearable
-          filterable
-          placeholder="全部场馆"
-          style="margin-left:8px; min-width:220px; vertical-align:middle"
-          @change="fetchList"
-        >
-          <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
-        </el-select>
-        <el-input
-          v-model="keyword"
-          clearable
-          placeholder="手机号 / 姓名 / 申请号 / 卡或场地"
-          style="margin-left:8px; width:260px; vertical-align:middle"
-          @keyup.enter="fetchList"
-          @clear="fetchList"
-        />
-        <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          range-separator="至"
-          start-placeholder="申请开始"
-          end-placeholder="申请结束"
-          style="margin-left:8px; vertical-align:middle"
-          @change="fetchList"
-        />
-        <el-button style="margin-left:8px" type="primary" @click="fetchList">查询</el-button>
-        <el-button style="margin-left:8px" @click="resetQuery">重置</el-button>
+        <h2>退款申请</h2>
+        <p class="sub">超管确认后才会真正退款。点会员名可打开该用户详情。</p>
       </div>
     </div>
-    <p class="tip">所有退款都必须先出现在这里，由超级管理员确认后才会退。默认显示全部门店，也可按场馆筛选。包括：小程序购卡退款、前台「只退款·改发卡」、后台退卡，以及取消预约时要退的钱。购卡退款按剩余次数折算后原路退回微信；未上的课会先取消再折算。</p>
-    <el-table :data="list" stripe border v-loading="loading">
-      <el-table-column prop="id" label="申请号" width="90" />
-      <el-table-column label="场馆" width="120" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.venueName || row.venue_name || '-' }}</template>
-      </el-table-column>
-      <el-table-column label="类型" width="140">
-        <template #default="{ row }">{{ row.requestTypeLabel || refundTypeLabel(row) }}</template>
-      </el-table-column>
-      <el-table-column prop="card_name" label="卡 / 预约" min-width="160">
-        <template #default="{ row }">{{ row.card_name || row.summary || '-' }}</template>
-      </el-table-column>
-      <el-table-column label="会员" width="120">
-        <template #default="{ row }">
-          <el-link type="primary" @click="goUser(row)">{{ row.user_name || row.user_nick || '会员' }}</el-link>
-        </template>
-      </el-table-column>
-      <el-table-column label="发起人" min-width="200" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.initiatorText || refundInitiator(row) }}</template>
-      </el-table-column>
-      <el-table-column label="确认人" width="130" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.status === 'pending' ? '待确认' : (row.operator_name || '-') }}</template>
-      </el-table-column>
-      <el-table-column label="次数" width="110">
-        <template #default="{ row }">{{ (row.remaining_times == null && row.total_times == null) ? '-' : ((row.remaining_times ?? '-') + ' / ' + (row.total_times ?? '-')) }}</template>
-      </el-table-column>
-      <el-table-column label="实付 / 预估退" width="150">
-        <template #default="{ row }">
-          ¥{{ Number(row.paid_amount || 0).toFixed(2) }}
-          / ¥{{ Number(row.refund_amount || 0).toFixed(2) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="100">
-        <template #default="{ row }">{{ refundStatusLabel(row.status) }}</template>
-      </el-table-column>
-      <el-table-column label="申请时间" width="170">
-        <template #default="{ row }">{{ fmtDateTime(row.requested_at) }}</template>
-      </el-table-column>
-      <el-table-column label="说明" min-width="200" show-overflow-tooltip>
-        <template #default="{ row }">
-          <div>{{ row.summary || prettyReason(row.reason) }}</div>
-          <div v-if="row.status === 'rejected' && row.rejectReason" class="hint">拒绝原因：{{ row.rejectReason }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
-        <template #default="{ row }">
-          <el-button
-            v-if="canConfirm && (row.status === 'pending' || row.status === 'refunding')"
-            link
-            type="danger"
-            @click="confirm(row)"
-          >确认退款</el-button>
-          <el-button
-            v-if="canConfirm && row.status === 'pending'"
-            link
-            type="warning"
-            @click="reject(row)"
-          >拒绝退款</el-button>
-          <span v-else-if="!canConfirm && (row.status === 'pending' || row.status === 'refunding')" class="hint">仅超管可操作</span>
-        </template>
-      </el-table-column>
-    </el-table>
+
+    <div class="filters card">
+      <el-radio-group v-model="status" @change="fetchList">
+        <el-radio-button value="pending">待确认</el-radio-button>
+        <el-radio-button value="refunding">退款中</el-radio-button>
+        <el-radio-button value="confirmed">已确认</el-radio-button>
+        <el-radio-button value="rejected">已拒绝</el-radio-button>
+        <el-radio-button value="all">全部</el-radio-button>
+      </el-radio-group>
+      <el-select
+        v-model="venueIds"
+        multiple
+        collapse-tags
+        collapse-tags-tooltip
+        clearable
+        filterable
+        placeholder="全部场馆"
+        style="width: 220px"
+        @change="fetchList"
+      >
+        <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+      </el-select>
+      <el-input
+        v-model="keyword"
+        clearable
+        placeholder="手机号 / 姓名 / 申请号 / 卡或场地"
+        style="width: 260px"
+        @keyup.enter="fetchList"
+        @clear="fetchList"
+      />
+      <el-date-picker
+        v-model="dateRange"
+        type="daterange"
+        value-format="YYYY-MM-DD"
+        range-separator="至"
+        start-placeholder="申请开始"
+        end-placeholder="申请结束"
+        style="width: 260px"
+        @change="fetchList"
+      />
+      <el-button type="primary" :loading="loading" @click="fetchList">查询</el-button>
+      <el-button @click="resetQuery">重置</el-button>
+    </div>
+
+    <div class="card table-card">
+      <el-table :data="list" stripe v-loading="loading" class="clean-table">
+        <el-table-column prop="id" label="申请号" width="80" />
+        <el-table-column label="场馆" width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ shortVenue(row.venueName || row.venue_name) }}</template>
+        </el-table-column>
+        <el-table-column label="类型" width="140">
+          <template #default="{ row }">
+            <el-tag size="small" :type="typeTag(row)" effect="plain">{{ row.requestTypeLabel || refundTypeLabel(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="卡 / 预约" min-width="220">
+          <template #default="{ row }">
+            <div class="main-text">{{ row.card_name || row.summary || '-' }}</div>
+            <div v-if="row.summary && row.card_name && row.summary !== row.card_name" class="sub-text">{{ row.summary }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="会员" width="140">
+          <template #default="{ row }">
+            <el-link type="primary" class="name-link" @click="goUser(row)">{{ row.user_name || row.user_nick || '会员' }}</el-link>
+            <div class="sub-text">{{ row.user_phone || '' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="发起人" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.initiatorText || refundInitiator(row) }}</template>
+        </el-table-column>
+        <el-table-column label="确认人" width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.status === 'pending' ? '待确认' : (row.operator_name || '-') }}</template>
+        </el-table-column>
+        <el-table-column label="次数" width="90" align="center">
+          <template #default="{ row }">{{ (row.remaining_times == null && row.total_times == null) ? '-' : ((row.remaining_times ?? '-') + ' / ' + (row.total_times ?? '-')) }}</template>
+        </el-table-column>
+        <el-table-column label="实付 / 退款" width="140">
+          <template #default="{ row }">
+            <div class="money">{{ money(row.refund_amount) }}</div>
+            <div class="sub-text">实付 {{ money(row.paid_amount) }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag size="small" :type="statusTag(row.status)" effect="light">{{ refundStatusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="申请时间" width="160">
+          <template #default="{ row }">{{ fmtDateTime(row.requested_at) }}</template>
+        </el-table-column>
+        <el-table-column label="说明" min-width="200">
+          <template #default="{ row }">
+            <div class="main-text">{{ row.summary || prettyReason(row.reason) || '-' }}</div>
+            <div v-if="row.status === 'rejected' && row.rejectReason" class="reject-text">拒绝：{{ row.rejectReason }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="170" fixed="right">
+          <template #default="{ row }">
+            <div class="ops">
+              <el-button
+                v-if="canConfirm && (row.status === 'pending' || row.status === 'refunding')"
+                size="small"
+                type="danger"
+                plain
+                @click="confirm(row)"
+              >确认退款</el-button>
+              <el-button
+                v-if="canConfirm && row.status === 'pending'"
+                size="small"
+                @click="reject(row)"
+              >拒绝</el-button>
+              <span v-else-if="!canConfirm && (row.status === 'pending' || row.status === 'refunding')" class="hint">仅超管可操作</span>
+              <span v-else-if="row.status !== 'pending' && row.status !== 'refunding'" class="hint">-</span>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="!loading && !list.length" class="empty">暂无申请</div>
+    </div>
   </div>
 </template>
 <script setup>
@@ -185,6 +203,25 @@ function refundStatusLabel(st) {
   if (st === 'withdrawn') return '已撤回'
   if (st === 'rejected') return '已拒绝'
   return st || '-'
+}
+
+function statusTag(st) {
+  if (st === 'pending') return 'warning'
+  if (st === 'refunding') return 'primary'
+  if (st === 'confirmed') return 'success'
+  if (st === 'rejected' || st === 'withdrawn') return 'info'
+  return ''
+}
+
+function typeTag(row) {
+  const t = row.requestType || row.request_type || ''
+  if (t === 'booking_cash_issue' || t === 'booking_wx_refund') return 'warning'
+  if (t === 'admin_card_delete' || t === 'booking_cancel') return 'danger'
+  return 'success'
+}
+
+function shortVenue(name) {
+  return String(name || '-').replace('山羊Goat网球馆（', '').replace('）', '')
 }
 
 async function fetchList() {
@@ -314,8 +351,19 @@ onMounted(async () => {
 })
 </script>
 <style scoped>
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.page-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
 h2 { margin: 0; font-size: 20px; color: #1a5c3a; }
-.tip { color: #666; font-size: 13px; line-height: 1.6; margin: 0 0 12px; }
+.sub { margin: 4px 0 0; color: #909399; font-size: 13px; }
+.card { background: #fff; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.table-card { padding: 8px 8px 4px; }
+.clean-table { width: 100%; }
+.name-link { font-weight: 600; }
+.main-text { color: #303133; line-height: 1.4; }
+.sub-text { color: #909399; font-size: 12px; line-height: 1.4; margin-top: 2px; }
+.money { color: #e6a23c; font-weight: 600; }
+.reject-text { color: #f56c6c; font-size: 12px; margin-top: 2px; }
+.ops { display: flex; gap: 6px; align-items: center; }
 .hint { color: #999; font-size: 12px; }
+.empty { text-align: center; color: #999; padding: 24px 0; }
 </style>
