@@ -267,6 +267,13 @@
           <el-date-picker v-model="settingsForm.rotationStartDate" type="date" value-format="YYYY-MM-DD" />
           <div class="field-hint">用来对齐「第几天轮到哪家店」。改日期会平移后续排期对应的门店。</div>
         </el-form-item>
+        <el-form-item label="固定团课开启">
+          <el-date-picker v-model="settingsForm.fixedOpenFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" />
+          <span style="margin:0 8px">至</span>
+          <el-date-picker v-model="settingsForm.fixedOpenTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" :disabled="settingsForm.fixedOpenPermanent" />
+          <el-checkbox v-model="settingsForm.fixedOpenPermanent" style="margin-left:12px">永久</el-checkbox>
+          <div class="field-hint">开启后，小程序月历按门店显示「固定团课」和「自组团课」两个分类。教练、店长按门店规则开课后，时段会出现在对应门店的固定团课分类里。</div>
+        </el-form-item>
         <el-form-item label="固定团课随时报">
           <el-switch v-model="settingsForm.fixedOpenAnytime" active-text="有空位就可报" inactive-text="按提前天数" />
         </el-form-item>
@@ -284,7 +291,7 @@
       </el-form>
       <div class="settings-block">
         <div class="settings-head">
-          <span>课程内容（可增删，并勾选报名可用的卡）</span>
+          <span>课程内容（教练、店长开课时选用；可增删，并勾选报名可用的卡）</span>
           <el-button size="small" type="primary" plain @click="addCourseContent">新增内容</el-button>
         </div>
         <el-table :data="settingsForm.courseContents" border size="small" style="margin-bottom:16px">
@@ -643,6 +650,9 @@ function emptySettings() {
     rotationVenues: [],
     rotationStartDate: '2026-11-16',
     fixedOpenAnytime: true,
+    fixedOpenFrom: '',
+    fixedOpenTo: '',
+    fixedOpenPermanent: true,
     selfOrganizeAdvanceDays: 2,
     defaultCancelBeforeHours: 2,
     defaultMinEnrollment: 0,
@@ -1385,6 +1395,9 @@ async function saveSettings() {
         rotationVenues: rows,
         rotationStartDate: settingsForm.value.rotationStartDate,
         fixedOpenAnytime: !!settingsForm.value.fixedOpenAnytime,
+        fixedOpenFrom: settingsForm.value.fixedOpenFrom || '',
+        fixedOpenTo: settingsForm.value.fixedOpenPermanent ? '' : (settingsForm.value.fixedOpenTo || ''),
+        fixedOpenPermanent: !!settingsForm.value.fixedOpenPermanent,
         selfOrganizeAdvanceDays: settingsForm.value.selfOrganizeAdvanceDays,
         defaultCancelBeforeHours: settingsForm.value.defaultCancelBeforeHours,
         defaultMinEnrollment: settingsForm.value.defaultMinEnrollment,

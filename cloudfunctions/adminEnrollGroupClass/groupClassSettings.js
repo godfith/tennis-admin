@@ -22,6 +22,9 @@ const DEFAULT_SETTINGS = {
   rotationVenues: DEFAULT_ROTATION.map((x) => Object.assign({}, x)),
   rotationStartDate: '2026-11-16',
   fixedOpenAnytime: true,
+  fixedOpenFrom: '',
+  fixedOpenTo: '',
+  fixedOpenPermanent: true,
   selfOrganizeAdvanceDays: 2,
   defaultCancelBeforeHours: 2,
   defaultMinEnrollment: 0,
@@ -333,6 +336,12 @@ function normalizeSettings(raw) {
       ? true
       : !(src.fixedOpenAnytime === false || src.fixedOpenAnytime === 0 || src.fixedOpenAnytime === '0' ||
           src.fixed_open_anytime === false || src.fixed_open_anytime === 0 || src.fixed_open_anytime === '0'),
+    fixedOpenFrom: fmtDate(src.fixedOpenFrom || src.fixed_open_from) || '',
+    fixedOpenTo: fmtDate(src.fixedOpenTo || src.fixed_open_to) || '',
+    fixedOpenPermanent: src.fixedOpenPermanent == null && src.fixed_open_permanent == null
+      ? true
+      : !(src.fixedOpenPermanent === false || src.fixedOpenPermanent === 0 || src.fixedOpenPermanent === '0' ||
+          src.fixed_open_permanent === false || src.fixed_open_permanent === 0 || src.fixed_open_permanent === '0'),
     selfOrganizeAdvanceDays: intOr(
       src.selfOrganizeAdvanceDays != null ? src.selfOrganizeAdvanceDays : src.self_organize_advance_days,
       2,
