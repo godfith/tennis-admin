@@ -778,7 +778,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
   }
 }
 
-const FN_VER = 'userApi-20261121b'
+const FN_VER = 'userApi-20261121c'
 const HOUR_FALLBACK = [
   '08:00-09:00', '09:00-10:00', '10:00-11:00', '11:00-12:00',
   '14:00-15:00', '15:00-16:00', '16:00-17:00', '17:00-18:00',
@@ -1631,9 +1631,13 @@ exports.main = async (rawEvent) => {
             paidAmount: amt,
             refundAmount: amt,
             summary: '用户取消预约退款 ' + (b.court || '') + ' ' + (b.time || ''),
+            venueId: b.venue_id || '',
+            venueName: b.venue_name || '',
             meta: {
               type: 'booking_cancel',
               bookingId: id,
+              venueId: b.venue_id || '',
+              venueName: b.venue_name || '',
               initiatorName: b.user_name || '会员',
               initiatorPhone: b.phone || event.phone || '',
               initiatorSource: 'miniprogram',

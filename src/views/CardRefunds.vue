@@ -9,12 +9,28 @@
           <el-radio-button value="confirmed">已确认</el-radio-button>
           <el-radio-button value="all">全部</el-radio-button>
         </el-radio-group>
+        <el-select
+          v-model="venueIds"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          clearable
+          filterable
+          placeholder="全部场馆"
+          style="margin-left:8px; min-width:220px; vertical-align:middle"
+          @change="fetchList"
+        >
+          <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
+        </el-select>
         <el-button style="margin-left:8px" @click="fetchList">刷新</el-button>
       </div>
     </div>
-    <p class="tip">所有退款都必须先出现在这里，由超级管理员确认后才会退。包括：小程序购卡退款、前台「只退款·改发卡」、后台退卡，以及取消预约时要退的钱。购卡退款按剩余次数折算后原路退回微信；未上的课会先取消再折算。</p>
+    <p class="tip">所有退款都必须先出现在这里，由超级管理员确认后才会退。默认显示全部门店，也可按场馆筛选。包括：小程序购卡退款、前台「只退款·改发卡」、后台退卡，以及取消预约时要退的钱。购卡退款按剩余次数折算后原路退回微信；未上的课会先取消再折算。</p>
     <el-table :data="list" stripe border v-loading="loading">
       <el-table-column prop="id" label="申请号" width="90" />
+      <el-table-column label="场馆" width="120" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.venueName || row.venue_name || '-' }}</template>
+      </el-table-column>
       <el-table-column label="类型" width="140">
         <template #default="{ row }">{{ row.requestTypeLabel || refundTypeLabel(row) }}</template>
       </el-table-column>
@@ -76,6 +92,8 @@ async function post(path, body = {}) {
 const list = ref([])
 const loading = ref(false)
 const status = ref('pending')
+const venueIds = ref([])
+const venueList = ref([])
 const canConfirm = computed(() => roleKind() === 'admin')
 
 function refundTypeLabel(row) {
@@ -105,7 +123,11 @@ function refundStatusLabel(st) {
 async function fetchList() {
   loading.value = true
   try {
-    const r = await post('/adminRefundCard', { action: 'listRequests', status: status.value })
+    const r = await post('/adminRefundCard', {
+      action: 'listRequests',
+      status: status.value,
+      venueIds: venueIds.value && venueIds.value.length ? venueIds.value : undefined
+    })
     if (!r.ok) { ElMessage.error(r.msg || '加载失败'); return }
     list.value = r.list || []
     if (r.msg) ElMessage.warning(r.msg)
@@ -131,7 +153,19 @@ async function confirm(row) {
   fetchList()
 }
 
-onMounted(fetchList)
+async function loadVenues() {
+  try {
+    const r = await post('/adminGetVenues', {})
+    venueList.value = r.list || []
+  } catch (e) {
+    venueList.value = []
+  }
+}
+
+onMounted(async () => {
+  await loadVenues()
+  fetchList()
+})
 </script>
 <style scoped>
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }

@@ -2445,7 +2445,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261121b'
+const FN_VER = 'saveBooking-20261121c'
 
 function parseRuleObj(v) {
   if (!v) return null
@@ -2745,9 +2745,13 @@ exports.main = async (event) => {
             paidAmount: amt,
             refundAmount: amt,
             summary: '取消预约退款 ' + (b.court || '') + ' ' + (b.date || '') + ' ' + (b.time || ''),
+            venueId: b.venue_id || '',
+            venueName: b.venue_name || '',
             meta: {
               type: 'booking_cancel',
               bookingId: id,
+              venueId: b.venue_id || '',
+              venueName: b.venue_name || '',
               initiatorName: (data && data.operatorName) || '管理员',
               initiatorPhone: (data && data.operatorPhone) || '',
               initiatorSource: 'admin',
@@ -3729,9 +3733,13 @@ exports.main = async (event) => {
             paidAmount: amt,
             refundAmount: amt,
             summary: '只退款' + amt + '元 改发卡「' + (tpl0.name || '') + '」 ' + (b.court || '') + ' ' + (b.time || ''),
+            venueId: b.venue_id || '',
+            venueName: b.venue_name || '',
             meta: {
               type: 'booking_cash_issue',
               bookingId: id,
+              venueId: b.venue_id || '',
+              venueName: b.venue_name || '',
               issueTemplateId: data.issueTemplateId,
               issuePrice: issuePrice0,
               payMeituan: Number(data.payMeituan) || 0,
