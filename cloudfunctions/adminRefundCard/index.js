@@ -4,7 +4,7 @@ const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
 
-const FN_VER = 'refundCard-20261121e'
+const FN_VER = 'refundCard-20261121f'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -30,32 +30,26 @@ function getCloud() {
 }
 
 async function refundCardPayViaPay(payload) {
-  const cloud = getCloud()
-  if (!cloud || !cloud.callFunction) {
-    return { ok: false, msg: '退款服务不可用（请安装/配置 wx-server-sdk，或在 pay 云函数手动退款）' }
-  }
   try {
-    const res = await cloud.callFunction({
-      name: 'pay',
-      data: Object.assign({ action: 'refundCardPay', skipLedger: true }, payload || {})
-    })
-    return (res && res.result) || { ok: false, msg: '退款无响应' }
+    const data = await refundMeta.callCloudFn(
+      getCloud(),
+      'pay',
+      Object.assign({ action: 'refundCardPay', skipLedger: true }, payload || {})
+    )
+    return data || { ok: false, msg: '退款无响应' }
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
   }
 }
 
 async function refundCourtPayViaPay(payload) {
-  const cloud = getCloud()
-  if (!cloud || !cloud.callFunction) {
-    return { ok: false, msg: '退款服务不可用（请安装/配置 wx-server-sdk，或在 pay 云函数手动退款）' }
-  }
   try {
-    const res = await cloud.callFunction({
-      name: 'pay',
-      data: Object.assign({ action: 'refundCourtPay' }, payload || {})
-    })
-    return (res && res.result) || { ok: false, msg: '退款无响应' }
+    const data = await refundMeta.callCloudFn(
+      getCloud(),
+      'pay',
+      Object.assign({ action: 'refundCourtPay' }, payload || {})
+    )
+    return data || { ok: false, msg: '退款无响应' }
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
   }
@@ -260,7 +254,7 @@ async function listRequests(body) {
                )`
   const selectBase = `SELECT r.*, c.card_name, c.user_name, c.status AS card_status,
                     c.remaining_times AS card_remaining, c.total_times AS card_total,
-                    c.price AS card_price, c.paid_amount, c.pay_order_id AS card_pay_order_id,
+                    c.price AS card_price, c.paid_amount AS card_paid_amount, c.pay_order_id AS card_pay_order_id,
                     c.venue_id AS card_venue_id, c.venue_name AS card_venue_name,
                     u.nick_name AS user_nick, u.phone AS user_phone`
   let rows
@@ -316,16 +310,9 @@ async function listRequests(body) {
 }
 
 async function callSaveBooking(payload) {
-  const cloud = getCloud()
-  if (!cloud || !cloud.callFunction) {
-    return { ok: false, msg: '无法调用订场服务，请稍后重试' }
-  }
   try {
-    const res = await cloud.callFunction({
-      name: 'adminSaveBooking',
-      data: payload
-    })
-    return (res && res.result) || { ok: false, msg: '订场服务无响应' }
+    const data = await refundMeta.callCloudFn(getCloud(), 'adminSaveBooking', payload || {})
+    return data || { ok: false, msg: '订场服务无响应' }
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '调用订场服务失败' }
   }

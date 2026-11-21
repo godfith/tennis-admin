@@ -290,6 +290,52 @@ function isLockBooking(b) {
   return b.status === 'locked' || b.source === 'lock' || String(b.user_name || '') === '锁场'
 }
 
+
+const FN_HTTP_BASE = process.env.CLOUD_HTTP_BASE || 'https://cloud1-d3g0pb1qk028e3585-d862bc2-1312769671.ap-shanghai.app.tcloudbase.com'
+
+function httpPostFn(name, payload, timeoutMs) {
+  const https = require('https')
+  const { URL } = require('url')
+  const u = new URL(String(FN_HTTP_BASE).replace(/\/$/, '') + '/' + name)
+  const data = JSON.stringify(payload || {})
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: u.hostname,
+      port: u.port || 443,
+      path: u.pathname,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      timeout: timeoutMs || 45000
+    }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8')
+        try {
+          const j = JSON.parse(raw)
+          resolve(j && j.body ? (typeof j.body === 'string' ? JSON.parse(j.body) : j.body) : j)
+        } catch (e) {
+          reject(new Error((raw || '').slice(0, 200) || '接口返回无效'))
+        }
+      })
+    })
+    req.on('error', reject)
+    req.on('timeout', () => { req.destroy(); reject(new Error('调用超时')) })
+    req.write(data)
+    req.end()
+  })
+}
+
+async function callCloudFn(cloud, name, payload) {
+  if (cloud && cloud.callFunction) {
+    try {
+      const res = await cloud.callFunction({ name, data: payload || {} })
+      if (res && res.result) return res.result
+    } catch (e) {}
+  }
+  return httpPostFn(name, payload)
+}
+
 module.exports = {
   typeLabel,
   encodeMeta,
@@ -304,5 +350,6 @@ module.exports = {
   assertApprovedRequest,
   bookingHasMoneyRefund,
   isLockBooking,
-  money
+  money,
+  callCloudFn
 }
