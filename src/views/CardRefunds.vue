@@ -37,7 +37,11 @@
       <el-table-column prop="card_name" label="卡 / 预约" min-width="160">
         <template #default="{ row }">{{ row.card_name || row.summary || '-' }}</template>
       </el-table-column>
-      <el-table-column prop="user_name" label="会员" width="110" />
+      <el-table-column label="会员" width="120">
+        <template #default="{ row }">
+          <el-link type="primary" @click="goUser(row)">{{ row.user_name || row.user_nick || '会员' }}</el-link>
+        </template>
+      </el-table-column>
       <el-table-column label="发起人" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">{{ row.initiatorText || refundInitiator(row) }}</template>
       </el-table-column>
@@ -78,6 +82,7 @@
 </template>
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { roleKind } from '../utils/auth.js'
 import { operatorFields } from '../utils/operator.js'
@@ -168,18 +173,57 @@ async function fetchList() {
   }
 }
 
+const router = useRouter()
+
+function money(v) {
+  return '¥' + Number(v || 0).toFixed(2)
+}
+
+function courtInfo(row) {
+  const venue = row.venueName || row.venue_name || ''
+  const detail = row.summary || row.card_name || prettyReason(row.reason) || ''
+  if (venue && detail) return venue + ' · ' + detail
+  return venue || detail || '-'
+}
+
+function customerText(row) {
+  const name = row.user_name || row.user_nick || '会员'
+  const phone = row.user_phone || row.initiatorPhone || ''
+  return phone ? (name + '（' + phone + '）') : name
+}
+
+function goUser(row) {
+  const q = String(row.user_phone || row.initiatorPhone || row.user_id || row.userId || '').trim()
+  if (!q) { ElMessage.warning('该申请没有可用的用户标识'); return }
+  router.push({ path: '/users', query: { q, open: '1', from: 'refunds' } })
+}
+
 async function confirm(row) {
   if (!canConfirm.value) { ElMessage.warning('只有超级管理员可以确认退款'); return }
-  await ElMessageBox.confirm(
-    '确认后才会真正退款。类型：' + (row.requestTypeLabel || refundTypeLabel(row)) + '。' +
-    (row.summary || row.card_name || '') +
-    '。确定继续？',
-    '确认退款',
-    { type: 'warning', confirmButtonText: '确认退款' }
-  )
+  const html = [
+    '<div style="line-height:1.7;font-size:14px">',
+    '<div><b>类型：</b>' + (row.requestTypeLabel || refundTypeLabel(row)) + '</div>',
+    '<div><b>退款金额：</b><span style="color:#e6a23c;font-weight:600">' + money(row.refund_amount) + '</span>',
+    '（实付 ' + money(row.paid_amount) + '）</div>',
+    '<div><b>场地 / 预约：</b>' + courtInfo(row) + '</div>',
+    '<div><b>客户：</b>' + customerText(row) + '</div>',
+    '<div><b>申请人：</b>' + (row.initiatorText || refundInitiator(row)) + '</div>',
+    '<div style="margin-top:8px;color:#909399">确认后才会真正退款，请核对无误再继续。</div>',
+    '</div>'
+  ].join('')
+  try {
+    await ElMessageBox.confirm(html, '二次确认退款', {
+      type: 'warning',
+      confirmButtonText: '确认退款',
+      cancelButtonText: '取消',
+      dangerouslyUseHTMLString: true
+    })
+  } catch {
+    return
+  }
   const r = await post('/adminRefundCard', { action: 'confirmRequest', requestId: row.id })
   if (!r.ok) { ElMessage.error(r.msg || '确认失败'); return }
-  ElMessage.success(r.already ? '已处理' : ('已退款 ¥' + (Number(r.refundAmount) || 0).toFixed(2)))
+  ElMessage.success(r.already ? '已处理' : ('已退款 ' + money(r.refundAmount)))
   fetchList()
 }
 
