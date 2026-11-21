@@ -2001,7 +2001,7 @@ async function onDeleteCard(card) {
     const needRefund = card.status !== 'refunded' && card.status !== 'deleted'
     await ElMessageBox.confirm(
       needRefund
-        ? '删除「' + card.cardName + '」后卡立即失效，并按剩余次数退款入账。'
+        ? '删除「' + card.cardName + '」并退款会先提交到「退款申请」，管理员确认后才会退款并删除。'
         : '「' + card.cardName + '」已退卡，删除后不再显示。',
       '删除持卡',
       { type: 'warning', confirmButtonText: needRefund ? '删除并退款' : '确认删除' }
@@ -2013,6 +2013,10 @@ async function onDeleteCard(card) {
     })
     if (!result.ok) {
       ElMessage.error(result.msg || '删除失败')
+      return
+    }
+    if (result.pending) {
+      ElMessage.success(result.msg || '已提交退款申请，等待管理员确认')
       return
     }
     const amt = Number(result.refundAmount) || 0
@@ -2028,20 +2032,17 @@ async function onDeleteCard(card) {
 
 async function onRefund(card) {
   try {
-    if (card.payOrderId || card.pay_order_id) {
-      ElMessage.warning('该卡为线上微信支付购买，请到「购卡退款申请」由超级管理员确认后退回微信')
-      return
-    }
-    await ElMessageBox.confirm(`确定退卡「${card.cardName}」？`, '退卡确认', { type: 'warning', confirmButtonText: '确认退卡' })
+    await ElMessageBox.confirm('退卡「' + card.cardName + '」会先提交到「退款申请」，管理员确认后才会退款。', '提交退卡申请', { type: 'warning', confirmButtonText: '提交申请' })
     const result = await post('/adminRefundCard', {
+      action: 'refund',
       cardId: card._id,
       operatorName: localStorage.getItem('admin_name') || '管理员'
     })
     if (!result.ok) {
-      ElMessage.error(result.msg || '退卡失败')
+      ElMessage.error(result.msg || '提交失败')
       return
     }
-    ElMessage.success('已退卡')
+    ElMessage.success(result.pending ? (result.msg || '已提交退款申请，等待管理员确认') : '已退卡')
     if (currentUser.value) openCards(currentUser.value)
     loadData()
   } catch (e) {
