@@ -20,7 +20,7 @@ const pool = mysql.createPool({
 
 const mall = require('./cardMall')
 const cardPayFulfill = require('./cardPayFulfill')
-const PAY_FN_VER = 'pay-20261120a'
+const PAY_FN_VER = 'pay-20261121a'
 const PENDING_TTL_MIN = 30
 const BUSY_SQL = "('booked','locked','pending_pay')"
 
@@ -1037,7 +1037,9 @@ exports.main = async (rawEvent) => {
         if (!o) return { ok: false, msg: '支付订单不存在', fnVer: PAY_FN_VER }
         const result = await refundPaidOrder(conn, o, {
           reason: event.reason || '取消订场退款',
-          bookingId: event.bookingId || o.booking_id
+          bookingId: event.bookingId || o.booking_id,
+          skipLedger: event.skipLedger === true,
+          outRefundNo: event.outRefundNo || event.out_refund_no || ''
         })
         return result
       } catch (e) {
