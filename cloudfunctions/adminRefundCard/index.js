@@ -5,7 +5,7 @@ const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
 const wxPayRefund = require('./wxPayRefund')
 
-const FN_VER = 'refundCard-20261121j'
+const FN_VER = 'refundCard-20261121k'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -252,6 +252,9 @@ function initiatorText(row) {
 
 async function listRequests(body) {
   const status = body.status || 'pending'
+  const keyword = String(body.keyword || body.q || '').trim()
+  const dateFrom = String(body.dateFrom || '').trim()
+  const dateTo = String(body.dateTo || '').trim()
   const venueIds = [].concat(body.venueIds || (body.venueId ? [body.venueId] : []))
     .map((x) => String(x || '').trim())
     .filter((x) => x && x !== 'all')
@@ -259,6 +262,29 @@ async function listRequests(body) {
     ? " AND CONVERT(IFNULL(r.status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci"
     : ''
   const params = (status && status !== 'all') ? [status] : []
+  let whereExtra = ''
+  if (dateFrom) {
+    whereExtra += ' AND r.requested_at >= ?'
+    params.push(dateFrom.length <= 10 ? dateFrom + ' 00:00:00' : dateFrom)
+  }
+  if (dateTo) {
+    whereExtra += ' AND r.requested_at <= ?'
+    params.push(dateTo.length <= 10 ? dateTo + ' 23:59:59' : dateTo)
+  }
+  if (keyword) {
+    whereExtra += ` AND (
+      CAST(r.id AS CHAR) = ?
+      OR CONVERT(IFNULL(r.reason,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+      OR CONVERT(IFNULL(c.card_name,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+      OR CONVERT(IFNULL(c.user_name,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+      OR CONVERT(IFNULL(u.nick_name,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+      OR CONVERT(IFNULL(u.phone,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+      OR CONVERT(IFNULL(r.initiator_phone,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+      OR CONVERT(IFNULL(r.initiator_name,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+    )`
+    const like = '%' + keyword + '%'
+    params.push(keyword, like, like, like, like, like, like, like)
+  }
   const joinUsers = `LEFT JOIN users u ON (
                  (r.user_id IS NOT NULL AND r.user_id <> 0 AND u.id = r.user_id)
                  OR (
@@ -281,8 +307,8 @@ async function listRequests(body) {
                LEFT JOIN member_cards c ON c.id = r.card_id
                ` + joinUsers + `
                LEFT JOIN bookings b ON b.id = r.booking_id
-              WHERE 1=1` + whereStatus + `
-              ORDER BY r.id DESC LIMIT 200`,
+              WHERE 1=1` + whereStatus + whereExtra + `
+              ORDER BY r.id DESC LIMIT 500`,
       params
     )
     rows = rs
@@ -294,8 +320,8 @@ async function listRequests(body) {
                FROM card_refund_requests r
                LEFT JOIN member_cards c ON c.id = r.card_id
                ` + joinUsers + `
-              WHERE 1=1` + whereStatus + `
-              ORDER BY r.id DESC LIMIT 200`,
+              WHERE 1=1` + whereStatus + whereExtra + `
+              ORDER BY r.id DESC LIMIT 500`,
       params
     )
     rows = rs

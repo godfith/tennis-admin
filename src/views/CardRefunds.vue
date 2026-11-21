@@ -23,7 +23,26 @@
         >
           <el-option v-for="v in venueList" :key="v.venueId || v._id" :label="v.name" :value="v.venueId || v._id" />
         </el-select>
-        <el-button style="margin-left:8px" @click="fetchList">刷新</el-button>
+        <el-input
+          v-model="keyword"
+          clearable
+          placeholder="手机号 / 姓名 / 申请号 / 卡或场地"
+          style="margin-left:8px; width:260px; vertical-align:middle"
+          @keyup.enter="fetchList"
+          @clear="fetchList"
+        />
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          value-format="YYYY-MM-DD"
+          range-separator="至"
+          start-placeholder="申请开始"
+          end-placeholder="申请结束"
+          style="margin-left:8px; vertical-align:middle"
+          @change="fetchList"
+        />
+        <el-button style="margin-left:8px" type="primary" @click="fetchList">查询</el-button>
+        <el-button style="margin-left:8px" @click="resetQuery">重置</el-button>
       </div>
     </div>
     <p class="tip">所有退款都必须先出现在这里，由超级管理员确认后才会退。默认显示全部门店，也可按场馆筛选。包括：小程序购卡退款、前台「只退款·改发卡」、后台退卡，以及取消预约时要退的钱。购卡退款按剩余次数折算后原路退回微信；未上的课会先取消再折算。</p>
@@ -121,6 +140,8 @@ const loading = ref(false)
 const status = ref('pending')
 const venueIds = ref([])
 const venueList = ref([])
+const keyword = ref('')
+const dateRange = ref([])
 const canConfirm = computed(() => roleKind() === 'admin')
 
 function refundTypeLabel(row) {
@@ -169,9 +190,13 @@ function refundStatusLabel(st) {
 async function fetchList() {
   loading.value = true
   try {
+    const range = dateRange.value || []
     const r = await post('/adminRefundCard', {
       action: 'listRequests',
       status: status.value,
+      keyword: keyword.value.trim() || undefined,
+      dateFrom: range[0] || undefined,
+      dateTo: range[1] || undefined,
       venueIds: venueIds.value && venueIds.value.length ? venueIds.value : undefined
     })
     if (!r.ok) { ElMessage.error(r.msg || '加载失败'); return }
@@ -263,6 +288,14 @@ async function reject(row) {
   })
   if (!r.ok) { ElMessage.error(r.msg || '拒绝失败'); return }
   ElMessage.success(r.already ? '已拒绝' : '已拒绝退款')
+  fetchList()
+}
+
+function resetQuery() {
+  keyword.value = ''
+  dateRange.value = []
+  venueIds.value = []
+  status.value = 'pending'
   fetchList()
 }
 
