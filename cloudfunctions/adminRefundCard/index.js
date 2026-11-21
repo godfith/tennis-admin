@@ -4,7 +4,7 @@ const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
 
-const FN_VER = 'refundCard-20261121b'
+const FN_VER = 'refundCard-20261121c'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -234,17 +234,17 @@ async function listRequests(body) {
                FROM card_refund_requests r
                LEFT JOIN member_cards c ON c.id = r.card_id
                LEFT JOIN users u ON (
-                 (r.user_id IS NOT NULL AND u.id = r.user_id)
+                 (r.user_id IS NOT NULL AND r.user_id <> 0 AND u.id = r.user_id)
                  OR (
                    (r.user_id IS NULL OR r.user_id = 0)
-                   AND IFNULL(r.openid,'') <> ''
-                   AND u.openid = r.openid
+                   AND CONVERT(IFNULL(r.openid,'') USING utf8mb4) COLLATE utf8mb4_general_ci <> CONVERT('' USING utf8mb4) COLLATE utf8mb4_general_ci
+                   AND CONVERT(IFNULL(u.openid,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(IFNULL(r.openid,'') USING utf8mb4) COLLATE utf8mb4_general_ci
                  )
                )
               WHERE 1=1`
   const params = []
   if (status && status !== 'all') {
-    sql += ' AND r.status=?'
+    sql += " AND CONVERT(IFNULL(r.status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci"
     params.push(status)
   }
   sql += ' ORDER BY r.id DESC LIMIT 200'
@@ -335,7 +335,7 @@ async function confirmNonMall(request, meta, operatorName, conn) {
   if (!exec || !exec.ok) {
     try {
       await pool.query(
-        `UPDATE card_refund_requests SET status='pending', updated_at=NOW() WHERE id=? AND status='refunding'`,
+        `UPDATE card_refund_requests SET status='pending', updated_at=NOW() WHERE id=? AND CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT('refunding' USING utf8mb4) COLLATE utf8mb4_general_ci`,
         [request.id]
       )
     } catch (e) {}
@@ -457,7 +457,7 @@ async function confirmRequest(body, ctx) {
     if (!wx || !wx.ok) {
       try {
         await pool.query(
-          `UPDATE card_refund_requests SET status='pending', updated_at=NOW() WHERE id=? AND status='refunding'`,
+          `UPDATE card_refund_requests SET status='pending', updated_at=NOW() WHERE id=? AND CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT('refunding' USING utf8mb4) COLLATE utf8mb4_general_ci`,
           [request.id]
         )
       } catch (e) {}

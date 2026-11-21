@@ -1,3 +1,15 @@
+function sqlUtf8(expr) {
+  return "CONVERT(IFNULL(" + expr + ",'') USING utf8mb4) COLLATE utf8mb4_general_ci"
+}
+
+function sqlUtf8Lit(value) {
+  return "CONVERT('" + String(value).replace(/'/g, "''") + "' USING utf8mb4) COLLATE utf8mb4_general_ci"
+}
+
+function sqlUtf8Param() {
+  return "CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci"
+}
+
 function typeLabel(type) {
   const map = {
     mall_card: '购卡退款',
@@ -123,7 +135,7 @@ async function withdrawRequest(conn, opts) {
   if (row.status === 'withdrawn') return { ok: true, already: true, requestId: row.id, msg: '申请已撤回' }
   if (row.status !== 'pending') return { ok: false, msg: '该申请当前不能撤回' }
   const [ret] = await conn.query(
-    `UPDATE card_refund_requests SET status='withdrawn', updated_at=NOW() WHERE id=? AND status='pending'`,
+    `UPDATE card_refund_requests SET status='withdrawn', updated_at=NOW() WHERE id=? AND CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT('pending' USING utf8mb4) COLLATE utf8mb4_general_ci`,
     [row.id]
   )
   if (ret && ret.affectedRows === 0) return { ok: false, msg: '撤回失败，申请状态已变化' }
@@ -190,21 +202,21 @@ async function findPending(conn, opts) {
   if (opts.bookingId) {
     try {
       const [rows2] = await conn.query(
-        "SELECT * FROM card_refund_requests WHERE status IN ('pending','refunding') AND booking_id=? ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM card_refund_requests WHERE CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci IN (CONVERT('pending' USING utf8mb4) COLLATE utf8mb4_general_ci,CONVERT('refunding' USING utf8mb4) COLLATE utf8mb4_general_ci) AND booking_id=? ORDER BY id DESC LIMIT 1",
         [opts.bookingId]
       )
       if (rows2 && rows2[0]) return rows2[0]
     } catch (e) {}
     const token = '|bid=' + opts.bookingId
     const [rows] = await conn.query(
-      "SELECT * FROM card_refund_requests WHERE status IN ('pending','refunding') AND (reason LIKE ? OR reason LIKE ? OR reason LIKE ?) ORDER BY id DESC LIMIT 1",
+      "SELECT * FROM card_refund_requests WHERE CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci IN (CONVERT('pending' USING utf8mb4) COLLATE utf8mb4_general_ci,CONVERT('refunding' USING utf8mb4) COLLATE utf8mb4_general_ci) AND (CONVERT(IFNULL(reason,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci OR CONVERT(IFNULL(reason,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci OR CONVERT(IFNULL(reason,'') USING utf8mb4) COLLATE utf8mb4_general_ci LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci) ORDER BY id DESC LIMIT 1",
       [token + '|%', token, '%'+ token + '|%']
     )
     return (rows && rows[0]) || null
   }
   if (opts.cardId != null && opts.cardId !== '') {
     const [rows] = await conn.query(
-      "SELECT * FROM card_refund_requests WHERE card_id=? AND status IN ('pending','refunding') ORDER BY id DESC LIMIT 1",
+      "SELECT * FROM card_refund_requests WHERE card_id=? AND CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci IN (CONVERT('pending' USING utf8mb4) COLLATE utf8mb4_general_ci,CONVERT('refunding' USING utf8mb4) COLLATE utf8mb4_general_ci) ORDER BY id DESC LIMIT 1",
       [opts.cardId]
     )
     return (rows && rows[0]) || null
