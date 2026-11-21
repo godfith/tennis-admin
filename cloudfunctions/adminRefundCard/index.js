@@ -3,8 +3,9 @@ const mall = require('./cardMall')
 const cardRefund = require('./cardRefund')
 const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
+const wxPayRefund = require('./wxPayRefund')
 
-const FN_VER = 'refundCard-20261121h'
+const FN_VER = 'refundCard-20261121i'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -30,28 +31,42 @@ function getCloud() {
 }
 
 async function refundCardPayViaPay(payload) {
+  let conn
   try {
-    const data = await refundMeta.callCloudFn(
-      getCloud(),
-      'pay',
-      Object.assign({ action: 'refundCardPay', skipLedger: true }, payload || {})
-    )
-    return data || { ok: false, msg: '退款无响应' }
+    conn = await pool.getConnection()
+    const o = await wxPayRefund.loadPayOrder(conn, payload || {})
+    if (!o) return { ok: false, msg: '支付订单不存在' }
+    return await wxPayRefund.refundPaidOrder(conn, o, {
+      reason: (payload && payload.reason) || '购卡退款',
+      bookingId: (payload && payload.bookingId) || o.booking_id,
+      skipLedger: true,
+      outRefundNo: (payload && (payload.outRefundNo || payload.out_refund_no)) || ''
+    })
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
+  } finally {
+    if (conn) conn.release()
   }
 }
 
 async function refundCourtPayViaPay(payload) {
+  // Refund WeChat directly in this function. Do not call the pay HTTP
+  // gateway (CloudBase strips Accept/User-Agent on function-to-function HTTP).
+  let conn
   try {
-    const data = await refundMeta.callCloudFn(
-      getCloud(),
-      'pay',
-      Object.assign({ action: 'refundCourtPay' }, payload || {})
-    )
-    return data || { ok: false, msg: '退款无响应' }
+    conn = await pool.getConnection()
+    const o = await wxPayRefund.loadPayOrder(conn, payload || {})
+    if (!o) return { ok: false, msg: '支付订单不存在' }
+    return await wxPayRefund.refundPaidOrder(conn, o, {
+      reason: (payload && payload.reason) || '取消订场退款',
+      bookingId: (payload && payload.bookingId) || o.booking_id,
+      skipLedger: !payload || payload.skipLedger === true,
+      outRefundNo: (payload && (payload.outRefundNo || payload.out_refund_no)) || ''
+    })
   } catch (e) {
     return { ok: false, msg: (e && e.message) || '退款调用失败' }
+  } finally {
+    if (conn) conn.release()
   }
 }
 
@@ -631,7 +646,7 @@ async function confirmRequest(body, ctx) {
     // WeChat may have already refunded; leave request in refunding so retry can finish voiding.
     return { ok: false, msg: e.message || '确认退款失败，请重试（勿重复操作以免重复退款）', fnVer: FN_VER, wxDone: !!(wx && wx.ok && !wx.skipped) }
   } finally {
-    conn.release()
+    if (conn) conn.release()
   }
 }
 
