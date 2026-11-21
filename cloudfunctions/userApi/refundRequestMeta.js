@@ -91,6 +91,45 @@ function initiatorText(meta, row) {
   return who
 }
 
+function hoursUntilStart(b) {
+  if (!b) return 0
+  const date = String(b.date || '').slice(0, 10)
+  const start = String(b.time || '').split(/[-~]/)[0].trim() || '00:00'
+  const t = new Date(date.replace(/-/g, '/') + ' ' + start + ':00')
+  if (isNaN(t.getTime())) return 0
+  return (t.getTime() - Date.now()) / 3600000
+}
+
+function canMiniProgramCancel(b) {
+  return hoursUntilStart(b) >= 6
+}
+
+function canMiniProgramRefund(b) {
+  return hoursUntilStart(b) >= 24
+}
+
+async function withdrawRequest(conn, opts) {
+  opts = opts || {}
+  let row = null
+  if (opts.requestId) {
+    const [rows] = await conn.query('SELECT * FROM card_refund_requests WHERE id=? LIMIT 1', [opts.requestId])
+    row = (rows && rows[0]) || null
+  } else if (opts.bookingId) {
+    row = await findPending(conn, { bookingId: opts.bookingId })
+  }
+  if (!row) return { ok: false, msg: '没有待确认的退款申请' }
+  if (row.status === 'confirmed') return { ok: false, msg: '退款已确认，不能撤回' }
+  if (row.status === 'refunding') return { ok: false, msg: '退款正在处理中，不能撤回' }
+  if (row.status === 'withdrawn') return { ok: true, already: true, requestId: row.id, msg: '申请已撤回' }
+  if (row.status !== 'pending') return { ok: false, msg: '该申请当前不能撤回' }
+  const [ret] = await conn.query(
+    `UPDATE card_refund_requests SET status='withdrawn', updated_at=NOW() WHERE id=? AND status='pending'`,
+    [row.id]
+  )
+  if (ret && ret.affectedRows === 0) return { ok: false, msg: '撤回失败，申请状态已变化' }
+  return { ok: true, requestId: row.id, msg: '已撤回退款申请' }
+}
+
 function money(v) {
   const n = Number(v)
   if (!Number.isFinite(n)) return 0
@@ -219,6 +258,10 @@ module.exports = {
   initiatorText,
   insertRequest,
   findPending,
+  withdrawRequest,
+  hoursUntilStart,
+  canMiniProgramCancel,
+  canMiniProgramRefund,
   assertApprovedRequest,
   bookingHasMoneyRefund,
   isLockBooking,

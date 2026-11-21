@@ -820,7 +820,7 @@ async function applyLockIntentAfterCancel(conn, b, operatorName) {
   return { relocked: true }
 }
 
-async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
+async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName, opts) {
   const bizDate = fmtDate(b.date) || fmtDate(new Date())
   const op = operatorName || '管理员'
   const remark = '取消 ' + (b.court || '') + ' ' + (b.time || '')
@@ -878,7 +878,8 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
     }
   }
 
-  if (issueAmt > 0) {
+  const noMoneyRefund = !!(opts && opts.cancelOnly)
+  if (issueAmt > 0 && !noMoneyRefund) {
     const err = await writeLedger(conn, Object.assign({}, base, {
       type: 'court_refund',
       amount: -issueAmt,
@@ -898,7 +899,7 @@ async function writeCancelFinanceLedgers(conn, b, refundCardId, operatorName) {
       if (rf[0]) skipCash = true
     }
   } catch (e) {}
-  if (cashAmt > 0 && !skipCash) {
+  if (cashAmt > 0 && !skipCash && !noMoneyRefund) {
     const err = await writeLedger(conn, Object.assign({}, base, {
       type: 'court_cancel',
       amount: -cashAmt,
@@ -2444,7 +2445,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261121a'
+const FN_VER = 'saveBooking-20261121b'
 
 function parseRuleObj(v) {
   if (!v) return null
@@ -2657,6 +2658,38 @@ exports.main = async (event) => {
     }
     if (!action) return { ok: false, msg: '缺少 action', fnVer: FN_VER }
 
+    if (action === 'getPendingRefund') {
+      if (!id) return { ok: false, msg: '缺少预约ID', fnVer: FN_VER }
+      const row = await refundMeta.findPending(conn, { bookingId: id })
+      if (!row) return { ok: true, request: null, fnVer: FN_VER }
+      const meta = refundMeta.parseMeta(row)
+      return {
+        ok: true,
+        request: {
+          id: row.id,
+          status: row.status,
+          type: meta.type,
+          typeLabel: refundMeta.typeLabel(meta.type),
+          summary: meta.summary || row.reason || '',
+          refundAmount: row.refund_amount,
+          initiatorText: refundMeta.initiatorText(meta, row),
+          requestedAt: row.requested_at || row.created_at
+        },
+        fnVer: FN_VER
+      }
+    }
+
+    if (action === 'withdraw_refund_request') {
+      if (!id) return { ok: false, msg: '缺少预约ID', fnVer: FN_VER }
+      const out = await refundMeta.withdrawRequest(conn, {
+        requestId: body.requestId,
+        bookingId: id,
+        operatorName: (data && data.operatorName) || body.operatorName || '管理员'
+      })
+      out.fnVer = FN_VER
+      return out
+    }
+
     let coachPolicy = { ok: true, ctx: null }
     if (['add', 'update', 'lock', 'batchLock', 'batchUnlock', 'saveLockRule', 'deleteLockRule', 'cancel'].includes(action)) {
       coachPolicy = await enforceCoachBookingPolicy(conn, body, action, data)
@@ -2693,10 +2726,11 @@ exports.main = async (event) => {
         }
       }
 
+      const cancelOnly = !!(body.cancelOnly || (data && (data.cancelOnly || data.refund === false)))
       if (!refundMeta.isLockBooking(b)) {
         const approvedId = body.approvedRequestId || (data && data.approvedRequestId)
         const needMoney = await refundMeta.bookingHasMoneyRefund(conn, b)
-        if (needMoney && !approvedId) {
+        if (needMoney && !approvedId && !cancelOnly) {
           const exist = await refundMeta.findPending(conn, { bookingId: id })
           if (exist) {
             await conn.rollback()
@@ -2735,7 +2769,7 @@ exports.main = async (event) => {
         const [pos] = await conn.query('SELECT * FROM pay_orders WHERE id=? LIMIT 1', [b.pay_order_id])
         payOrder = pos[0] || null
       }
-      if (payOrder && payOrder.status === 'paid') {
+      if (payOrder && payOrder.status === 'paid' && !cancelOnly) {
         const opName = (data && data.operatorName) || '管理员'
         await conn.commit()
         const refundRes = await refundCourtPayViaPay({
@@ -2825,7 +2859,7 @@ exports.main = async (event) => {
           [b.id]
         )
         const back = money(bled[0] && bled[0].amount)
-        if (back > 0 && b.user_id) {
+        if (back > 0 && b.user_id && !cancelOnly) {
           await conn.query('UPDATE users SET balance=IFNULL(balance,0)+?, updated_at=NOW() WHERE id=?', [back, b.user_id])
           await writeLedger(conn, {
             bizDate: fmtDate(b.date) || fmtDate(new Date()),
@@ -2846,7 +2880,8 @@ exports.main = async (event) => {
         conn,
         b,
         refundCardId,
-        (data && data.operatorName) || '管理员'
+        (data && data.operatorName) || '管理员',
+        { cancelOnly }
       )
 
       let relocked = false
