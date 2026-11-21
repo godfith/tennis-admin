@@ -7,6 +7,7 @@
           <el-radio-button value="pending">待确认</el-radio-button>
           <el-radio-button value="refunding">退款中</el-radio-button>
           <el-radio-button value="confirmed">已确认</el-radio-button>
+          <el-radio-button value="rejected">已拒绝</el-radio-button>
           <el-radio-button value="all">全部</el-radio-button>
         </el-radio-group>
         <el-select
@@ -64,9 +65,12 @@
         <template #default="{ row }">{{ fmtDateTime(row.requested_at) }}</template>
       </el-table-column>
       <el-table-column label="说明" min-width="200" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.summary || prettyReason(row.reason) }}</template>
+        <template #default="{ row }">
+          <div>{{ row.summary || prettyReason(row.reason) }}</div>
+          <div v-if="row.status === 'rejected' && row.rejectReason" class="hint">拒绝原因：{{ row.rejectReason }}</div>
+        </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
           <el-button
             v-if="canConfirm && (row.status === 'pending' || row.status === 'refunding')"
@@ -74,7 +78,13 @@
             type="danger"
             @click="confirm(row)"
           >确认退款</el-button>
-          <span v-else-if="!canConfirm && (row.status === 'pending' || row.status === 'refunding')" class="hint">仅超管可确认</span>
+          <el-button
+            v-if="canConfirm && row.status === 'pending'"
+            link
+            type="warning"
+            @click="reject(row)"
+          >拒绝退款</el-button>
+          <span v-else-if="!canConfirm && (row.status === 'pending' || row.status === 'refunding')" class="hint">仅超管可操作</span>
         </template>
       </el-table-column>
     </el-table>
@@ -152,6 +162,7 @@ function refundStatusLabel(st) {
   if (st === 'refunding') return '退款中'
   if (st === 'confirmed') return '已确认'
   if (st === 'withdrawn') return '已撤回'
+  if (st === 'rejected') return '已拒绝'
   return st || '-'
 }
 
@@ -224,6 +235,34 @@ async function confirm(row) {
   const r = await post('/adminRefundCard', { action: 'confirmRequest', requestId: row.id })
   if (!r.ok) { ElMessage.error(r.msg || '确认失败'); return }
   ElMessage.success(r.already ? '已处理' : ('已退款 ' + money(r.refundAmount)))
+  fetchList()
+}
+
+async function reject(row) {
+  if (!canConfirm.value) { ElMessage.warning('只有超级管理员可以拒绝退款'); return }
+  let reason = ''
+  try {
+    const ret = await ElMessageBox.prompt(
+      '拒绝后该申请不会退款。客户：' + customerText(row) + '。金额：' + money(row.refund_amount) + '。场地：' + courtInfo(row),
+      '拒绝退款',
+      {
+        confirmButtonText: '确认拒绝',
+        cancelButtonText: '取消',
+        inputPlaceholder: '拒绝原因（选填）',
+        inputType: 'textarea'
+      }
+    )
+    reason = (ret && ret.value) || ''
+  } catch {
+    return
+  }
+  const r = await post('/adminRefundCard', {
+    action: 'rejectRequest',
+    requestId: row.id,
+    reason
+  })
+  if (!r.ok) { ElMessage.error(r.msg || '拒绝失败'); return }
+  ElMessage.success(r.already ? '已拒绝' : '已拒绝退款')
   fetchList()
 }
 

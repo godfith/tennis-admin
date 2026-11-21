@@ -5,7 +5,7 @@ const adminRole = require('./adminRole')
 const refundMeta = require('./refundRequestMeta')
 const wxPayRefund = require('./wxPayRefund')
 
-const FN_VER = 'refundCard-20261121i'
+const FN_VER = 'refundCard-20261121j'
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'sh-cynosdbmysql-grp-94l9er02.sql.tencentcdb.com',
@@ -314,6 +314,7 @@ async function listRequests(body) {
       initiatorSource: meta.initiatorSource,
       initiatorText: refundMeta.initiatorText(meta, r),
       summary: meta.summary || r.reason || '',
+      rejectReason: meta.rejectReason || '',
       venueId,
       venueName
     })
@@ -440,6 +441,71 @@ async function confirmNonMall(request, meta, operatorName, conn) {
     refundAmount: exec.refundAmount != null ? exec.refundAmount : request.refund_amount,
     msg: exec.already ? '已处理' : '已确认退款',
     fnVer: FN_VER
+  }
+}
+
+async function rejectRequest(body, ctx) {
+  const gate = adminRole.requireFoundSuperAdmin(ctx, '只有超级管理员可以拒绝退款')
+  if (!gate.ok) return { ok: false, msg: gate.msg, fnVer: FN_VER }
+  const requestId = body.requestId || body.id
+  if (!requestId) return { ok: false, msg: '缺少申请ID', fnVer: FN_VER }
+  const operatorName = ctx.name || '管理员'
+  const reason = String(body.reason || body.rejectReason || '').trim().slice(0, 200)
+
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    const [reqs] = await conn.query(
+      'SELECT * FROM card_refund_requests WHERE id=? FOR UPDATE',
+      [requestId]
+    )
+    const request = reqs[0]
+    if (!request) {
+      await conn.rollback()
+      return { ok: false, msg: '退款申请不存在', fnVer: FN_VER }
+    }
+    if (request.status === 'rejected') {
+      await conn.rollback()
+      return { ok: true, already: true, msg: '已拒绝', fnVer: FN_VER }
+    }
+    if (request.status !== 'pending') {
+      await conn.rollback()
+      return { ok: false, msg: '只有待确认的申请可以拒绝', status: request.status, fnVer: FN_VER }
+    }
+
+    let payload = {}
+    if (request.payload_json) {
+      try { payload = JSON.parse(request.payload_json) || {} } catch (e) { payload = {} }
+    }
+    payload.rejectReason = reason
+    payload.rejectedBy = operatorName
+    payload.rejectedAt = new Date().toISOString()
+    const payloadJson = JSON.stringify(payload)
+
+    try {
+      await conn.query(
+        `UPDATE card_refund_requests
+            SET status='rejected', operator_name=?, payload_json=?, updated_at=NOW()
+          WHERE id=? AND CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT('pending' USING utf8mb4) COLLATE utf8mb4_general_ci`,
+        [operatorName, payloadJson, requestId]
+      )
+    } catch (e) {
+      const msg = String((e && e.message) || '')
+      if (msg.indexOf('Unknown column') < 0 && msg.indexOf('payload_json') < 0) throw e
+      await conn.query(
+        `UPDATE card_refund_requests
+            SET status='rejected', operator_name=?, updated_at=NOW()
+          WHERE id=? AND CONVERT(IFNULL(status,'') USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT('pending' USING utf8mb4) COLLATE utf8mb4_general_ci`,
+        [operatorName, requestId]
+      )
+    }
+    await conn.commit()
+    return { ok: true, msg: '已拒绝退款', fnVer: FN_VER }
+  } catch (e) {
+    try { await conn.rollback() } catch (err) {}
+    return { ok: false, msg: (e && e.message) || '拒绝失败', fnVer: FN_VER }
+  } finally {
+    try { conn.release() } catch (e) {}
   }
 }
 
@@ -672,6 +738,10 @@ exports.main = async (event) => {
 
     if (action === 'confirmRequest') {
       return await confirmRequest(body, ctx)
+    }
+
+    if (action === 'rejectRequest') {
+      return await rejectRequest(body, ctx)
     }
 
     const cardId = body.cardId

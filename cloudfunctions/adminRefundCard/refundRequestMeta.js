@@ -89,7 +89,8 @@ function parseMeta(row) {
     initiatorSource,
     venueId: (row && row.venue_id) || encoded.vid || payload.venueId || '',
     venueName: (row && row.venue_name) || encoded.vn || payload.venueName || '',
-    summary: encoded.sum || payload.summary || (reason.indexOf('BKREF|') === 0 ? '' : reason)
+    summary: encoded.sum || payload.summary || (reason.indexOf('BKREF|') === 0 ? '' : reason),
+    rejectReason: payload.rejectReason || ''
   }
 }
 
