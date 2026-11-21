@@ -2442,7 +2442,7 @@ async function handleDeleteLockRule(conn, data) {
 
 // ---- end lock rules 20261119b ----
 
-const FN_VER = 'saveBooking-20261121d'
+const FN_VER = 'saveBooking-20261121e'
 
 function parseRuleObj(v) {
   if (!v) return null
